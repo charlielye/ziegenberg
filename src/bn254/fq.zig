@@ -1,128 +1,14 @@
 const std = @import("std");
-const field_arith = @import("field_arith.zig");
-const get_msb = @import("get_msb.zig").get_msb;
 const Field = @import("field.zig").Field;
+const FieldParams = @import("field_params.zig").FieldParams;
 
 const FqParams = struct {
-    const modulus_u256: u256 = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3C208C16D87CFD47;
-    const twice_modulus_u256: u256 = modulus_u256 + modulus_u256;
-    const not_modulus_u256: u256 = @bitCast(-@as(i256, modulus_u256));
-    const twice_not_modulus_u256: u256 = @bitCast(-@as(i256, twice_modulus_u256));
-
-    pub const modulus = field_arith.to_limbs(modulus_u256);
-    pub const twice_modulus = field_arith.to_limbs(twice_modulus_u256);
-    pub const not_modulus = field_arith.to_limbs(not_modulus_u256);
-    pub const twice_not_modulus = field_arith.to_limbs(twice_not_modulus_u256);
-    pub const r_squared = field_arith.to_limbs(0x06D89F71CAB8351F47AB1EFF0A417FF6B5E71911D44501FBF32CFC5B538AFA89);
+    pub const modulus: u256 = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3C208C16D87CFD47;
+    pub const r_squared = 0x06D89F71CAB8351F47AB1EFF0A417FF6B5E71911D44501FBF32CFC5B538AFA89;
     pub const r_inv = 0x87d20782e4866389;
-
-    const one = field_arith.to_montgomery_form(.{ 1, 0, 0, 0 });
 };
 
-// Fq field element.
-// The montgomery form is not exposed externally, unless you read the limbs directly.
-// pub const Fq = struct {
-//     // TODO have params here and make generic field.
-//     pub const modulus = FqParams.modulus;
-//     pub const twice_modulus = FqParams.twice_modulus;
-//     pub const one = Fq.from_int(1);
-//     pub const zero = Fq.from_int(0);
-//     limbs: [4]u64,
-
-//     pub fn from_limbs(limbs: [4]u64) Fq {
-//         return Fq{ .limbs = field_arith.to_montgomery_form(FqParams, limbs) };
-//     }
-
-//     // pub fn from_montgomery_limbs(limbs: [4]u64) Fq {
-//     //     return Fq{ .limbs = limbs };
-//     // }
-
-//     pub fn to_limbs(self: Fq) [4]u64 {
-//         return field_arith.from_montgomery_form(FqParams, self.limbs);
-//     }
-
-//     pub fn from_int(v: u256) Fq {
-//         return Fq.from_limbs(field_arith.to_limbs(v));
-//     }
-
-//     pub fn to_int(self: Fq) u256 {
-//         const a = self.to_limbs();
-//         return @as(u256, a[0]) + (@as(u256, a[1]) << 64) + (@as(u256, a[2]) << 128) + (@as(u256, a[3]) << 192);
-//     }
-
-//     pub fn random() Fq {
-//         const data = std.crypto.random.int(u512);
-//         return Fq.from_int(@truncate(data));
-//     }
-
-//     pub fn add(self: Fq, other: Fq) Fq {
-//         return Fq{ .limbs = field_arith.add(FqParams, self.limbs, other.limbs) };
-//     }
-
-//     pub fn sub(self: Fq, other: Fq) Fq {
-//         return Fq{ .limbs = field_arith.sub_coarse(FqParams, self.limbs, other.limbs) };
-//     }
-
-//     pub fn mul(self: Fq, other: Fq) Fq {
-//         return Fq{ .limbs = field_arith.montgomery_mul(FqParams, self.limbs, other.limbs) };
-//     }
-
-//     pub fn sqr(self: Fq) Fq {
-//         return Fq{ .limbs = field_arith.montgomery_square(FqParams, self.limbs) };
-//     }
-
-//     pub fn neg(self: Fq) Fq {
-//         const p = Fq{ .limbs = .{ Fq.twice_modulus[0], Fq.twice_modulus[1], Fq.twice_modulus[2], Fq.twice_modulus[3] } };
-//         return p.sub(self).reduce();
-//     }
-
-//     fn get_bit(self: Fq, bit_index: u64) bool {
-//         std.debug.assert(bit_index < 256);
-//         const idx = bit_index >> 6;
-//         const shift: u6 = @truncate(bit_index & 63);
-//         return (self.limbs[idx] >> shift) & 1 == 1;
-//     }
-
-//     fn pow(self: Fq, exponent: u256) Fq {
-//         if (exponent == 0) {
-//             return Fq.one;
-//         } else if (self.is_zero()) {
-//             return self;
-//         }
-
-//         var accumulator = self;
-//         const to_mul = self;
-//         const maximum_set_bit = 255 - @clz(exponent);
-//         // field_arith.debugPrintArray(exponent.limbs);
-//         // std.debug.print("{}\n", .{exponent});
-//         // std.debug.print("{}\n", .{maximum_set_bit});
-
-//         for (0..maximum_set_bit) |i| {
-//             accumulator = sqr(accumulator);
-//             if ((exponent >> @truncate(i)) & 1 == 1) {
-//                 accumulator = accumulator.mul(to_mul);
-//             }
-//         }
-
-//         return accumulator;
-//     }
-
-//     pub fn eql(self: Fq, other: Fq) bool {
-//         const a = field_arith.reduce(FqParams, self.limbs);
-//         const b = field_arith.reduce(FqParams, other.limbs);
-//         return std.mem.eql(u64, &a, &b);
-//     }
-
-//     pub fn is_zero(self: Fq) bool {
-//         return self.eql(Fq.zero);
-//     }
-
-//     fn print(self: Fq) void {
-//         std.debug.print("0x{x:0>64}\n", .{self.to_int()});
-//     }
-// };
-
-pub const Fq = Field(FqParams);
+pub const Fq = Field(FieldParams(FqParams));
 
 test "random" {
     const r = Fq.random();
@@ -138,7 +24,7 @@ test "add" {
 }
 
 test "add wrap" {
-    const a = Fq.from_int(FqParams.modulus_u256 - 1);
+    const a = Fq.from_int(FqParams.modulus - 1);
     const r = a.add(Fq.one);
     try std.testing.expectEqual(0, r.to_int());
 }

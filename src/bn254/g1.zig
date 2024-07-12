@@ -3,11 +3,13 @@ const Fq = @import("fq.zig").Fq;
 const ProjectivePoint = @import("projective_point.zig").ProjectivePoint;
 
 const G1Params = struct {
-    const one_x = Fq.one;
-    const one_y = Fq{ .limbs = .{ 0xa6ba871b8b1e1b3a, 0x14f1d651eb8e167b, 0xccdd46def0f28c58, 0x1c14ef83340fbe5e } };
-    const a = Fq.zero;
-    const b = Fq{ .limbs = .{ 0x7a17caa950ad28d7, 0x1f6ac17ae15521b9, 0x334bea4e696bd284, 0x2a1f6744ce179d8e } };
+    pub const one_x = Fq.one;
+    pub const one_y = Fq{ .limbs = .{ 0xa6ba871b8b1e1b3a, 0x14f1d651eb8e167b, 0xccdd46def0f28c58, 0x1c14ef83340fbe5e } };
+    pub const a = Fq.zero;
+    pub const b = Fq{ .limbs = .{ 0x7a17caa950ad28d7, 0x1f6ac17ae15521b9, 0x334bea4e696bd284, 0x2a1f6744ce179d8e } };
 };
+
+const G1Element = ProjectivePoint(Fq, G1Params);
 
 test "add" {
     const a_x = Fq.from_int(0x00f708d16cfe6e14334da8e7539e71c44965cd1c3687f635184b38afc6e2e09a);
@@ -20,9 +22,9 @@ test "add" {
     const e_y = Fq.from_int(0x27e91ba0686e54fed9d6125b82ebeff8e50aa3ce802ea3b550c5f3cab191498c);
     const e_z = Fq.from_int(0x0a8ae44990c8accdfd9e178143224c96f608edef14913c750e4b81ef75fedf95);
 
-    const lhs = ProjectivePoint(Fq).from_xyz(a_x, a_y, a_z);
-    const rhs = ProjectivePoint(Fq).from_xyz(b_x, b_y, b_z);
-    const expected = ProjectivePoint(Fq).from_xyz(e_x, e_y, e_z);
+    const lhs = G1Element.from_xyz(a_x, a_y, a_z);
+    const rhs = G1Element.from_xyz(b_x, b_y, b_z);
+    const expected = G1Element.from_xyz(e_x, e_y, e_z);
 
     const result = lhs.add(rhs);
 
@@ -37,8 +39,8 @@ test "dbl" {
     const e_y = Fq.from_int(0x062f206bef795a05aa7b9893cc370d39906a877a717351614e7e6c06a87e4314);
     const e_z = Fq.from_int(0x18a299c1f683bdca3fff575136879112929104dffdfabd228813bdca7b0b115a);
 
-    const lhs = ProjectivePoint(Fq).from_xyz(a_x, a_y, a_z);
-    const expected = ProjectivePoint(Fq).from_xyz(e_x, e_y, e_z);
+    const lhs = G1Element.from_xyz(a_x, a_y, a_z);
+    const expected = G1Element.from_xyz(e_x, e_y, e_z);
 
     const result = lhs.dbl().dbl().dbl();
 
@@ -46,5 +48,14 @@ test "dbl" {
 }
 
 test "add infinity exception" {
-    // const a =
+    const lhs = G1Element.random();
+    const rhs = lhs.neg();
+    const result = lhs.add(rhs);
+    try std.testing.expectEqual(G1Element.infinity, result);
+
+    const result2 = lhs.add(G1Element.infinity);
+    try std.testing.expectEqual(lhs, result2);
+
+    const result3 = G1Element.infinity.add(lhs);
+    try std.testing.expectEqual(lhs, result3);
 }

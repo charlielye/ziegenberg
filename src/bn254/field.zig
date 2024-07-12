@@ -6,9 +6,7 @@ const get_msb = @import("get_msb.zig").get_msb;
 // The montgomery form is not exposed externally, unless you read the limbs directly.
 pub fn Field(comptime Params: type) type {
     return struct {
-        // TODO have params here and make generic field.
-        pub const modulus = Params.modulus;
-        pub const twice_modulus = Params.twice_modulus;
+        pub const params = Params;
         pub const one = Field(Params).from_int(1);
         pub const zero = Field(Params).from_int(0);
         limbs: [4]u64,
@@ -16,10 +14,6 @@ pub fn Field(comptime Params: type) type {
         pub fn from_limbs(limbs: [4]u64) Field(Params) {
             return Field(Params){ .limbs = field_arith.to_montgomery_form(Params, limbs) };
         }
-
-        // pub fn from_montgomery_limbs(limbs: [4]u64) Field(Params) {
-        //     return Field(Params){ .limbs = limbs };
-        // }
 
         pub fn to_limbs(self: Field(Params)) [4]u64 {
             return field_arith.from_montgomery_form(Params, self.limbs);
@@ -56,8 +50,17 @@ pub fn Field(comptime Params: type) type {
         }
 
         pub fn neg(self: Field(Params)) Field(Params) {
-            const p = Field(Params){ .limbs = .{ Field(Params).twice_modulus[0], Field(Params).twice_modulus[1], Field(Params).twice_modulus[2], Field(Params).twice_modulus[3] } };
+            const p = Field(Params){ .limbs = .{
+                Params.twice_modulus[0],
+                Params.twice_modulus[1],
+                Params.twice_modulus[2],
+                Params.twice_modulus[3],
+            } };
             return p.sub(self).reduce();
+        }
+
+        fn reduce(self: Field(Params)) Field(Params) {
+            return Field(Params).from_limbs(field_arith.reduce(Params, self.limbs));
         }
 
         fn get_bit(self: Field(Params), bit_index: u64) bool {
@@ -101,7 +104,18 @@ pub fn Field(comptime Params: type) type {
             return self.eql(Field(Params).zero);
         }
 
-        fn print(self: Field(Params)) void {
+        pub fn format(
+            self: Field(Params),
+            comptime fmt: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            _ = fmt;
+            _ = options;
+            try writer.print("0x{x:0>64}", .{self.to_int()});
+        }
+
+        pub fn print(self: Field(Params)) void {
             std.debug.print("0x{x:0>64}\n", .{self.to_int()});
         }
     };

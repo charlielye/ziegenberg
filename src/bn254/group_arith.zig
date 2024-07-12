@@ -1,8 +1,6 @@
-const std = @import("std");
-// const Fq = @import("fq.zig").Fq;
-const ProjectivePoint = @import("projective_point.zig").ProjectivePoint;
+// const std = @import("std");
 
-pub fn add(comptime Fq: type, a: ProjectivePoint(Fq), b: ProjectivePoint(Fq)) ProjectivePoint(Fq) {
+pub fn add(comptime PP: type, a: PP, b: PP) PP {
     const p1_zero = a.is_infinity();
     const p2_zero = b.is_infinity();
 
@@ -11,32 +9,22 @@ pub fn add(comptime Fq: type, a: ProjectivePoint(Fq), b: ProjectivePoint(Fq)) Pr
     }
 
     var Z1Z1 = a.z.sqr();
-    // std.debug.print("Z1Z1: {x:0>64}\n", .{Z1Z1.to_int()});
     const Z2Z2 = b.z.sqr();
-    // std.debug.print("Z2Z2: {x:0>64}\n", .{Z2Z2.to_int()});
     var S2 = Z1Z1.mul(a.z);
-    // std.debug.print("S2: {x:0>64}\n", .{S2.to_int()});
     var U2 = Z1Z1.mul(b.x);
-    // std.debug.print("U2: {x:0>64}\n", .{U2.to_int()});
     S2 = S2.mul(b.y);
-    // std.debug.print("S2: {x:0>64}\n", .{S2.to_int()});
     var U1 = Z2Z2.mul(a.x);
-    // std.debug.print("U1: {x:0>64}\n", .{U1.to_int()});
     var S1 = Z2Z2.mul(b.z);
-    // std.debug.print("S1: {x:0>64}\n", .{S1.to_int()});
-    // std.debug.print("y: {x:0>64}\n", .{a.y.to_int()});
     S1 = S1.mul(a.y);
-    // std.debug.print("S1: {x:0>64}\n", .{S1.to_int()});
 
     var F = S2.sub(S1);
     const H = U2.sub(U1);
 
     if (H.is_zero()) {
         if (F.is_zero()) {
-            return dbl(Fq, a);
+            return dbl(PP, a);
         }
-        // modulus represents point at infinity.
-        return ProjectivePoint(Fq).infinity;
+        return PP.infinity;
     }
 
     F = F.add(F);
@@ -69,10 +57,10 @@ pub fn add(comptime Fq: type, a: ProjectivePoint(Fq), b: ProjectivePoint(Fq)) Pr
     z = z.sub(Z1Z1);
     z = z.mul(H);
 
-    return ProjectivePoint(Fq){ .x = x, .y = y, .z = z };
+    return PP{ .x = x, .y = y, .z = z };
 }
 
-pub fn dbl(comptime Fq: type, a: ProjectivePoint(Fq)) ProjectivePoint(Fq) {
+pub fn dbl(comptime PP: type, a: PP) PP {
     if (a.is_infinity()) {
         return a;
     }
@@ -136,5 +124,5 @@ pub fn dbl(comptime Fq: type, a: ProjectivePoint(Fq)) ProjectivePoint(Fq) {
     y = y.mul(T3);
     y = y.sub(T2);
 
-    return ProjectivePoint(Fq).from_xyz(x, y, z);
+    return PP.from_xyz(x, y, z);
 }
