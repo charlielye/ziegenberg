@@ -1,5 +1,31 @@
 const std = @import("std");
 
+pub fn to_limbs(data: u256) [4]u64 {
+    return [4]u64{
+        @truncate(data),
+        @truncate(data >> 64),
+        @truncate(data >> 128),
+        @truncate(data >> 192),
+    };
+}
+
+pub fn to_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
+    var d = data;
+    d = reduce(params, d);
+    d = reduce(params, d);
+    d = reduce(params, d);
+    d = montgomery_mul(params, d, params.r_squared);
+    d = reduce(params, d);
+    return d;
+}
+
+pub fn from_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
+    var d = data;
+    d = montgomery_mul(params, d, .{ 1, 0, 0, 0 });
+    d = reduce(params, d);
+    return d;
+}
+
 fn mul_wide(a: u64, b: u64) [2]u64 {
     const res: u128 = @as(u128, a) * @as(u128, b);
     return [2]u64{ @truncate(res), @intCast(res >> 64) };
@@ -35,12 +61,12 @@ fn addc(a: u64, b: u64, carry_in: u64, carry_out: *u64) u64 {
 }
 
 fn sbb(a: u64, b: u64, borrow_in: u64, borrow_out: *u64) u64 {
-    const res: u128 = @as(u128, a) - (@as(u128, b) + (borrow_in >> 63));
+    const res: u128 = @bitCast(@as(i128, a) - (@as(i128, b) + (@as(i128, borrow_in) >> 63)));
     borrow_out.* = @intCast(res >> 64);
     return @truncate(res);
 }
 
-fn reduce(comptime params: anytype, data: [4]u64) [4]u64 {
+pub fn reduce(comptime params: anytype, data: [4]u64) [4]u64 {
     const not_modulus = params.not_modulus;
     const t0, var c: u64 = @addWithOverflow(data[0], not_modulus[0]);
     // std.debug.print("t0 {} c {}\n", .{ t0, c });
@@ -139,11 +165,12 @@ fn square_accumulate(a: u64, b: u64, c: u64, carry_in_lo: u64, carry_in_hi: u64,
     carry_lo += @intFromBool(out < a);
     out = @addWithOverflow(out, carry_in_lo)[0];
     carry_lo += @intFromBool(out < carry_in_lo);
-    carry_lo += r1;
-    var carry_hi = @intFromBool(carry_lo < r1);
-    carry_lo += r1;
+    carry_lo, var carry_hi = @addWithOverflow(carry_lo, r1);
+
+    carry_lo = @addWithOverflow(carry_lo, r1)[0];
     carry_hi += @intFromBool(carry_lo < r1);
-    carry_lo += carry_in_hi;
+
+    carry_lo = @addWithOverflow(carry_lo, carry_in_hi)[0];
     carry_hi += @intFromBool(carry_lo < carry_in_hi);
 
     carry_out_lo.* = carry_lo;
@@ -174,7 +201,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
     mac(t3, k, modulus[3], c_lo, &t2, &c_lo);
-    t3 = c_lo + round_carry;
+    t3 = @addWithOverflow(c_lo, round_carry)[0];
 
     t1 = mac_mini(t1, data[1], data[1], &c_lo);
     c_hi = 0;
@@ -186,7 +213,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
     mac(t3, k, modulus[3], c_lo, &t2, &c_lo);
-    t3 = c_lo + round_carry;
+    t3 = @addWithOverflow(c_lo, round_carry)[0];
 
     t2 = mac_mini(t2, data[2], data[2], &c_lo);
     c_hi = 0;
@@ -197,7 +224,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
     mac(t3, k, modulus[3], c_lo, &t2, &c_lo);
-    t3 = c_lo + round_carry;
+    t3 = @addWithOverflow(c_lo, round_carry)[0];
 
     t3 = mac_mini(t3, data[3], data[3], &c_lo);
     k = @mulWithOverflow(t0, r_inv)[0];
@@ -206,23 +233,30 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
     mac(t3, k, modulus[3], c_lo, &t2, &c_lo);
-    t3 = c_lo + round_carry;
+    t3 = @addWithOverflow(c_lo, round_carry)[0];
 
     return .{ t0, t1, t2, t3 };
 }
 
 pub fn add(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
     const twice_not_modulus = params.twice_not_modulus;
+    // var c: u64 = 0;
+    // const r0 = addc(data[0], other[0], c, &c);
     const r0, var c: u64 = @addWithOverflow(data[0], other[0]);
     const r1 = addc(data[1], other[1], c, &c);
     const r2 = addc(data[2], other[2], c, &c);
-    const r3 = data[3] + other[3] + c;
+    // const r3 = addc(data[3], other[3], c, &c);
+    // TODO: Not sure about this. We discard the final carry?
+    const r3 = @addWithOverflow(data[3], other[3])[0] + c;
+    // const r3: u64 = @truncate(@as(u128, data[3]) + other[3] + c);
 
     const t0, c = @addWithOverflow(r0, twice_not_modulus[0]);
+    // const t0 = addc(r0, twice_not_modulus[0], 0, &c);
     const t1 = addc(r1, twice_not_modulus[1], c, &c);
     const t2 = addc(r2, twice_not_modulus[2], c, &c);
     const t3 = addc(r3, twice_not_modulus[3], c, &c);
-    const selection_mask = 0 - c;
+    const selection_mask = @subWithOverflow(0, c)[0];
+    // std.debug.print("{} {x}", .{ c, selection_mask });
     const selection_mask_inverse = ~selection_mask;
 
     return .{
@@ -233,33 +267,63 @@ pub fn add(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
     };
 }
 
-pub fn to_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
-    var d = data;
-    d = reduce(params, d);
-    d = reduce(params, d);
-    d = reduce(params, d);
-    d = montgomery_mul(params, d, params.r_squared);
-    d = reduce(params, d);
-    return d;
+pub fn sub(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
+    const modulus = params.modulus;
+    var borrow: u64 = 0;
+
+    var r0 = sbb(data[0], other[0], borrow, &borrow);
+    var r1 = sbb(data[1], other[1], borrow, &borrow);
+    var r2 = sbb(data[2], other[2], borrow, &borrow);
+    var r3 = sbb(data[3], other[3], borrow, &borrow);
+
+    // std.debug.print("r0 {x:0>16}\n", .{r0});
+    // std.debug.print("r1 {x:0>16}\n", .{r1});
+    // std.debug.print("r2 {x:0>16}\n", .{r2});
+    // std.debug.print("r3 {x:0>16}\n", .{r3});
+
+    r0 += (modulus[0] & borrow);
+    var carry: u64 = @intFromBool(r0 < (modulus[0] & borrow));
+    r1 = addc(r1, modulus[1] & borrow, carry, &carry);
+    r2 = addc(r2, modulus[2] & borrow, carry, &carry);
+    r3 = addc(r3, modulus[3] & borrow, carry, &carry);
+
+    // The value being subtracted is in [0, 2**256), if we subtract 0 - 2*255 and then add p, the value will stay
+    // negative. If we are adding p, we need to check that we've overflown 2**256. If not, we should add p again.
+    if (carry == 0) {
+        r0 += (modulus[0] & borrow);
+        carry = @intFromBool(r0 < (modulus[0] & borrow));
+        r1 = addc(r1, modulus[1] & borrow, carry, &carry);
+        r2 = addc(r2, modulus[2] & borrow, carry, &carry);
+        r3 = addc(r3, modulus[3] & borrow, carry, &carry);
+    }
+
+    return .{ r0, r1, r2, r3 };
 }
 
-pub fn to_limbs(data: u256) [4]u64 {
-    return [4]u64{
-        @truncate(data),
-        @truncate(data >> 64),
-        @truncate(data >> 128),
-        @truncate(data >> 192),
-    };
+pub fn sub_coarse(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
+    const twice_modulus = params.twice_modulus;
+    var borrow: u64 = 0;
+
+    var r0 = sbb(data[0], other[0], borrow, &borrow);
+    var r1 = sbb(data[1], other[1], borrow, &borrow);
+    var r2 = sbb(data[2], other[2], borrow, &borrow);
+    var r3 = sbb(data[3], other[3], borrow, &borrow);
+
+    r0, var carry: u64 = @addWithOverflow(r0, twice_modulus[0] & borrow);
+    // var carry: u64 = @intFromBool(r0 < (twice_modulus[0] & borrow));
+    r1 = addc(r1, twice_modulus[1] & borrow, carry, &carry);
+    r2 = addc(r2, twice_modulus[2] & borrow, carry, &carry);
+    r3 = @addWithOverflow(r3, (twice_modulus[3] & borrow) + carry)[0];
+
+    // std.debug.print("r0 {x:0>16}\n", .{r0});
+    // std.debug.print("r1 {x:0>16}\n", .{r1});
+    // std.debug.print("r2 {x:0>16}\n", .{r2});
+    // std.debug.print("r3 {x:0>16}\n", .{r3});
+
+    return .{ r0, r1, r2, r3 };
 }
 
-pub fn from_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
-    var d = data;
-    d = montgomery_mul(params, d, .{ 1, 0, 0, 0 });
-    d = reduce(params, d);
-    return d;
-}
-
-fn debugPrintArray(array: [4]u64) void {
+pub fn debugPrintArray(array: [4]u64) void {
     for (0.., array) |i, elem| {
         std.debug.print("{x}", .{elem});
         if (i < array.len - 1) {
