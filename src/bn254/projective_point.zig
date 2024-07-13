@@ -82,5 +82,24 @@ pub fn ProjectivePoint(comptime Fq: type, comptime GroupParams: type) type {
             defer std.testing.allocator.free(str);
             std.debug.print("{s}\n", .{str});
         }
+
+        pub fn on_curve(self: PP) bool {
+            if (self.is_infinity()) {
+                return true;
+            }
+            // We specify the point at inifinity not by (0 \lambda 0), so z should not be 0
+            if (self.z.is_zero()) {
+                return false;
+            }
+            const zz = self.z.sqr();
+            const zzzz = zz.sqr();
+            const bz_6 = zzzz.mul(zz).mul(GroupParams.b);
+            // if constexpr (T::has_a) {
+            //     bz_6 += (x * T::a) * zzzz;
+            // }
+            const xxx = self.x.sqr().mul(self.x).add(bz_6);
+            const yy = self.y.sqr();
+            return xxx.eql(yy);
+        }
     };
 }

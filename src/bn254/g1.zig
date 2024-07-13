@@ -5,11 +5,16 @@ const ProjectivePoint = @import("projective_point.zig").ProjectivePoint;
 const G1Params = struct {
     pub const one_x = Fq.one;
     pub const one_y = Fq{ .limbs = .{ 0xa6ba871b8b1e1b3a, 0x14f1d651eb8e167b, 0xccdd46def0f28c58, 0x1c14ef83340fbe5e } };
-    pub const a = Fq.zero;
+    // pub const a = Fq.zero;
     pub const b = Fq{ .limbs = .{ 0x7a17caa950ad28d7, 0x1f6ac17ae15521b9, 0x334bea4e696bd284, 0x2a1f6744ce179d8e } };
 };
 
 const G1Element = ProjectivePoint(Fq, G1Params);
+
+test "random" {
+    const a = G1Element.random();
+    try std.testing.expect(a.on_curve());
+}
 
 test "add" {
     const a_x = Fq.from_int(0x00f708d16cfe6e14334da8e7539e71c44965cd1c3687f635184b38afc6e2e09a);
