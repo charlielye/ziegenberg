@@ -16,6 +16,10 @@ test "random" {
     try std.testing.expect(a.on_curve());
 }
 
+test "infinty" {
+    try std.testing.expect(G1Element.infinity.is_infinity());
+}
+
 test "add" {
     const a_x = Fq.from_int(0x00f708d16cfe6e14334da8e7539e71c44965cd1c3687f635184b38afc6e2e09a);
     const a_y = Fq.from_int(0x114a1616c164b980bf1645401de26ba1070761d618b513b92a6ff6ffc739b3b6);
