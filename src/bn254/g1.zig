@@ -1,5 +1,6 @@
 const std = @import("std");
 const Fq = @import("fq.zig").Fq;
+const Fr = @import("fr.zig").Fr;
 const ProjectivePoint = @import("projective_point.zig").ProjectivePoint;
 
 const G1Params = struct {
@@ -76,16 +77,6 @@ test "add dbl exception" {
     try std.testing.expect(dbl_result.eql(add_result));
 }
 
-test "add dbl consistency" {
-    const a = G1Element.random();
-    const b = G1Element.random();
-    const c = a.add(b);
-    const d = a.add(b.neg());
-    const add_result = c.add(d);
-    const dbl_result = a.dbl();
-    try std.testing.expect(dbl_result.eql(add_result));
-}
-
 test "add infinity exception" {
     const lhs = G1Element.random();
     const rhs = lhs.neg();
@@ -97,4 +88,40 @@ test "add infinity exception" {
 
     const result3 = G1Element.infinity.add(lhs);
     try std.testing.expectEqual(lhs, result3);
+}
+
+test "add dbl consistency" {
+    const a = G1Element.random();
+    const b = G1Element.random();
+    const c = a.add(b);
+    const d = a.add(b.neg());
+    const add_result = c.add(d);
+    const dbl_result = a.dbl();
+    try std.testing.expect(dbl_result.eql(add_result));
+}
+
+test "add dbl consistency repeated" {
+    const a = G1Element.random();
+    const b = a.dbl(); // b = 2a
+    const c = b.dbl(); // c = 4a
+
+    const d = a.add(b); // d = 3a
+    const e = a.add(c); // e = 5a
+    const result = d.add(e); // result = 8a
+
+    const expected = c.dbl(); // expected = 8a
+
+    try std.testing.expect(result.eql(expected));
+}
+
+test "group exponentiation" {
+    const a = Fr.from_limbs(.{ 0xb67299b792199cf0, 0xc1da7df1e7e12768, 0x692e427911532edf, 0x13dd85e87dc89978 });
+
+    const expected_x = Fq.from_limbs(.{ 0x9bf840faf1b4ba00, 0xe81b7260d068e663, 0x7610c9a658d2c443, 0x278307cd3d0cddb0 });
+    const expected_y = Fq.from_limbs(.{ 0xf6ed5fb779ebecb, 0x414ca771acbe183c, 0xe3692cb56dfbdb67, 0x3d3c5ed19b080a3 });
+    const expected = G1Element.from_xyz(expected_x, expected_y, Fq.one);
+
+    const result = (G1Element.one.mul(a));
+
+    try std.testing.expect(result.eql(expected));
 }

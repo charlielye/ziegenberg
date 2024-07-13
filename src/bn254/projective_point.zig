@@ -8,7 +8,7 @@ pub fn ProjectivePoint(comptime Fq: type, comptime GroupParams: type) type {
 
         // Point at infinity is encoded as { x = fq_modulus, y = 0, z = 0 }
         pub const infinity = PP.from_xyz(Fq{ .limbs = Fq.params.modulus }, Fq.zero, Fq.zero);
-        pub const one = PP.from_xyz(Fq.one_x, Fq.one_y, Fq.one);
+        pub const one = PP.from_xyz(GroupParams.one_x, GroupParams.one_y, Fq.one);
         x: Fq,
         y: Fq,
         z: Fq,
@@ -44,7 +44,7 @@ pub fn ProjectivePoint(comptime Fq: type, comptime GroupParams: type) type {
             const maximum_set_bit = 255 - @clz(scalar_u256);
 
             for (0..maximum_set_bit) |j| {
-                const i = maximum_set_bit - j;
+                const i = maximum_set_bit - j - 1;
                 accumulator = accumulator.dbl();
                 if ((scalar_u256 >> @truncate(i)) & 1 == 1) {
                     accumulator = accumulator.add(self);
