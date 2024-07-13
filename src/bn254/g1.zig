@@ -116,12 +116,32 @@ test "add dbl consistency repeated" {
 
 test "group exponentiation" {
     const a = Fr.from_limbs(.{ 0xb67299b792199cf0, 0xc1da7df1e7e12768, 0x692e427911532edf, 0x13dd85e87dc89978 });
-
     const expected_x = Fq.from_limbs(.{ 0x9bf840faf1b4ba00, 0xe81b7260d068e663, 0x7610c9a658d2c443, 0x278307cd3d0cddb0 });
     const expected_y = Fq.from_limbs(.{ 0xf6ed5fb779ebecb, 0x414ca771acbe183c, 0xe3692cb56dfbdb67, 0x3d3c5ed19b080a3 });
     const expected = G1Element.from_xyz(expected_x, expected_y, Fq.one);
 
     const result = (G1Element.one.mul(a));
+
+    try std.testing.expect(result.eql(expected));
+}
+
+test "group exponentiation zero and one" {
+    const result = G1Element.one.mul(Fr.zero);
+    try std.testing.expect(result.is_infinity());
+
+    const result2 = G1Element.one.mul(Fr.one);
+    try std.testing.expect(result2.eql(G1Element.one));
+}
+
+test "group exponentiation consistency" {
+    const a = Fr.random();
+    const b = Fr.random();
+    const c = a.mul(b);
+
+    const input = G1Element.one;
+    const result = input.mul(a).mul(b);
+
+    const expected = input.mul(c);
 
     try std.testing.expect(result.eql(expected));
 }
