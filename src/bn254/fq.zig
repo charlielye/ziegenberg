@@ -122,3 +122,10 @@ test "pow 10^10" {
     const a = Fq.from_int(10);
     try std.testing.expectEqual(10000000000, a.pow(10).to_int());
 }
+
+test "invert" {
+    const input = Fq.random();
+    const inverse = input.invert();
+    const result = input.mul(inverse).reduce().reduce();
+    try std.testing.expectEqual(Fq.one, result);
+}

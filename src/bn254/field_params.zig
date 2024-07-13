@@ -7,6 +7,8 @@ pub fn FieldParams(comptime Params: type) type {
         const not_modulus_u256: u256 = @bitCast(-@as(i256, modulus_u256));
         const twice_not_modulus_u256: u256 = @bitCast(-@as(i256, twice_modulus_u256));
 
+        pub const modulus_minus_two_u256: u256 = Params.modulus - 2;
+
         pub const modulus = field_arith.to_limbs(modulus_u256);
         pub const twice_modulus = field_arith.to_limbs(twice_modulus_u256);
         pub const not_modulus = field_arith.to_limbs(not_modulus_u256);

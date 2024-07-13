@@ -20,6 +20,19 @@ test "infinty" {
     try std.testing.expect(G1Element.infinity.is_infinity());
 }
 
+test "eql" {
+    const a = G1Element.random();
+    const b = a.normalize();
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(a.eql(a));
+    try std.testing.expect(!a.eql(G1Element.infinity));
+    try std.testing.expect(!G1Element.infinity.eql(a));
+
+    const c = G1Element.random();
+    try std.testing.expect(!a.eql(c));
+}
+
 test "add" {
     const a_x = Fq.from_int(0x00f708d16cfe6e14334da8e7539e71c44965cd1c3687f635184b38afc6e2e09a);
     const a_y = Fq.from_int(0x114a1616c164b980bf1645401de26ba1070761d618b513b92a6ff6ffc739b3b6);
@@ -54,6 +67,23 @@ test "dbl" {
     const result = lhs.dbl().dbl().dbl();
 
     try std.testing.expect(expected.eql(result));
+}
+
+test "add dbl exception" {
+    const a = G1Element.random();
+    const dbl_result = a.dbl();
+    const add_result = a.add(a);
+    try std.testing.expect(dbl_result.eql(add_result));
+}
+
+test "add dbl consistency" {
+    const a = G1Element.random();
+    const b = G1Element.random();
+    const c = a.add(b);
+    const d = a.add(b.neg());
+    const add_result = c.add(d);
+    const dbl_result = a.dbl();
+    try std.testing.expect(dbl_result.eql(add_result));
 }
 
 test "add infinity exception" {
