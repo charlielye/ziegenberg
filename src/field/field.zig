@@ -1,6 +1,6 @@
 const std = @import("std");
 const field_arith = @import("field_arith.zig");
-const get_msb = @import("get_msb.zig").get_msb;
+const get_msb = @import("../bitop/get_msb.zig").get_msb;
 
 // Generic field element.
 // The montgomery form is not exposed externally, unless you read the limbs directly.

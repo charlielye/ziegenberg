@@ -1,10 +1,11 @@
 const std = @import("std");
-const Fr = @import("fr.zig").Fr;
 const group_arith = @import("group_arith.zig");
 
-pub fn ProjectivePoint(comptime Fq: type, comptime GroupParams: type) type {
+pub fn ProjectivePoint(comptime GroupParams: type) type {
     return struct {
-        const PP = ProjectivePoint(Fq, GroupParams);
+        const Fr = GroupParams.fr;
+        const Fq = GroupParams.fq;
+        const PP = ProjectivePoint(GroupParams);
 
         // Point at infinity is encoded as { x = fq_modulus, y = 0, z = 0 }
         pub const infinity = PP.from_xyz(Fq{ .limbs = Fq.params.modulus }, Fq.zero, Fq.zero);
@@ -35,7 +36,7 @@ pub fn ProjectivePoint(comptime Fq: type, comptime GroupParams: type) type {
         }
 
         // Slow. Need version with endomorphism.
-        pub fn mul(self: PP, scalar: Fr) PP {
+        pub fn mul(self: PP, scalar: GroupParams.fr) PP {
             if (scalar.is_zero()) {
                 return PP.infinity;
             }

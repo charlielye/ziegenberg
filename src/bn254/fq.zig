@@ -1,6 +1,6 @@
 const std = @import("std");
-const Field = @import("field.zig").Field;
-const FieldParams = @import("field_params.zig").FieldParams;
+const Field = @import("../field/field.zig").Field;
+const FieldParams = @import("../field/field_params.zig").FieldParams;
 
 const FqParams = struct {
     pub const modulus: u256 = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3C208C16D87CFD47;

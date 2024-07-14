@@ -1,16 +1,18 @@
 const std = @import("std");
 const Fq = @import("fq.zig").Fq;
 const Fr = @import("fr.zig").Fr;
-const ProjectivePoint = @import("projective_point.zig").ProjectivePoint;
+const ProjectivePoint = @import("../group/projective_point.zig").ProjectivePoint;
 
 const G1Params = struct {
+    pub const fq = Fq;
+    pub const fr = Fr;
     pub const one_x = Fq.one;
     pub const one_y = Fq{ .limbs = .{ 0xa6ba871b8b1e1b3a, 0x14f1d651eb8e167b, 0xccdd46def0f28c58, 0x1c14ef83340fbe5e } };
     // pub const a = Fq.zero;
     pub const b = Fq{ .limbs = .{ 0x7a17caa950ad28d7, 0x1f6ac17ae15521b9, 0x334bea4e696bd284, 0x2a1f6744ce179d8e } };
 };
 
-const G1Element = ProjectivePoint(Fq, G1Params);
+const G1Element = ProjectivePoint(G1Params);
 
 test "random" {
     const a = G1Element.random();
