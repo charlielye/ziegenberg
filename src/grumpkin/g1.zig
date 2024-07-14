@@ -1,7 +1,7 @@
 const std = @import("std");
 const Fr = @import("fr.zig").Fr;
 const Fq = @import("fq.zig").Fq;
-const ProjectivePoint = @import("../group/projective_point.zig").ProjectivePoint;
+const ProjectivePoint = @import("../group/package.zig").ProjectivePoint;
 
 const G1Params = struct {
     pub const fq = Fq;
