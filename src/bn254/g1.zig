@@ -12,7 +12,25 @@ const G1Params = struct {
     pub const b = Fq{ .limbs = .{ 0x7a17caa950ad28d7, 0x1f6ac17ae15521b9, 0x334bea4e696bd284, 0x2a1f6744ce179d8e } };
 };
 
-const G1Element = ProjectivePoint(G1Params);
+pub const G1 = struct {
+    pub const Fr = G1Params.fr;
+    pub const Fq = G1Params.fq;
+    pub const Element = ProjectivePoint(G1Params);
+};
+
+const G1Element = G1.Element;
+
+test "to/from buf" {
+    const a = G1.Element.one;
+    const b = a.to_buf();
+    var e: [64]u8 = [_]u8{0} ** 64;
+    e[31] = 1;
+    e[63] = 2;
+    try std.testing.expectEqual(e, b);
+
+    const c = G1.Element.from_buf(b);
+    try std.testing.expect(c.eql(a));
+}
 
 test "random" {
     const a = G1Element.random();

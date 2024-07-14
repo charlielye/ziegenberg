@@ -11,14 +11,17 @@ const G1Params = struct {
     pub const b = Fq{ .limbs = .{ 0xdd7056026000005a, 0x223fa97acb319311, 0xcc388229877910c0, 0x34394632b724eaa } };
 };
 
-const G1Element = ProjectivePoint(G1Params);
+pub const G1 = struct {
+    pub const Params = G1Params;
+    pub const Element = ProjectivePoint(G1Params);
+};
 
 test "group exponentiation consistency" {
     const a = Fr.random();
     const b = Fr.random();
     const c = a.mul(b);
 
-    const input = G1Element.one;
+    const input = G1.Element.one;
     const result = input.mul(a).mul(b);
 
     const expected = input.mul(c);

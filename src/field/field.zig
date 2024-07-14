@@ -29,8 +29,24 @@ pub fn Field(comptime Params: type) type {
             return @as(u256, a[0]) + (@as(u256, a[1]) << 64) + (@as(u256, a[2]) << 128) + (@as(u256, a[3]) << 192);
         }
 
+        pub fn from_buf(buf: [32]u8) Fe {
+            const a = @byteSwap(@as(u256, @bitCast(buf)));
+            return Fe.from_int(a);
+        }
+
+        pub fn to_buf(self: Fe) [32]u8 {
+            const a = self.to_int();
+            return @bitCast(@byteSwap(a));
+        }
+
         pub fn random() Fe {
+            // TODO: Should we be using std.posix.getrandom()?!
             const data = std.crypto.random.int(u512);
+            return Fe.from_int(@truncate(data));
+        }
+
+        pub fn pseudo_random(engine: anytype) Fe {
+            const data = engine.random().int(u512);
             return Fe.from_int(@truncate(data));
         }
 

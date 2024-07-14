@@ -14,6 +14,23 @@ pub fn ProjectivePoint(comptime GroupParams: type) type {
         y: Fq,
         z: Fq,
 
+        pub fn from_buf(buf: [64]u8) PP {
+            return PP{
+                .x = Fq.from_buf(buf[0..32].*),
+                .y = Fq.from_buf(buf[32..64].*),
+                .z = Fq.one,
+            };
+        }
+
+        pub fn to_buf(self: PP) [64]u8 {
+            var buf: [64]u8 = undefined;
+            const x_buf = self.x.to_buf();
+            const y_buf = self.y.to_buf();
+            std.mem.copyForwards(u8, buf[0..32], &x_buf);
+            std.mem.copyForwards(u8, buf[32..64], &y_buf);
+            return buf;
+        }
+
         pub fn from_xyz(x: Fq, y: Fq, z: Fq) PP {
             return PP{ .x = x, .y = y, .z = z };
         }
@@ -97,12 +114,12 @@ pub fn ProjectivePoint(comptime GroupParams: type) type {
             try writer.print("{{\n x: {any}\n y: {any}\n z: {any}\n}}", .{ self.x, self.y, self.z });
         }
 
-        pub fn print(self: PP) !void {
-            const str = try std.fmt.allocPrint(
+        pub fn print(self: PP) void {
+            const str = std.fmt.allocPrint(
                 std.testing.allocator,
                 "{s}",
                 .{self},
-            );
+            ) catch unreachable;
             defer std.testing.allocator.free(str);
             std.debug.print("{s}\n", .{str});
         }

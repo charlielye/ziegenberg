@@ -10,9 +10,30 @@ const FqParams = struct {
 
 pub const Fq = Field(FieldParams(FqParams));
 
+test "to/from buf" {
+    const a = Fq.from_int(FqParams.modulus - 1);
+    const b = a.to_buf();
+    const e: [32]u8 = .{ 0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d, 0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x46 };
+    try std.testing.expectEqual(e, b);
+
+    const c = Fq.from_buf(b);
+    try std.testing.expect(c.eql(a));
+}
+
 test "random" {
     const r = Fq.random();
     try std.testing.expect(r.to_int() > 0);
+}
+
+test "pseudo random" {
+    const seed: u64 = 12345;
+    // try std.posix.getrandom(std.mem.asBytes(&seed));
+    var prng = std.Random.DefaultPrng.init(seed);
+
+    const r = Fq.pseudo_random(&prng);
+    const e = Fq.from_int(0x2cef8853c20c6dd015caa2fce6db8d693477f953796702a08d948a82def8a568);
+
+    try std.testing.expectEqual(e, r);
 }
 
 test "add" {

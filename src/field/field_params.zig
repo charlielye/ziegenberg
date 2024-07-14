@@ -2,10 +2,10 @@ const field_arith = @import("field_arith.zig");
 
 pub fn FieldParams(comptime Params: type) type {
     return struct {
-        const modulus_u256: u256 = Params.modulus;
-        const twice_modulus_u256: u256 = modulus_u256 + modulus_u256;
-        const not_modulus_u256: u256 = @bitCast(-@as(i256, modulus_u256));
-        const twice_not_modulus_u256: u256 = @bitCast(-@as(i256, twice_modulus_u256));
+        pub const modulus_u256: u256 = Params.modulus;
+        pub const twice_modulus_u256: u256 = modulus_u256 + modulus_u256;
+        pub const not_modulus_u256: u256 = @bitCast(-@as(i256, modulus_u256));
+        pub const twice_not_modulus_u256: u256 = @bitCast(-@as(i256, twice_modulus_u256));
 
         pub const modulus_minus_two_u256: u256 = Params.modulus - 2;
 
