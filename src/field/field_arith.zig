@@ -1,15 +1,12 @@
 const std = @import("std");
 
 pub fn to_limbs(data: u256) [4]u64 {
-    return [4]u64{
-        @truncate(data),
-        @truncate(data >> 64),
-        @truncate(data >> 128),
-        @truncate(data >> 192),
-    };
+    // @setRuntimeSafety(false);
+    return @bitCast(data);
 }
 
 pub fn to_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
+    // @setRuntimeSafety(false);
     var d = data;
     d = reduce(params, d);
     d = reduce(params, d);
@@ -20,53 +17,62 @@ pub fn to_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
 }
 
 pub fn from_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
+    // @setRuntimeSafety(false);
     var d = data;
     d = montgomery_mul(params, d, .{ 1, 0, 0, 0 });
     d = reduce(params, d);
     return d;
 }
 
-fn mul_wide(a: u64, b: u64) [2]u64 {
+inline fn mul_wide(a: u64, b: u64) [2]u64 {
+    // @setRuntimeSafety(false);
     const res: u128 = @as(u128, a) * @as(u128, b);
     return [2]u64{ @truncate(res), @intCast(res >> 64) };
 }
 
-fn mac(a: u64, b: u64, c: u64, carry_in: u64, out: *u64, carry_out: *u64) void {
+inline fn mac(a: u64, b: u64, c: u64, carry_in: u64, out: *u64, carry_out: *u64) void {
+    // @setRuntimeSafety(false);
     const res: u128 = ((@as(u128, b) * c) + a) + carry_in;
     out.* = @truncate(res);
     carry_out.* = @intCast(res >> 64);
 }
 
-fn mac_mini(a: u64, b: u64, c: u64, carry_out: *u64) u64 {
+inline fn mac_mini(a: u64, b: u64, c: u64, carry_out: *u64) u64 {
+    // @setRuntimeSafety(false);
     const res: u128 = ((@as(u128, b) * c) + a);
     carry_out.* = @intCast(res >> 64);
     return @truncate(res);
 }
 
-fn mac_mini_full(a: u64, b: u64, c: u64, out: *u64, carry_out: *u64) void {
+inline fn mac_mini_full(a: u64, b: u64, c: u64, out: *u64, carry_out: *u64) void {
+    // @setRuntimeSafety(false);
     const res = (@as(u128, b) * c) + a;
     out.* = @truncate(res);
     carry_out.* = @intCast(res >> 64);
 }
 
-fn mac_discard_lo(a: u64, b: u64, c: u64) u64 {
+inline fn mac_discard_lo(a: u64, b: u64, c: u64) u64 {
+    // @setRuntimeSafety(false);
     const res: u128 = (@as(u128, b) * c) + a;
     return @intCast(res >> 64);
 }
 
-fn addc(a: u64, b: u64, carry_in: u64, carry_out: *u64) u64 {
+inline fn addc(a: u64, b: u64, carry_in: u64, carry_out: *u64) u64 {
+    // @setRuntimeSafety(false);
     const res: u128 = @as(u128, a) + b + carry_in;
     carry_out.* = @intCast(res >> 64);
     return @truncate(res);
 }
 
-fn sbb(a: u64, b: u64, borrow_in: u64, borrow_out: *u64) u64 {
+inline fn sbb(a: u64, b: u64, borrow_in: u64, borrow_out: *u64) u64 {
+    // @setRuntimeSafety(false);
     const res: u128 = @bitCast(@as(i128, a) - (@as(i128, b) + (@as(i128, borrow_in) >> 63)));
     borrow_out.* = @intCast(res >> 64);
     return @truncate(res);
 }
 
 pub fn reduce(comptime params: anytype, data: [4]u64) [4]u64 {
+    // @setRuntimeSafety(false);
     const not_modulus = params.not_modulus;
     const t0, var c: u64 = @addWithOverflow(data[0], not_modulus[0]);
     // std.debug.print("t0 {} c {}\n", .{ t0, c });
@@ -83,23 +89,24 @@ pub fn reduce(comptime params: anytype, data: [4]u64) [4]u64 {
     };
 }
 
-pub fn montgomery_mul(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
+pub inline fn montgomery_mul(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
+    // @setRuntimeSafety(false);
     const r_inv = params.r_inv;
     const modulus = params.modulus;
-    var t0: u64 = 0;
-    var t1: u64 = 0;
-    var t2: u64 = 0;
-    var t3: u64 = 0;
-    var c: u64 = 0;
-    var a: u64 = 0;
-    var k: u64 = 0;
+    var t0: u64 = undefined;
+    var t1: u64 = undefined;
+    var t2: u64 = undefined;
+    var t3: u64 = undefined;
+    var c: u64 = undefined;
+    var a: u64 = undefined;
+    var k: u64 = undefined;
 
     // First iteration
     {
         t0, c = mul_wide(data[0], other[0]);
-        k = @mulWithOverflow(t0, r_inv)[0];
+        // k = @mulWithOverflow(t0, r_inv)[0];
+        k = t0 *% r_inv;
         a = mac_discard_lo(t0, k, modulus[0]);
-
         t1 = mac_mini(a, data[0], other[1], &a);
         mac(t1, k, modulus[1], c, &t0, &c);
         t2 = mac_mini(a, data[0], other[2], &a);
@@ -112,7 +119,7 @@ pub fn montgomery_mul(comptime params: anytype, data: [4]u64, other: [4]u64) [4]
     // Second iteration
     {
         mac_mini_full(t0, data[1], other[0], &t0, &a);
-        k = @mulWithOverflow(t0, r_inv)[0];
+        k = t0 *% r_inv;
         c = mac_discard_lo(t0, k, modulus[0]);
         mac(t1, data[1], other[1], a, &t1, &a);
         mac(t1, k, modulus[1], c, &t0, &c);
@@ -126,7 +133,7 @@ pub fn montgomery_mul(comptime params: anytype, data: [4]u64, other: [4]u64) [4]
     // Third iteration
     {
         mac_mini_full(t0, data[2], other[0], &t0, &a);
-        k = @mulWithOverflow(t0, r_inv)[0];
+        k = t0 *% r_inv;
         c = mac_discard_lo(t0, k, modulus[0]);
         mac(t1, data[2], other[1], a, &t1, &a);
         mac(t1, k, modulus[1], c, &t0, &c);
@@ -140,7 +147,7 @@ pub fn montgomery_mul(comptime params: anytype, data: [4]u64, other: [4]u64) [4]
     // Fourth iteration
     {
         mac_mini_full(t0, data[3], other[0], &t0, &a);
-        k = @mulWithOverflow(t0, r_inv)[0];
+        k = t0 *% r_inv;
         c = mac_discard_lo(t0, k, modulus[0]);
         mac(t1, data[3], other[1], a, &t1, &a);
         mac(t1, k, modulus[1], c, &t0, &c);
@@ -154,7 +161,8 @@ pub fn montgomery_mul(comptime params: anytype, data: [4]u64, other: [4]u64) [4]
     return [_]u64{ t0, t1, t2, t3 };
 }
 
-fn square_accumulate(a: u64, b: u64, c: u64, carry_in_lo: u64, carry_in_hi: u64, carry_out_lo: *u64, carry_out_hi: *u64) u64 {
+inline fn square_accumulate(a: u64, b: u64, c: u64, carry_in_lo: u64, carry_in_hi: u64, carry_out_lo: *u64, carry_out_hi: *u64) u64 {
+    // @setRuntimeSafety(false);
     const product = @mulWithOverflow(@as(u128, b), c)[0];
     const r0: u64 = @truncate(product);
     const r1: u64 = @truncate(product >> 64);
@@ -178,17 +186,18 @@ fn square_accumulate(a: u64, b: u64, c: u64, carry_in_lo: u64, carry_in_hi: u64,
     return out;
 }
 
-pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
+pub inline fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
+    @setRuntimeSafety(false);
     const r_inv = params.r_inv;
     const modulus = params.modulus;
-    var t0: u64 = 0;
-    var t1: u64 = 0;
-    var t2: u64 = 0;
-    var t3: u64 = 0;
-    var c_hi: u64 = 0;
-    var c_lo: u64 = 0;
-    var round_carry: u64 = 0;
-    var k: u64 = 0;
+    var t0: u64 = undefined;
+    var t1: u64 = undefined;
+    var t2: u64 = undefined;
+    var t3: u64 = undefined;
+    var c_hi: u64 = undefined;
+    var c_lo: u64 = undefined;
+    var round_carry: u64 = undefined;
+    var k: u64 = undefined;
 
     t0, c_lo = mul_wide(data[0], data[0]);
     t1 = square_accumulate(0, data[1], data[0], c_lo, c_hi, &c_lo, &c_hi);
@@ -196,7 +205,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     t3 = square_accumulate(0, data[3], data[0], c_lo, c_hi, &c_lo, &c_hi);
 
     round_carry = c_lo;
-    k = @mulWithOverflow(t0, r_inv)[0];
+    k = t0 * r_inv;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
@@ -208,7 +217,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     t2 = square_accumulate(t2, data[2], data[1], c_lo, c_hi, &c_lo, &c_hi);
     t3 = square_accumulate(t3, data[3], data[1], c_lo, c_hi, &c_lo, &c_hi);
     round_carry = c_lo;
-    k = @mulWithOverflow(t0, r_inv)[0];
+    k = t0 * r_inv;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
@@ -219,7 +228,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     c_hi = 0;
     t3 = square_accumulate(t3, data[3], data[2], c_lo, c_hi, &c_lo, &c_hi);
     round_carry = c_lo;
-    k = @mulWithOverflow(t0, r_inv)[0];
+    k = t0 * r_inv;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
@@ -227,7 +236,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     t3 = @addWithOverflow(c_lo, round_carry)[0];
 
     t3 = mac_mini(t3, data[3], data[3], &c_lo);
-    k = @mulWithOverflow(t0, r_inv)[0];
+    k = t0 * r_inv;
     round_carry = c_lo;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
@@ -239,6 +248,7 @@ pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
 }
 
 pub fn add(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
+    // @setRuntimeSafety(false);
     const twice_not_modulus = params.twice_not_modulus;
     // var c: u64 = 0;
     // const r0 = addc(data[0], other[0], c, &c);
@@ -268,6 +278,7 @@ pub fn add(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
 }
 
 pub fn sub(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
+    // @setRuntimeSafety(false);
     const modulus = params.modulus;
     var borrow: u64 = 0;
 
@@ -301,6 +312,7 @@ pub fn sub(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
 }
 
 pub fn sub_coarse(comptime params: anytype, data: [4]u64, other: [4]u64) [4]u64 {
+    // @setRuntimeSafety(false);
     const twice_modulus = params.twice_modulus;
     var borrow: u64 = 0;
 

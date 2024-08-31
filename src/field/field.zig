@@ -1,6 +1,5 @@
 const std = @import("std");
 const field_arith = @import("field_arith.zig");
-const get_msb = @import("../bitop/get_msb.zig").get_msb;
 
 // Generic field element.
 // The montgomery form is not exposed externally, unless you read the limbs directly.
@@ -10,7 +9,7 @@ pub fn Field(comptime Params: type) type {
         pub const params = Params;
         pub const one = Fe.from_int(1);
         pub const zero = Fe.from_int(0);
-        limbs: [4]u64,
+        limbs: [4]u64 align(32),
 
         pub fn from_limbs(limbs: [4]u64) Fe {
             return Fe{ .limbs = field_arith.to_montgomery_form(Params, limbs) };
@@ -21,12 +20,14 @@ pub fn Field(comptime Params: type) type {
         }
 
         pub fn from_int(v: u256) Fe {
-            return Fe.from_limbs(field_arith.to_limbs(v));
+            return Fe.from_limbs(@bitCast(v));
         }
 
         pub fn to_int(self: Fe) u256 {
             const a = self.to_limbs();
-            return @as(u256, a[0]) + (@as(u256, a[1]) << 64) + (@as(u256, a[2]) << 128) + (@as(u256, a[3]) << 192);
+            // return @as(u256, a[0]) + (@as(u256, a[1]) << 64) + (@as(u256, a[2]) << 128) + (@as(u256, a[3]) << 192);
+            // return @ptrCast(*const u256, &limbs)[0];
+            return @bitCast(a);
         }
 
         pub fn from_buf(buf: [32]u8) Fe {
@@ -37,6 +38,14 @@ pub fn Field(comptime Params: type) type {
         pub fn to_buf(self: Fe) [32]u8 {
             const a = self.to_int();
             return @bitCast(@byteSwap(a));
+        }
+
+        pub fn to_montgomery(self: *Fe) void {
+            self.limbs = field_arith.to_montgomery_form(Params, self.limbs);
+        }
+
+        pub fn from_montgomery(self: *Fe) void {
+            self.limbs = field_arith.from_montgomery_form(Params, self.limbs);
         }
 
         pub fn random() Fe {
@@ -58,8 +67,12 @@ pub fn Field(comptime Params: type) type {
             return Fe{ .limbs = field_arith.sub_coarse(Params, self.limbs, other.limbs) };
         }
 
-        pub fn mul(self: Fe, other: Fe) Fe {
+        pub inline fn mul(self: Fe, other: Fe) Fe {
             return Fe{ .limbs = field_arith.montgomery_mul(Params, self.limbs, other.limbs) };
+        }
+
+        pub inline fn div(self: Fe, other: Fe) Fe {
+            return self.mul(other.invert());
         }
 
         pub fn sqr(self: Fe) Fe {

@@ -8,7 +8,8 @@ const FrParams = struct {
     pub const r_inv = 0xc2e1f593efffffff;
 };
 
-pub const Fr = Field(FieldParams(FrParams));
+pub const FrFieldParams = FieldParams(FrParams);
+pub const Fr = Field(FrFieldParams);
 
 test "add wrap" {
     const a = Fr.from_int(FrParams.modulus - 1);

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn get_msb(limbs: [4]u64) u64 {
+pub fn get_msb(limbs: [4]u64) u8 {
     var msb: u64 = 0;
 
     msb += @intFromBool(limbs[3] != 0 and msb == 0) * @as(u64, (@subWithOverflow(63, @clz(limbs[3]))[0] + @as(u64, 192)));
@@ -8,7 +8,7 @@ pub fn get_msb(limbs: [4]u64) u64 {
     msb += @intFromBool(limbs[1] != 0 and msb == 0) * @as(u64, (@subWithOverflow(63, @clz(limbs[1]))[0] + @as(u64, 64)));
     msb += @intFromBool(limbs[0] != 0 and msb == 0) * @as(u64, (@subWithOverflow(63, @clz(limbs[0]))[0]));
 
-    return msb;
+    return @truncate(msb);
 }
 
 test "msb 0" {

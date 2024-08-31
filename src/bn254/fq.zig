@@ -1,6 +1,8 @@
 const std = @import("std");
 const Field = @import("../field/field.zig").Field;
 const FieldParams = @import("../field/field_params.zig").FieldParams;
+const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
+const field_arith = @import("../field/field_arith.zig");
 
 const FqParams = struct {
     pub const modulus: u256 = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3C208C16D87CFD47;
@@ -150,3 +152,60 @@ test "invert" {
     const result = input.mul(inverse).reduce().reduce();
     try std.testing.expectEqual(Fq.one, result);
 }
+
+test "sqr bench" {
+    const loops = 100;
+    const num_points = 1 << 16;
+    std.debug.print("num points: {}\n", .{num_points});
+    var total_time: u64 = 0;
+    var total_clocks: u64 = 0;
+
+    for (0..loops) |_| {
+        var acc = Fq.random();
+        var t = try std.time.Timer.start();
+        const before = rdtsc();
+        for (0..num_points) |_| {
+            acc = acc.sqr();
+        }
+        total_clocks += rdtsc() - before;
+        total_time += t.read();
+    }
+
+    // acc.print();
+    std.debug.print("time taken: {}ns\n", .{total_time / loops});
+    std.debug.print("cycles per sqr: {}\n", .{total_clocks / loops / num_points});
+}
+
+test "mul bench" {
+    const num_points = 1 << 28;
+    std.debug.print("num points: {}\n", .{num_points});
+
+    var a = Fq.from_int(1);
+    const b = Fq.from_int(2);
+    var t = try std.time.Timer.start();
+    const before = rdtsc();
+    for (0..num_points) |_| {
+        a = a.mul(b);
+    }
+    const after = rdtsc();
+    const time_taken = t.read();
+    // const r = @as(u256, a.limbs[0]) + (@as(u256, a.limbs[1]) << 64) + (@as(u256, a.limbs[2]) << 128) + (@as(u256, a.limbs[3]) << 192);
+    // std.debug.print("0x{x:0>64}\n", .{r});
+    a.print();
+    std.debug.print("time taken: {}ms\n", .{time_taken / 1000000});
+    std.debug.print("cycles per mul: {}\n", .{(after - before) / num_points});
+}
+
+// test "mul bench" {
+//     var a: [4]u64 = .{ 1, 0, 0, 0 };
+//     const b: [4]u64 = .{ 2, 0, 0, 0 };
+//     var t = try std.time.Timer.start();
+//     const before = rdtsc();
+//     for (0..1 << 28) |_| {
+//         a = field_arith.montgomery_mul(FieldParams(FqParams), a, b);
+//     }
+//     const after = rdtsc();
+//     const time_taken = t.read();
+//     const r = @as(u256, a[0]) + (@as(u256, a[1]) << 64) + (@as(u256, a[2]) << 128) + (@as(u256, a[3]) << 192);
+//     std.debug.print("0x{x:0>64} {}ms {} clocks per mul\n", .{ r, time_taken / 1000000, (after - before) / (1 << 28) });
+// }
