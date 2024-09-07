@@ -177,7 +177,7 @@ test "sqr bench" {
 }
 
 test "mul bench" {
-    const num_points = 1 << 28;
+    const num_points = 1 << 16;
     std.debug.print("num points: {}\n", .{num_points});
 
     var a = Fq.from_int(1);

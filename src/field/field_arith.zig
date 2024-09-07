@@ -6,6 +6,7 @@ pub fn to_limbs(data: u256) [4]u64 {
 }
 
 pub fn to_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
+    @setEvalBranchQuota(10000);
     // @setRuntimeSafety(false);
     var d = data;
     d = reduce(params, d);

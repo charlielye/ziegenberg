@@ -1,9 +1,14 @@
 const std = @import("std");
 const decode_fr = @import("encode_fr.zig").decode_fr;
+const encode_fr = @import("encode_fr.zig").encode_fr;
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const get_msb = @import("../bitop/get_msb.zig").get_msb;
 const encrypt_cbc = @import("../aes/encrypt_cbc.zig").encrypt_cbc;
 const verify_signature = @import("ecdsa.zig").verify_signature;
+// const Poseidon = @import("poseidon").Poseidon;
+// const PoseidonFr = @import("poseidon").PoseidonBn254Fr;
+// const get_bn254_params = @import("poseidon").get_bn254_params;
+const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
 
 export fn blackbox_sha256(input: [*]const u256, length: usize, result: [*]u256) void {
     var message = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
@@ -42,6 +47,23 @@ export fn blackbox_blake3(input: [*]const u256, length: usize, result: [*]u256) 
     for (0..32) |i| {
         result[i] = output[i];
     }
+}
+
+export fn blackbox_poseidon2_permutation(input: [*]Bn254Fr, result: [*]Bn254Fr, _: usize) void {
+    var frs: [4]Bn254Fr = undefined;
+    for (0..4) |i| {
+        frs[i] = decode_fr(&input[i]);
+        frs[i].print();
+    }
+
+    const r = Poseidon2.permutation(frs);
+
+    for (0..4) |i| {
+        result[i] = r[i];
+        result[i].print();
+        encode_fr(&result[i]);
+    }
+    std.debug.print("-\n", .{});
 }
 
 export fn blackbox_keccak1600(input: [*]const u256, _: usize, result: [*]u256) void {

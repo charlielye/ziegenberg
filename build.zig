@@ -23,6 +23,14 @@ pub fn build(b: *std.Build) void {
     });
     lib.bundle_compiler_rt = true;
 
+    // zig_poseidon dependency. Leaving in as an example of how to add a dependency.
+    // const poseidon = b.dependency("zig_poseidon", .{
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    // lib.root_module.addImport("poseidon", poseidon.module("poseidon"));
+    // lib.linkLibrary(poseidon.artifact("zig-poseidon"));
+
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
@@ -35,6 +43,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Leaving in as an example of how to link to a dependency.
+    // lib_unit_tests.root_module.addImport("poseidon", poseidon.module("poseidon"));
+    // lib_unit_tests.linkLibrary(poseidon.artifact("zig-poseidon"));
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     run_lib_unit_tests.step.dependOn(b.getInstallStep());
