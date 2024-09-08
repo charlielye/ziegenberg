@@ -138,6 +138,18 @@ pub fn Field(comptime Params: type) type {
             return std.mem.eql(u64, &a, &b);
         }
 
+        pub fn lt(self: Fe, other: Fe) bool {
+            const a = self.reduce();
+            const b = other.reduce();
+            return a.to_int() < b.to_int();
+        }
+
+        pub fn leq(self: Fe, other: Fe) bool {
+            const a = self.reduce();
+            const b = other.reduce();
+            return a.to_int() <= b.to_int();
+        }
+
         pub fn is_zero(self: Fe) bool {
             return self.eql(Fe.zero);
         }

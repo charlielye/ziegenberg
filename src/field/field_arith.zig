@@ -6,7 +6,7 @@ pub fn to_limbs(data: u256) [4]u64 {
 }
 
 pub fn to_montgomery_form(comptime params: anytype, data: [4]u64) [4]u64 {
-    @setEvalBranchQuota(10000);
+    @setEvalBranchQuota(20000);
     // @setRuntimeSafety(false);
     var d = data;
     d = reduce(params, d);
@@ -180,23 +180,22 @@ inline fn square_accumulate(a: u64, b: u64, c: u64, carry_in_lo: u64, carry_in_h
     carry_hi += @intFromBool(carry_lo < r1);
 
     carry_lo = @addWithOverflow(carry_lo, carry_in_hi)[0];
-    carry_hi += @intFromBool(carry_lo < carry_in_hi);
+    carry_hi = carry_hi +% @intFromBool(carry_lo < carry_in_hi);
 
     carry_out_lo.* = carry_lo;
     carry_out_hi.* = carry_hi;
     return out;
 }
 
-pub inline fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
-    @setRuntimeSafety(false);
+pub fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     const r_inv = params.r_inv;
     const modulus = params.modulus;
     var t0: u64 = undefined;
     var t1: u64 = undefined;
     var t2: u64 = undefined;
     var t3: u64 = undefined;
-    var c_hi: u64 = undefined;
-    var c_lo: u64 = undefined;
+    var c_hi: u64 = 0;
+    var c_lo: u64 = 0;
     var round_carry: u64 = undefined;
     var k: u64 = undefined;
 
@@ -206,7 +205,7 @@ pub inline fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     t3 = square_accumulate(0, data[3], data[0], c_lo, c_hi, &c_lo, &c_hi);
 
     round_carry = c_lo;
-    k = t0 * r_inv;
+    k = t0 *% r_inv;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
@@ -218,7 +217,7 @@ pub inline fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     t2 = square_accumulate(t2, data[2], data[1], c_lo, c_hi, &c_lo, &c_hi);
     t3 = square_accumulate(t3, data[3], data[1], c_lo, c_hi, &c_lo, &c_hi);
     round_carry = c_lo;
-    k = t0 * r_inv;
+    k = t0 *% r_inv;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
@@ -229,7 +228,7 @@ pub inline fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     c_hi = 0;
     t3 = square_accumulate(t3, data[3], data[2], c_lo, c_hi, &c_lo, &c_hi);
     round_carry = c_lo;
-    k = t0 * r_inv;
+    k = t0 *% r_inv;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);
     mac(t2, k, modulus[2], c_lo, &t1, &c_lo);
@@ -237,7 +236,7 @@ pub inline fn montgomery_square(comptime params: anytype, data: [4]u64) [4]u64 {
     t3 = @addWithOverflow(c_lo, round_carry)[0];
 
     t3 = mac_mini(t3, data[3], data[3], &c_lo);
-    k = t0 * r_inv;
+    k = t0 *% r_inv;
     round_carry = c_lo;
     c_lo = mac_discard_lo(t0, k, modulus[0]);
     mac(t1, k, modulus[1], c_lo, &t0, &c_lo);

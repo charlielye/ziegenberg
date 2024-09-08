@@ -31,6 +31,10 @@ pub fn ProjectivePoint(comptime GroupParams: type) type {
             return buf;
         }
 
+        pub fn from_xy(x: Fq, y: Fq) PP {
+            return PP{ .x = x, .y = y, .z = Fq.one };
+        }
+
         pub fn from_xyz(x: Fq, y: Fq, z: Fq) PP {
             return PP{ .x = x, .y = y, .z = z };
         }
@@ -116,11 +120,11 @@ pub fn ProjectivePoint(comptime GroupParams: type) type {
 
         pub fn print(self: PP) void {
             const str = std.fmt.allocPrint(
-                std.testing.allocator,
+                std.heap.page_allocator,
                 "{s}",
                 .{self},
             ) catch unreachable;
-            defer std.testing.allocator.free(str);
+            defer std.heap.page_allocator.free(str);
             std.debug.print("{s}\n", .{str});
         }
 

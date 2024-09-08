@@ -87,6 +87,18 @@ export fn bn254_fr_eq(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *bool) void {
     result.* = l.eql(r);
 }
 
+export fn bn254_fr_lt(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *bool) void {
+    const l = decode_fr(lhs);
+    const r = decode_fr(rhs);
+    result.* = l.lt(r);
+}
+
+export fn bn254_fr_leq(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *bool) void {
+    const l = decode_fr(lhs);
+    const r = decode_fr(rhs);
+    result.* = l.leq(r);
+}
+
 test {
     @import("std").testing.refAllDecls(@This());
 }

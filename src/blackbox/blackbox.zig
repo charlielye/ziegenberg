@@ -2,13 +2,13 @@ const std = @import("std");
 const decode_fr = @import("encode_fr.zig").decode_fr;
 const encode_fr = @import("encode_fr.zig").encode_fr;
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
+const GrumpkinFq = @import("../grumpkin/fq.zig").Fq;
 const get_msb = @import("../bitop/get_msb.zig").get_msb;
 const encrypt_cbc = @import("../aes/encrypt_cbc.zig").encrypt_cbc;
 const verify_signature = @import("ecdsa.zig").verify_signature;
-// const Poseidon = @import("poseidon").Poseidon;
-// const PoseidonFr = @import("poseidon").PoseidonBn254Fr;
-// const get_bn254_params = @import("poseidon").get_bn254_params;
 const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
+const G1 = @import("../grumpkin/g1.zig").G1;
+const pedersen = @import("../pedersen/pedersen.zig");
 
 export fn blackbox_sha256(input: [*]const u256, length: usize, result: [*]u256) void {
     var message = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
@@ -37,6 +37,7 @@ export fn blackbox_blake2s(input: [*]const u256, length: usize, result: [*]u256)
 }
 
 export fn blackbox_blake3(input: [*]const u256, length: usize, result: [*]u256) void {
+    // TODO: Use some global memory to move allocs off VM path.
     var message = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
     defer message.deinit();
     for (0..length) |i| {
@@ -49,21 +50,51 @@ export fn blackbox_blake3(input: [*]const u256, length: usize, result: [*]u256) 
     }
 }
 
+export fn blackbox_pedersen_hash(input: [*]Bn254Fr, size: usize, hash_index: u32, output: *Bn254Fr) void {
+    // TODO: Use some global memory to move allocs off VM path.
+    var frs = std.ArrayList(GrumpkinFq).initCapacity(std.heap.page_allocator, size) catch unreachable;
+    defer frs.deinit();
+    for (0..size) |i| {
+        frs.append(decode_fr(&input[i])) catch unreachable;
+    }
+
+    // const acc = pedersen_commit(G1, frs.items, hash_index);
+    // output.* = generators.length_generator.mul(G1.Fr.from_int(size)).add(acc).normalize().x;
+    output.* = pedersen.hash(G1, frs.items, hash_index);
+    encode_fr(&output.*);
+}
+
+export fn blackbox_pedersen_commit(input: [*]GrumpkinFq, size: usize, hash_index: u32, output: *struct { Bn254Fr, Bn254Fr }) void {
+    // TODO: Use some global memory to move allocs off VM path.
+    var frs = std.ArrayList(GrumpkinFq).initCapacity(std.heap.page_allocator, size) catch unreachable;
+    defer frs.deinit();
+    for (0..size) |i| {
+        frs.append(decode_fr(&input[i])) catch unreachable;
+    }
+
+    const acc = pedersen.commit(G1, frs.items, hash_index);
+
+    output.*.@"0" = acc.x;
+    output.*.@"1" = acc.y;
+    encode_fr(&output.*.@"0");
+    encode_fr(&output.*.@"1");
+}
+
 export fn blackbox_poseidon2_permutation(input: [*]Bn254Fr, result: [*]Bn254Fr, _: usize) void {
     var frs: [4]Bn254Fr = undefined;
     for (0..4) |i| {
         frs[i] = decode_fr(&input[i]);
-        frs[i].print();
+        // frs[i].print();
     }
 
     const r = Poseidon2.permutation(frs);
 
     for (0..4) |i| {
         result[i] = r[i];
-        result[i].print();
+        // result[i].print();
         encode_fr(&result[i]);
     }
-    std.debug.print("-\n", .{});
+    // std.debug.print("-\n", .{});
 }
 
 export fn blackbox_keccak1600(input: [*]const u256, _: usize, result: [*]u256) void {
@@ -73,7 +104,7 @@ export fn blackbox_keccak1600(input: [*]const u256, _: usize, result: [*]u256) v
     }
     var hasher = std.crypto.core.keccak.KeccakF(1600){ .st = state };
     hasher.permute();
-    for (0..32) |i| {
+    for (0..25) |i| {
         result[i] = hasher.st[i];
     }
 }

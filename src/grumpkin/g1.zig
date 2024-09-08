@@ -12,7 +12,8 @@ const G1Params = struct {
 };
 
 pub const G1 = struct {
-    pub const Params = G1Params;
+    pub const Fr = G1Params.fr;
+    pub const Fq = G1Params.fq;
     pub const Element = ProjectivePoint(G1Params);
 };
 
