@@ -136,6 +136,9 @@ pub fn Field(comptime Params: type) type {
             const a = field_arith.reduce(Params, self.limbs);
             const b = field_arith.reduce(Params, other.limbs);
             return std.mem.eql(u64, &a, &b);
+            // const a = self.reduce();
+            // const b = other.reduce();
+            // return a.to_int() == b.to_int();
         }
 
         pub fn lt(self: Fe, other: Fe) bool {

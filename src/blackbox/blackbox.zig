@@ -9,6 +9,7 @@ const verify_signature = @import("ecdsa.zig").verify_signature;
 const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
 const G1 = @import("../grumpkin/g1.zig").G1;
 const pedersen = @import("../pedersen/pedersen.zig");
+const sha256_compress = @import("sha256_compress.zig").round;
 
 export fn blackbox_sha256(input: [*]const u256, length: usize, result: [*]u256) void {
     var message = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
@@ -20,6 +21,24 @@ export fn blackbox_sha256(input: [*]const u256, length: usize, result: [*]u256) 
     std.crypto.hash.sha2.Sha256.hash(message.items, &output, .{});
     for (0..32) |i| {
         result[i] = output[i];
+    }
+}
+
+export fn blackbox_sha256_compression(input: [*]const u256, hash_values: [*]const u256, result: [*]u256) void {
+    var in: [16]u32 = undefined;
+    for (0..16) |i| {
+        in[i] = @truncate(input[i]);
+    }
+    var hv: [8]u32 = undefined;
+    for (0..8) |i| {
+        hv[i] = @truncate(hash_values[i]);
+    }
+    // std.debug.print("in {x}\n", .{in});
+    // std.debug.print("hv before {x}\n", .{hv});
+    sha256_compress(&in, &hv);
+    // std.debug.print("hv after {x}\n", .{hv});
+    for (0..8) |i| {
+        result[i] = hv[i];
     }
 }
 

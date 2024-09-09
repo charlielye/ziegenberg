@@ -180,7 +180,7 @@ inline fn square_accumulate(a: u64, b: u64, c: u64, carry_in_lo: u64, carry_in_h
     carry_hi += @intFromBool(carry_lo < r1);
 
     carry_lo = @addWithOverflow(carry_lo, carry_in_hi)[0];
-    carry_hi = carry_hi +% @intFromBool(carry_lo < carry_in_hi);
+    carry_hi +%= @intFromBool(carry_lo < carry_in_hi);
 
     carry_out_lo.* = carry_lo;
     carry_out_hi.* = carry_hi;
