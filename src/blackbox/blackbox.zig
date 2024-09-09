@@ -2,6 +2,7 @@ const std = @import("std");
 const decode_fr = @import("encode_fr.zig").decode_fr;
 const encode_fr = @import("encode_fr.zig").encode_fr;
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
+const GrumpkinFr = @import("../grumpkin/fr.zig").Fr;
 const GrumpkinFq = @import("../grumpkin/fq.zig").Fq;
 const get_msb = @import("../bitop/get_msb.zig").get_msb;
 const encrypt_cbc = @import("../aes/encrypt_cbc.zig").encrypt_cbc;
@@ -10,8 +11,10 @@ const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
 const G1 = @import("../grumpkin/g1.zig").G1;
 const pedersen = @import("../pedersen/pedersen.zig");
 const sha256_compress = @import("sha256_compress.zig").round;
+const msm = @import("../msm/naive.zig").msm;
 
 export fn blackbox_sha256(input: [*]const u256, length: usize, result: [*]u256) void {
+    // TODO: Use some global memory to move allocs off VM path.
     var message = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
     defer message.deinit();
     for (0..length) |i| {
@@ -43,6 +46,7 @@ export fn blackbox_sha256_compression(input: [*]const u256, hash_values: [*]cons
 }
 
 export fn blackbox_blake2s(input: [*]const u256, length: usize, result: [*]u256) void {
+    // TODO: Use some global memory to move allocs off VM path.
     var message = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
     defer message.deinit();
     for (0..length) |i| {
@@ -71,24 +75,26 @@ export fn blackbox_blake3(input: [*]const u256, length: usize, result: [*]u256) 
 
 export fn blackbox_pedersen_hash(input: [*]Bn254Fr, size: usize, hash_index: u32, output: *Bn254Fr) void {
     // TODO: Use some global memory to move allocs off VM path.
-    var frs = std.ArrayList(GrumpkinFq).initCapacity(std.heap.page_allocator, size) catch unreachable;
+    var frs = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, size) catch unreachable;
     defer frs.deinit();
     for (0..size) |i| {
-        frs.append(decode_fr(&input[i])) catch unreachable;
+        // GrumpkinFr field > Bn254Fr field.
+        // Thus we can convert a Bn254Fr value safely to a GrumpkinFr.
+        frs.append(GrumpkinFr.from_int(decode_fr(&input[i]).to_int())) catch unreachable;
     }
 
-    // const acc = pedersen_commit(G1, frs.items, hash_index);
-    // output.* = generators.length_generator.mul(G1.Fr.from_int(size)).add(acc).normalize().x;
     output.* = pedersen.hash(G1, frs.items, hash_index);
     encode_fr(&output.*);
 }
 
-export fn blackbox_pedersen_commit(input: [*]GrumpkinFq, size: usize, hash_index: u32, output: *struct { Bn254Fr, Bn254Fr }) void {
+export fn blackbox_pedersen_commit(input: [*]Bn254Fr, size: usize, hash_index: u32, output: *struct { Bn254Fr, Bn254Fr }) void {
     // TODO: Use some global memory to move allocs off VM path.
-    var frs = std.ArrayList(GrumpkinFq).initCapacity(std.heap.page_allocator, size) catch unreachable;
+    var frs = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, size) catch unreachable;
     defer frs.deinit();
     for (0..size) |i| {
-        frs.append(decode_fr(&input[i])) catch unreachable;
+        // GrumpkinFr field > Bn254Fr field.
+        // Thus we can convert a Bn254Fr value safely to a GrumpkinFr.
+        frs.append(GrumpkinFr.from_int(decode_fr(&input[i]).to_int())) catch unreachable;
     }
 
     const acc = pedersen.commit(G1, frs.items, hash_index);
@@ -172,6 +178,68 @@ export fn to_radix(input: *Bn254Fr, output: [*]u256, size: u64, radix: u64) void
         output[i] = remainder;
         in = quotient;
     }
+}
+
+const Point = struct {
+    x: Bn254Fr,
+    y: Bn254Fr,
+    is_infinity: u256,
+};
+
+// Fq has to be split over 2 limbs as it doesn't fit in Fr.
+const Scalar = struct {
+    lo: Bn254Fr,
+    hi: Bn254Fr,
+};
+
+// The bn254Fr's here are actually grumpkinFq's (same field).
+export fn blackbox_ecc_add(
+    x1: *Bn254Fr, y1: *Bn254Fr, in1: *u256, x2: *Bn254Fr, y2: *Bn254Fr, in2: *u256, output: *Point) void
+{
+    const input1 = if (in1.* == 1) G1.Element.infinity else G1.Element.from_xy(decode_fr(x1), decode_fr(y1));
+    const input2 = if (in2.* == 1) G1.Element.infinity else G1.Element.from_xy(decode_fr(x2), decode_fr(y2));
+    const r = input1.add(input2).normalize();
+    output.*.is_infinity = @intFromBool(r.is_infinity());
+    output.*.x = r.x;
+    output.*.y = r.y;
+    encode_fr(&output.*.x);
+    encode_fr(&output.*.y);
+}
+
+// This is an msm over grumpkin curve, hence the point coords are GrumpkinFq's, and the scalar field is GrumpkinFr's.
+// A GrumpkinFq is a Bn254Fr, and a GrumpkinFr is a Bn254Fq.
+// A Grumpkin coordinate point is therefore Noirs native field type.
+// As a GrumpkinFr > Bn254Fr, scalars are split into two Bn254Fr's in Noir, and is reconstituted into the GrumpkinFr.
+export fn blackbox_msm(points_: [*]Point, num_fields: usize, scalars_: [*]Scalar, output: *Point) void
+{
+    const num_points = num_fields / 3;
+    var points = std.ArrayList(G1.Element).initCapacity(std.heap.page_allocator, num_points) catch unreachable;
+    var scalars = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, num_points) catch unreachable;
+
+    for (0..num_points) |i| {
+        const p = &points_[i];
+        const x = decode_fr(&p.*.x);
+        const y = decode_fr(&p.*.y);
+
+        if (p.*.is_infinity == 1) {
+            points.append(G1.Element.infinity) catch unreachable;
+        } else {
+            points.append(G1.Element.from_xy(x, y)) catch unreachable;
+        }
+
+        const shi = decode_fr(&scalars_[i].hi).to_int();
+        const slo = decode_fr(&scalars_[i].lo).to_int();
+        const s = slo | (shi << 128);
+        scalars.append(GrumpkinFr.from_int(s)) catch unreachable;
+    }
+
+    const e = msm(G1, scalars.items, points.items).normalize();
+
+    output.*.is_infinity = @intFromBool(e.is_infinity());
+    output.*.x = e.x;
+    output.*.y = e.y;
+    encode_fr(&output.*.x);
+    encode_fr(&output.*.y);
 }
 
 // const rdtsc = @import("../timer/rdtsc.zig").rdtsc;

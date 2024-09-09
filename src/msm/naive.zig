@@ -1,10 +1,10 @@
 const std = @import("std");
 const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
 
-pub fn msm(comptime G1: type, scalars: []G1.Fr, points: []G1.Element) G1.Element {
+pub fn msm(comptime G1: type, scalars: []G1.Fr, points: []const G1.Element) G1.Element {
     if (scalars.len != points.len) unreachable;
 
-    var accumulator = G1.Element.one;
+    var accumulator = G1.Element.infinity;
     for (0..scalars.len) |i| {
         accumulator = accumulator.add(points[i].mul(scalars[i]));
     }
