@@ -25,8 +25,6 @@ pub fn Field(comptime Params: type) type {
 
         pub fn to_int(self: Fe) u256 {
             const a = self.to_limbs();
-            // return @as(u256, a[0]) + (@as(u256, a[1]) << 64) + (@as(u256, a[2]) << 128) + (@as(u256, a[3]) << 192);
-            // return @ptrCast(*const u256, &limbs)[0];
             return @bitCast(a);
         }
 

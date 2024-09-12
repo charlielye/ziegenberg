@@ -12,6 +12,7 @@ const G1 = @import("../grumpkin/g1.zig").G1;
 const pedersen = @import("../pedersen/pedersen.zig");
 const sha256_compress = @import("sha256_compress.zig").round;
 const msm = @import("../msm/naive.zig").msm;
+const schnorr_verify_signature = @import("../schnorr/schnorr.zig").schnorr_verify_signature;
 
 export fn blackbox_sha256(input: [*]const u256, length: usize, result: [*]u256) void {
     // TODO: Use some global memory to move allocs off VM path.
@@ -36,10 +37,7 @@ export fn blackbox_sha256_compression(input: [*]const u256, hash_values: [*]cons
     for (0..8) |i| {
         hv[i] = @truncate(hash_values[i]);
     }
-    // std.debug.print("in {x}\n", .{in});
-    // std.debug.print("hv before {x}\n", .{hv});
     sha256_compress(&in, &hv);
-    // std.debug.print("hv after {x}\n", .{hv});
     for (0..8) |i| {
         result[i] = hv[i];
     }
@@ -109,17 +107,14 @@ export fn blackbox_poseidon2_permutation(input: [*]Bn254Fr, result: [*]Bn254Fr, 
     var frs: [4]Bn254Fr = undefined;
     for (0..4) |i| {
         frs[i] = decode_fr(&input[i]);
-        // frs[i].print();
     }
 
     const r = Poseidon2.permutation(frs);
 
     for (0..4) |i| {
         result[i] = r[i];
-        // result[i].print();
         encode_fr(&result[i]);
     }
-    // std.debug.print("-\n", .{});
 }
 
 export fn blackbox_keccak1600(input: [*]const u256, _: usize, result: [*]u256) void {
@@ -157,12 +152,50 @@ export fn blackbox_aes_encrypt(in: [*]const u256, iv: [*]const u256, key: [*]con
     r_size.* = padded_length;
 }
 
-export fn blackbox_secp256k1_verify_signature(hashed_message: [*]const u256, _: u64, pub_key_x: [*]const u256, pub_key_y: [*]const u256, sig: [*]const u256, result: *u256) void {
+export fn blackbox_secp256k1_verify_signature(
+    hashed_message: [*]const u256,
+    _: u64,
+    pub_key_x: [*]const u256,
+    pub_key_y: [*]const u256,
+    sig: [*]const u256,
+    result: *u256,
+) void {
     verify_signature(std.crypto.ecc.Secp256k1, hashed_message, pub_key_x, pub_key_y, sig, result);
 }
 
-export fn blackbox_secp256r1_verify_signature(hashed_message: [*]const u256, _: u64, pub_key_x: [*]const u256, pub_key_y: [*]const u256, sig: [*]const u256, result: *u256) void {
+export fn blackbox_secp256r1_verify_signature(
+    hashed_message: [*]const u256,
+    _: u64,
+    pub_key_x: [*]const u256,
+    pub_key_y: [*]const u256,
+    sig: [*]const u256,
+    result: *u256,
+) void {
     verify_signature(std.crypto.ecc.P256, hashed_message, pub_key_x, pub_key_y, sig, result);
+}
+
+export fn blackbox_schnorr_verify_signature(
+    message: [*]const u256,
+    size: u64,
+    pub_key_x: *Bn254Fr,
+    pub_key_y: *Bn254Fr,
+    sig: [*]const u256,
+    result: *u256,
+) void {
+    var msg = std.ArrayList(u8).initCapacity(std.heap.page_allocator, size) catch unreachable;
+    defer msg.deinit();
+    for (0..size) |i| {
+        msg.append(@truncate(message[i])) catch unreachable;
+    }
+    const pub_key = G1.Element.from_xy(decode_fr(pub_key_x), decode_fr(pub_key_y));
+    var s: [32]u8 = undefined;
+    var e: [32]u8 = undefined;
+    for (0..32) |i| {
+        s[i] = @truncate(sig[i]);
+        e[i] = @truncate(sig[i + 32]);
+    }
+    const r = schnorr_verify_signature(G1, msg.items, pub_key, .{ .s = s, .e = e });
+    result.* = @intFromBool(r);
 }
 
 export fn to_radix(input: *Bn254Fr, output: [*]u256, size: u64, radix: u64) void {
@@ -192,10 +225,8 @@ const Scalar = struct {
     hi: Bn254Fr,
 };
 
-// The bn254Fr's here are actually grumpkinFq's (same field).
-export fn blackbox_ecc_add(
-    x1: *Bn254Fr, y1: *Bn254Fr, in1: *u256, x2: *Bn254Fr, y2: *Bn254Fr, in2: *u256, output: *Point) void
-{
+// The Bn254Fr's here are actually GrumpkinFq's (same field).
+export fn blackbox_ecc_add(x1: *Bn254Fr, y1: *Bn254Fr, in1: *u256, x2: *Bn254Fr, y2: *Bn254Fr, in2: *u256, output: *Point) void {
     const input1 = if (in1.* == 1) G1.Element.infinity else G1.Element.from_xy(decode_fr(x1), decode_fr(y1));
     const input2 = if (in2.* == 1) G1.Element.infinity else G1.Element.from_xy(decode_fr(x2), decode_fr(y2));
     const r = input1.add(input2).normalize();
@@ -210,8 +241,7 @@ export fn blackbox_ecc_add(
 // A GrumpkinFq is a Bn254Fr, and a GrumpkinFr is a Bn254Fq.
 // A Grumpkin coordinate point is therefore Noirs native field type.
 // As a GrumpkinFr > Bn254Fr, scalars are split into two Bn254Fr's in Noir, and is reconstituted into the GrumpkinFr.
-export fn blackbox_msm(points_: [*]Point, num_fields: usize, scalars_: [*]Scalar, output: *Point) void
-{
+export fn blackbox_msm(points_: [*]Point, num_fields: usize, scalars_: [*]Scalar, output: *Point) void {
     const num_points = num_fields / 3;
     var points = std.ArrayList(G1.Element).initCapacity(std.heap.page_allocator, num_points) catch unreachable;
     var scalars = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, num_points) catch unreachable;
