@@ -6,6 +6,7 @@ usingnamespace @import("bn254/g1.zig");
 usingnamespace @import("grumpkin/g1.zig");
 usingnamespace @import("srs/package.zig");
 usingnamespace @import("msm/naive.zig");
+pub usingnamespace @import("brillig_vm/execute.zig");
 const testing = std.testing;
 const rdtsc = @import("timer/rdtsc.zig").rdtsc;
 const field_arith = @import("field/field_arith.zig");

@@ -23,6 +23,11 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
+        .bincode = .{
+            .path = "../github/bincode-zig",
+            // .url = "https://github.com/qbradley/bincode-zig/archive/22f9347ed1a0d275fbd49c58d5e76859c31962fc.tar.gz",
+            // .hash = "12200f0952d5c962987e58dd204fa38d144af051f8aea76ba86d049265e6cad86430",
+        },
         // .zig_poseidon = .{
         //     .path = "../aztec-repos/zig-poseidon",
         // },
