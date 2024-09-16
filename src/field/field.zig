@@ -28,6 +28,10 @@ pub fn Field(comptime Params: type) type {
             return @bitCast(a);
         }
 
+        pub fn from_string(buf: [64]u8) Fe {
+            return Fe.from_int(std.fmt.parseInt(u256, buf, 16));
+        }
+
         pub fn from_buf(buf: [32]u8) Fe {
             const a = @byteSwap(@as(u256, @bitCast(buf)));
             return Fe.from_int(a);

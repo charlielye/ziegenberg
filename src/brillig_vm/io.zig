@@ -6,9 +6,7 @@ const bincode = @import("./bincode.zig");
 //     opcodes: []Opcodes,
 // };
 
-const MemoryAddress = struct {
-    value: u64,
-};
+const MemoryAddress = u64;
 
 const HeapArray = struct {
     pointer: MemoryAddress,
@@ -46,7 +44,7 @@ const BinaryIntOp = enum {
     Shr,
 };
 
-const IntegerBitSize = enum {
+pub const IntegerBitSize = enum {
     U0,
     U1,
     U8,
@@ -285,6 +283,7 @@ pub const BrilligOpcode = union(enum) {
 
 pub fn deserializeOpcodes(bytes: []const u8) ![]BrilligOpcode {
     var reader = std.io.fixedBufferStream(bytes);
+    // TODO: Pretty sure this is just leaking mem? Use an injected Arena allocator.
     return bincode.deserializeAlloc(&reader.reader(), std.heap.page_allocator, []BrilligOpcode) catch |err| {
         std.debug.print("Error deserializing: {}\n", .{err});
         return err;

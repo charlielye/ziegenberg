@@ -39,54 +39,54 @@ export fn print_u256(input: [*]u256, num: usize) void {
 //     return Bn254Fq.from_limbs(lhs.*).eql(Bn254Fq.from_limbs(rhs.*));
 // }
 
-export fn bn254_fr_normalize(lhs: *Bn254Fr) void {
+pub export fn bn254_fr_normalize(lhs: *Bn254Fr) void {
     if (lhs.limbs[3] >> 63 == 1) {
         lhs.limbs[3] &= ~@as(u64, (1 << 63));
         lhs.from_montgomery();
     }
 }
 
-export fn bn254_fr_mul(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
+pub export fn bn254_fr_mul(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
     result.* = l.mul(r);
     encode_fr(result);
 }
 
-export fn bn254_fr_div(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
+pub export fn bn254_fr_div(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
     result.* = l.div(r);
     encode_fr(result);
 }
 
-export fn bn254_fr_add(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
+pub export fn bn254_fr_add(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
     result.* = l.add(r);
     encode_fr(result);
 }
 
-export fn bn254_fr_sub(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
+pub export fn bn254_fr_sub(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *Bn254Fr) void {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
     result.* = l.sub(r);
     encode_fr(result);
 }
 
-export fn bn254_fr_eq(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *u256) void {
+pub export fn bn254_fr_eq(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *u256) void {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
     result.* = @intFromBool(l.eql(r));
 }
 
-export fn bn254_fr_lt(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *u256) void {
+pub export fn bn254_fr_lt(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *u256) void {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
     result.* = @intFromBool(l.lt(r));
 }
 
-export fn bn254_fr_leq(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *u256) void {
+pub export fn bn254_fr_leq(lhs: *Bn254Fr, rhs: *Bn254Fr, result: *u256) void {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
     result.* = @intFromBool(l.leq(r));
