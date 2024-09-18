@@ -69,10 +69,12 @@ const BrilligVm = struct {
     callstack: std.ArrayList(u64),
 
     pub fn init(allocator: std.mem.Allocator) !BrilligVm {
-        return BrilligVm{
+        const vm = BrilligVm{
             .memory = try allocator.alignedAlloc(u256, 32, mem_size),
             .callstack = try std.ArrayList(u64).initCapacity(allocator, 1024),
         };
+        @memset(vm.memory, 0);
+        return vm;
     }
 
     pub fn deinit(self: *BrilligVm, allocator: std.mem.Allocator) void {
@@ -80,13 +82,12 @@ const BrilligVm = struct {
     }
 
     pub fn execute_vm(self: *BrilligVm, opcodes: []BrilligOpcode, calldata: []u256) !void {
-        // const calldata = [_]u256{ 3, 4, 429981696 };
-        // const calldata = [_]u256{ 7, 3, 2 };
         const memory = self.memory;
         var pc: u64 = 0;
 
         while (true) {
             const opcode = opcodes[pc];
+            // std.debug.print("{}: {any}\n", .{ pc, opcode });
             switch (opcode) {
                 .Const => |const_opcode| {
                     const dest_index = const_opcode.destination;
@@ -128,6 +129,10 @@ const BrilligVm = struct {
                 },
                 .Mov => |mov| {
                     memory[mov.destination] = memory[mov.source];
+                    pc += 1;
+                },
+                .ConditionalMov => |mov| {
+                    memory[mov.destination] = memory[if (memory[mov.condition] != 0) mov.source_a else mov.source_b];
                     pc += 1;
                 },
                 .Store => |store| {
@@ -187,41 +192,91 @@ const BrilligVm = struct {
                     switch (blackbox_op) {
                         .Sha256 => |op| {
                             blackbox.blackbox_sha256(
-                                @ptrCast(&memory[op.message.pointer]),
-                                op.message.size,
-                                @ptrCast(&memory[op.output.pointer]),
+                                @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
+                                @truncate(memory[op.message.size]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                            );
+                        },
+                        .Sha256Compression => |op| {
+                            blackbox.blackbox_sha256_compression(
+                                @ptrCast(&memory[@truncate(memory[op.input.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.hash_values.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
                             );
                         },
                         .Blake2s => |op| {
                             blackbox.blackbox_blake2s(
-                                @ptrCast(&memory[op.message.pointer]),
-                                op.message.size,
-                                @ptrCast(&memory[op.output.pointer]),
+                                @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
+                                @truncate(memory[op.message.size]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
                             );
                         },
                         .Blake3 => |op| {
                             blackbox.blackbox_blake3(
-                                @ptrCast(&memory[op.message.pointer]),
-                                op.message.size,
-                                @ptrCast(&memory[op.output.pointer]),
+                                @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
+                                @truncate(memory[op.message.size]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                            );
+                        },
+                        .Keccakf1600 => |op| {
+                            blackbox.blackbox_keccak1600(
+                                @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
+                                @truncate(memory[op.message.size]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                            );
+                        },
+                        .PedersenCommitment => |op| {
+                            blackbox.blackbox_pedersen_commit(
+                                @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
+                                @truncate(memory[op.inputs.size]),
+                                @truncate(memory[op.domain_separator]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                            );
+                        },
+                        .PedersenHash => |op| {
+                            blackbox.blackbox_pedersen_hash(
+                                @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
+                                @truncate(memory[op.inputs.size]),
+                                @truncate(memory[op.domain_separator]),
+                                @ptrCast(&memory[op.output]),
                             );
                         },
                         .ToRadix => |op| {
                             blackbox.blackbox_to_radix(
                                 @ptrCast(&memory[op.input]),
-                                @ptrCast(&memory[op.output.pointer]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
                                 op.output.size,
                                 op.radix,
                             );
                         },
                         .AES128Encrypt => |op| {
                             blackbox.blackbox_aes_encrypt(
-                                @ptrCast(&memory[op.inputs.pointer]),
-                                @ptrCast(&memory[op.iv.pointer]),
-                                @ptrCast(&memory[op.key.pointer]),
-                                op.inputs.size,
-                                @ptrCast(&memory[op.outputs.pointer]),
+                                @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.iv.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.key.pointer])]),
+                                @truncate(memory[op.inputs.size]),
+                                @ptrCast(&memory[@truncate(memory[op.outputs.pointer])]),
                                 @ptrCast(&memory[op.outputs.size]),
+                            );
+                        },
+                        .EcdsaSecp256k1 => |op| {
+                            blackbox.blackbox_secp256k1_verify_signature(
+                                @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
+                                op.hashed_msg.size,
+                                @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
+                                @ptrCast(&memory[op.result]),
+                            );
+                        },
+                        .EcdsaSecp256r1 => |op| {
+                            blackbox.blackbox_secp256r1_verify_signature(
+                                @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
+                                op.hashed_msg.size,
+                                @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
+                                @ptrCast(&memory[op.result]),
                             );
                         },
                         else => {
@@ -236,7 +291,7 @@ const BrilligVm = struct {
                 },
                 .Trap => {
                     std.debug.print("Trap! (todo print revert_data)\n", .{});
-                    return;
+                    return error.Trapped;
                 },
                 else => {
                     std.debug.print("Unimplemented: {}\n", .{opcodes[pc]});
@@ -255,20 +310,23 @@ const BrilligVm = struct {
     fn binaryIntOp(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
         const lhs: int_type = @truncate(self.memory[op.lhs]);
         const rhs: int_type = @truncate(self.memory[op.rhs]);
-        return switch (op.op) {
+        const bit_size = @bitSizeOf(int_type);
+        const r = switch (op.op) {
             .Add => lhs + rhs,
-            .Sub => lhs - rhs,
+            .Sub => lhs -% rhs,
             .Div => lhs / rhs,
             .Mul => lhs * rhs,
             .And => lhs & rhs,
             .Or => lhs | rhs,
             .Xor => lhs ^ rhs,
-            .Shl => lhs << @truncate(rhs),
-            .Shr => lhs >> @truncate(rhs),
+            .Shl => if (rhs < bit_size) lhs << @truncate(rhs) else 0,
+            .Shr => if (rhs < bit_size) lhs >> @truncate(rhs) else 0,
             .Equals => @intFromBool(lhs == rhs),
             .LessThan => @intFromBool(lhs < rhs),
             .LessThanEquals => @intFromBool(lhs <= rhs),
         };
+        // std.debug.print("{} op {} = {}\n", .{ lhs, rhs, r });
+        return r;
     }
 };
 

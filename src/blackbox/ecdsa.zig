@@ -35,7 +35,6 @@ pub fn verify_signature(comptime curve: anytype, hashed_message: [*]const u256, 
         pk_arr[i + 1] = @truncate(pub_key_x[i]);
         pk_arr[i + 33] = @truncate(pub_key_y[i]);
     }
-    const public_key = ecdsa.PublicKey.fromSec1(&pk_arr) catch unreachable;
 
     // Create signature.
     var r: [32]u8 = undefined;
@@ -48,10 +47,13 @@ pub fn verify_signature(comptime curve: anytype, hashed_message: [*]const u256, 
 
     // std.debug.print("{x}\n", .{hm_arr});
     // std.debug.print("{x}\n", .{pk_arr});
-    // std.debug.print("{x}\n", .{public_key.p.x.limbs});
-    // std.debug.print("{x}\n", .{public_key.p.y.limbs});
     // std.debug.print("{x}\n", .{signature.r});
     // std.debug.print("{x}\n", .{signature.s});
+
+    const public_key = ecdsa.PublicKey.fromSec1(&pk_arr) catch unreachable;
+
+    // std.debug.print("{x}\n", .{public_key.p.x.limbs});
+    // std.debug.print("{x}\n", .{public_key.p.y.limbs});
 
     signature.verify(&hm_arr, public_key) catch {
         result.* = 0;
