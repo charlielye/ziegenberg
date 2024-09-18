@@ -225,6 +225,13 @@ const BrilligVm = struct {
                                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
                             );
                         },
+                        .Poseidon2Permutation => |op| {
+                            blackbox.blackbox_poseidon2_permutation(
+                                @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                                @truncate(memory[op.message.size]),
+                            );
+                        },
                         .PedersenCommitment => |op| {
                             blackbox.blackbox_pedersen_commit(
                                 @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
@@ -262,7 +269,7 @@ const BrilligVm = struct {
                         .EcdsaSecp256k1 => |op| {
                             blackbox.blackbox_secp256k1_verify_signature(
                                 @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
-                                op.hashed_msg.size,
+                                @truncate(memory[op.hashed_msg.size]),
                                 @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
                                 @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
                                 @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
@@ -272,11 +279,40 @@ const BrilligVm = struct {
                         .EcdsaSecp256r1 => |op| {
                             blackbox.blackbox_secp256r1_verify_signature(
                                 @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
-                                op.hashed_msg.size,
+                                @truncate(memory[op.hashed_msg.size]),
                                 @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
                                 @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
                                 @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
                                 @ptrCast(&memory[op.result]),
+                            );
+                        },
+                        .SchnorrVerify => |op| {
+                            blackbox.blackbox_schnorr_verify_signature(
+                                @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
+                                @truncate(memory[op.message.size]),
+                                @ptrCast(&memory[op.public_key_x]),
+                                @ptrCast(&memory[op.public_key_y]),
+                                @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
+                                @ptrCast(&memory[op.result]),
+                            );
+                        },
+                        .MultiScalarMul => |op| {
+                            blackbox.blackbox_msm(
+                                @ptrCast(&memory[@truncate(memory[op.points.pointer])]),
+                                @truncate(memory[op.points.size]),
+                                @ptrCast(&memory[@truncate(memory[op.scalars.pointer])]),
+                                @ptrCast(&memory[@truncate(memory[op.outputs.pointer])]),
+                            );
+                        },
+                        .EmbeddedCurveAdd => |op| {
+                            blackbox.blackbox_ecc_add(
+                                @ptrCast(&memory[op.input1_x]),
+                                @ptrCast(&memory[op.input1_y]),
+                                @ptrCast(&memory[op.input1_infinite]),
+                                @ptrCast(&memory[op.input2_x]),
+                                @ptrCast(&memory[op.input2_y]),
+                                @ptrCast(&memory[op.input2_infinite]),
+                                @ptrCast(&memory[@truncate(memory[op.result.pointer])]),
                             );
                         },
                         else => {
@@ -286,16 +322,21 @@ const BrilligVm = struct {
                     }
                     pc += 1;
                 },
+                .ForeignCall => |fc| {
+                    if (std.mem.eql(u8, "print", fc.function)) {
+                        std.debug.print("print called", .{});
+                    } else {
+                        std.debug.print("Unimplemented: {s}\n", .{fc.function});
+                        unreachable;
+                    }
+                    pc += 1;
+                },
                 .Stop => {
                     return;
                 },
                 .Trap => {
                     std.debug.print("Trap! (todo print revert_data)\n", .{});
                     return error.Trapped;
-                },
-                else => {
-                    std.debug.print("Unimplemented: {}\n", .{opcodes[pc]});
-                    unreachable;
                 },
             }
         }
@@ -312,10 +353,10 @@ const BrilligVm = struct {
         const rhs: int_type = @truncate(self.memory[op.rhs]);
         const bit_size = @bitSizeOf(int_type);
         const r = switch (op.op) {
-            .Add => lhs + rhs,
+            .Add => lhs +% rhs,
             .Sub => lhs -% rhs,
             .Div => lhs / rhs,
-            .Mul => lhs * rhs,
+            .Mul => lhs *% rhs,
             .And => lhs & rhs,
             .Or => lhs | rhs,
             .Xor => lhs ^ rhs,

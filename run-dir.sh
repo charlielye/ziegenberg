@@ -6,18 +6,21 @@ YELLOW='\033[0;33m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-failed_transpile=0
+skipped=0
 failed_execution=0
 success=0
 
 NARGO=${NARGO:-0}
+RELEASE=${RELEASE:-0}
 
 run_cmd() {
     BASE="$(basename $1)"
     jq -r .bytecode "$1/target/$BASE.json" | base64 -d | gunzip | ./zig-out/bin/ziegenberg - "$1/target/calldata" 2>&1
 }
 
-zig build
+zig_args=""
+[ "$RELEASE" -eq 1 ] && zig_args="--release=fast"
+zig build $zig_args
 
 for DIR in $@; do
   if [ "$NARGO" -eq 1 ]; then
@@ -25,6 +28,12 @@ for DIR in $@; do
   fi
 
   echo -n "$(basename $DIR): "
+
+  if [ ! -f "$DIR/target/calldata" ]; then
+    echo -e "${YELLOW}SKIPPING${NC} (missing calldata)"
+    skipped=$((skipped + 1))
+    continue
+  fi
 
   set +e
   output=$(run_cmd $DIR)
@@ -46,6 +55,6 @@ done
 
 echo
 echo Summary:
-echo -e "         Success: ${GREEN}$success${NC}"
-# echo -e "Failed transpile: ${YELLOW}$failed_transpile${NC}"
-echo -e "Failed execution: ${RED}$failed_execution${NC}"
+echo -e "Success: ${GREEN}$success${NC}"
+echo -e "Skipped: ${YELLOW}$skipped${NC}"
+echo -e " Failed: ${RED}$failed_execution${NC}"
