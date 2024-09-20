@@ -1,6 +1,7 @@
 const std = @import("std");
 const deserializeOpcodes = @import("io.zig").deserializeOpcodes;
 const BrilligOpcode = @import("io.zig").BrilligOpcode;
+const BitSize = @import("io.zig").BitSize;
 const io = @import("io.zig");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const root = @import("../root.zig");
@@ -57,10 +58,12 @@ pub fn execute(file_path: []u8, calldata_path: []u8) !void {
         calldata[i] = @byteSwap(calldata[i]);
     }
 
+    var t = try std.time.Timer.start();
     var brillig_vm = try BrilligVm.init(allocator);
     try brillig_vm.execute_vm(opcodes, calldata);
-    brillig_vm.dumpMem(10);
+    // brillig_vm.dumpMem(10);
     defer brillig_vm.deinit(allocator);
+    std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 }
 
 const BrilligVm = struct {
@@ -73,7 +76,7 @@ const BrilligVm = struct {
             .memory = try allocator.alignedAlloc(u256, 32, mem_size),
             .callstack = try std.ArrayList(u64).initCapacity(allocator, 1024),
         };
-        @memset(vm.memory, 0);
+        // @memset(vm.memory, 0);
         return vm;
     }
 
@@ -86,18 +89,26 @@ const BrilligVm = struct {
         var pc: u64 = 0;
 
         while (true) {
-            const opcode = opcodes[pc];
+            const opcode = &opcodes[pc];
             // std.debug.print("{}: {any}\n", .{ pc, opcode });
-            switch (opcode) {
-                .Const => |const_opcode| {
+            switch (opcode.*) {
+                .Const => |*const_opcode| {
                     const dest_index = const_opcode.destination;
-                    memory[dest_index] = try std.fmt.parseInt(u256, const_opcode.value, 16);
+                    // TODO: Move to deserialize time. Convert to montgomery if a field so it happens just once.
+                    if (const_opcode.bit_size == BitSize.Field and (const_opcode.value & (1 << 255)) == 0) {
+                        const_opcode.value = @as(u256, @bitCast(Bn254Fr.from_int(const_opcode.value).limbs)) | (1 << 255);
+                    }
+                    memory[dest_index] = const_opcode.value;
                     pc += 1;
                 },
-                .IndirectConst => |indirect_const| {
+                .IndirectConst => |*indirect_const| {
                     const dest_ptr_index = indirect_const.destination_pointer;
                     const dest_address = memory[dest_ptr_index];
-                    memory[@truncate(dest_address)] = try std.fmt.parseInt(u256, indirect_const.value, 16);
+                    // TODO: Move to deserialize time. Convert to montgomery if a field so it happens just once.
+                    if (indirect_const.bit_size == BitSize.Field and (indirect_const.value & (1 << 255)) == 0) {
+                        indirect_const.value = @as(u256, @bitCast(Bn254Fr.from_int(indirect_const.value).limbs)) | (1 << 255);
+                    }
+                    memory[@truncate(dest_address)] = indirect_const.value;
                     pc += 1;
                 },
                 .CalldataCopy => |cdc| {
@@ -324,7 +335,7 @@ const BrilligVm = struct {
                 },
                 .ForeignCall => |fc| {
                     if (std.mem.eql(u8, "print", fc.function)) {
-                        std.debug.print("print called", .{});
+                        std.debug.print("print called\n", .{});
                     } else {
                         std.debug.print("Unimplemented: {s}\n", .{fc.function});
                         unreachable;

@@ -12,14 +12,15 @@ success=0
 
 NARGO=${NARGO:-0}
 RELEASE=${RELEASE:-0}
+EXIT_ON_FAIL=${EXIT_ON_FAIL:-0}
 
 run_cmd() {
     BASE="$(basename $1)"
     jq -r .bytecode "$1/target/$BASE.json" | base64 -d | gunzip | ./zig-out/bin/ziegenberg - "$1/target/calldata" 2>&1
 }
 
-zig_args=""
-[ "$RELEASE" -eq 1 ] && zig_args="--release=fast"
+zig_args="-Dcpu=x86_64"
+[ "$RELEASE" -eq 1 ] && zig_args=" --release=fast"
 zig build $zig_args
 
 for DIR in $@; do
@@ -49,7 +50,7 @@ for DIR in $@; do
   # output=$(perf stat -e duration_time -r 5 ./zig-out/bin/ziegenberg $DIR/target/$BASE.json $DIR/target/calldata 2>&1)
   # micros=$(echo "$output" | awk "/ ns/ {print int(\$1/1000)-$PROC_OVERHEAD_US}")
   # echo -e "${GREEN}PASSED${NC} (${micros}us)"
-  echo -e "${GREEN}PASSED${NC}"
+  echo -e "${GREEN}PASSED${NC} ($(echo "$output" | grep 'time taken' | sed 's/time taken: //'))"
   success=$((success + 1))
 done
 

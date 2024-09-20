@@ -319,11 +319,28 @@ const DeserializeError = error{
     LargeAlloc,
     IntToEnumError,
     InvalidEnumTag,
+    ParseIntError,
 };
 
 fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struct, allocator: std.mem.Allocator, comptime T: type) DeserializeError!T {
     var value: T = undefined;
-    inline for (info.fields) |field| {
+    outer: inline for (info.fields) |field| {
+        if (@hasDecl(T, "meta")) {
+            inline for (T.meta) |meta_field| {
+                // @compileLog(std.mem.eql(u8, meta_field.field, field.name));
+                if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
+                    // @compileLog(field.name, " ", meta_field.field);
+                    const intermediate = try deserializeAlloc(stream, allocator, meta_field.src_type);
+                    @field(value, field.name) = std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError;
+                    // std.debug.print("{s}\n", .{intermediate});
+                    // @field(value, field.name) = field.type.deserialize(intermediate) catch return DeserializeError.CustomDeserializeError;
+                    // std.debug.print("{any}\n", .{@field(value, field.name)});
+                    // const field_value = @field(value, field.name);
+                    // @field(value, field.name) = try @TypeOf(field_value).deserialize(intermediate) catch DeserializeError.CustomDeserializeError;
+                    continue :outer;
+                }
+            }
+        }
         @field(value, field.name) = try deserializeAlloc(stream, allocator, field.type);
     }
     return value;
@@ -331,7 +348,19 @@ fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struc
 
 fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.Struct, comptime T: type) !T {
     var value: T = undefined;
-    inline for (info.fields) |field| {
+    outer: inline for (info.fields) |field| {
+        if (@hasDecl(T, "meta")) {
+            inline for (T.meta) |meta_field| {
+                if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
+                    const intermediate = try deserialize(stream, meta_field.src_type);
+                    @field(value, field.name) = std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError;
+                    // @field(value, field.name) = try field.type.deserializer(intermediate);
+                    // const field_value = @field(value, field.name);
+                    // @field(value, field.name) = try @TypeOf(field_value).deserialize(intermediate);
+                    continue :outer;
+                }
+            }
+        }
         @field(value, field.name) = try deserialize(stream, field.type);
     }
     return value;
