@@ -23,7 +23,7 @@ pub fn execute(file_path: []const u8, calldata_path: ?[]const u8) !void {
 
     // Temp hack to locate start of brillig.
     // Assume first opcode is always the same.
-    const find = @byteSwap(@as(u256, 0x0800000002000000000000000100000004000000400000000000000030303030));
+    const find = @byteSwap(@as(u256, 0x0900000002000000000000000100000004000000400000000000000030303030));
     var start: usize = 0;
     for (0..serialized_data.len) |i| {
         if (@as(*align(1) u256, @ptrCast(&serialized_data[i])).* == find) {
@@ -47,18 +47,19 @@ pub fn execute(file_path: []const u8, calldata_path: ?[]const u8) !void {
     //     std.debug.print("{any}\n", .{elem});
     // }
 
+    var calldata_bytes: []u8 = undefined;
     var calldata: []u256 = &[_]u256{};
     if (calldata_path) |path| {
         const f = try std.fs.cwd().openFile(path, .{});
         defer f.close();
-        const calldata_bytes = try f.readToEndAlloc(allocator, std.math.maxInt(usize));
-        defer allocator.free(calldata_bytes);
+        calldata_bytes = try f.readToEndAlloc(allocator, std.math.maxInt(usize));
         // Alignment cast here will probably break things. Just a hack.
         calldata = @alignCast(std.mem.bytesAsSlice(u256, calldata_bytes)); //@ptrCast(calldata_bytes);
         for (0..calldata.len) |i| {
             calldata[i] = @byteSwap(calldata[i]);
         }
     }
+    defer allocator.free(calldata_bytes);
 
     var t = try std.time.Timer.start();
     var brillig_vm = try BrilligVm.init(allocator);
@@ -176,6 +177,18 @@ const BrilligVm = struct {
                 .JumpIfNot => |jmp| {
                     pc = if (memory[jmp.condition] == 0) jmp.location else pc + 1;
                 },
+                .Not => |not| {
+                    memory[not.destination] = switch (not.bit_size) {
+                        .U0 => unreachable,
+                        .U1 => self.unaryNot(u1, not),
+                        .U8 => self.unaryNot(u8, not),
+                        .U16 => self.unaryNot(u16, not),
+                        .U32 => self.unaryNot(u32, not),
+                        .U64 => self.unaryNot(u64, not),
+                        .U128 => self.unaryNot(u128, not),
+                    };
+                    pc += 1;
+                },
                 .BinaryIntOp => |int_op| {
                     memory[int_op.destination] = switch (int_op.bit_size) {
                         .U0 => unreachable,
@@ -186,7 +199,6 @@ const BrilligVm = struct {
                         .U64 => self.binaryIntOp(u64, opcode.BinaryIntOp),
                         .U128 => self.binaryIntOp(u128, opcode.BinaryIntOp),
                     };
-                    // std.debug.print("bio op {} dest {}\n", .{ int_op.op, memory[int_op.destination] });
                     pc += 1;
                 },
                 .BinaryFieldOp => |field_op| {
@@ -270,7 +282,7 @@ const BrilligVm = struct {
                                 @ptrCast(&memory[op.input]),
                                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
                                 op.output.size,
-                                op.radix,
+                                @truncate(memory[op.radix]),
                             );
                         },
                         .AES128Encrypt => |op| {
@@ -386,11 +398,16 @@ const BrilligVm = struct {
         // std.debug.print("{} op {} = {}\n", .{ lhs, rhs, r });
         return r;
     }
+
+    fn unaryNot(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
+        const rhs: int_type = @truncate(~self.memory[op.source]);
+        return rhs;
+    }
 };
 
 fn getBitSize(int_size: io.IntegerBitSize) u8 {
     return switch (int_size) {
-        .U0 => 0,
+        .U0 => unreachable,
         .U1 => 1,
         .U8 => 8,
         .U16 => 16,

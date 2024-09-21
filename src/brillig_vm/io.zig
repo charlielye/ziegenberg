@@ -197,7 +197,7 @@ const BlackBoxOp = union(enum) {
     },
     ToRadix: struct {
         input: MemoryAddress,
-        radix: u32,
+        radix: MemoryAddress,
         output: HeapArray,
         output_bits: bool,
     },
@@ -216,6 +216,11 @@ pub const BrilligOpcode = union(enum) {
         bit_size: IntegerBitSize,
         lhs: MemoryAddress,
         rhs: MemoryAddress,
+    },
+    Not: struct {
+        destination: MemoryAddress,
+        source: MemoryAddress,
+        bit_size: IntegerBitSize,
     },
     Cast: struct {
         destination: MemoryAddress,
