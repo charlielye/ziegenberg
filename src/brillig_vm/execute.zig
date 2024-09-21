@@ -7,7 +7,7 @@ const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const root = @import("../root.zig");
 const blackbox = @import("../blackbox/blackbox.zig");
 
-pub fn execute(file_path: []u8, calldata_path: []u8) !void {
+pub fn execute(file_path: []const u8, calldata_path: ?[]const u8) !void {
     var allocator = std.heap.page_allocator;
 
     var serialized_data: []u8 = undefined;
@@ -47,23 +47,26 @@ pub fn execute(file_path: []u8, calldata_path: []u8) !void {
     //     std.debug.print("{any}\n", .{elem});
     // }
 
-    // Load calldata.
-    const file = try std.fs.cwd().openFile(calldata_path, .{});
-    defer file.close();
-    const calldata_bytes = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
-    defer allocator.free(calldata_bytes);
-    // Alignment cast here will probably break things. Just a hack.
-    const calldata: []u256 = @alignCast(std.mem.bytesAsSlice(u256, calldata_bytes)); //@ptrCast(calldata_bytes);
-    for (0..calldata.len) |i| {
-        calldata[i] = @byteSwap(calldata[i]);
+    var calldata: []u256 = &[_]u256{};
+    if (calldata_path) |path| {
+        const f = try std.fs.cwd().openFile(path, .{});
+        defer f.close();
+        const calldata_bytes = try f.readToEndAlloc(allocator, std.math.maxInt(usize));
+        defer allocator.free(calldata_bytes);
+        // Alignment cast here will probably break things. Just a hack.
+        calldata = @alignCast(std.mem.bytesAsSlice(u256, calldata_bytes)); //@ptrCast(calldata_bytes);
+        for (0..calldata.len) |i| {
+            calldata[i] = @byteSwap(calldata[i]);
+        }
     }
 
     var t = try std.time.Timer.start();
     var brillig_vm = try BrilligVm.init(allocator);
-    try brillig_vm.execute_vm(opcodes, calldata);
-    // brillig_vm.dumpMem(10);
     defer brillig_vm.deinit(allocator);
+    const result = brillig_vm.execute_vm(opcodes, calldata);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
+    // brillig_vm.dumpMem(10);
+    return result;
 }
 
 const BrilligVm = struct {
@@ -114,6 +117,9 @@ const BrilligVm = struct {
                 .CalldataCopy => |cdc| {
                     const size: u64 = @truncate(memory[cdc.size_address]);
                     const offset: u64 = @truncate(memory[cdc.offset_address]);
+                    if (calldata.len < size) {
+                        return error.MissingCalldata;
+                    }
                     for (0..size) |i| {
                         const addr = cdc.destination_address + i;
                         const src_index = offset + i;
