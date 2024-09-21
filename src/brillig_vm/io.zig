@@ -298,10 +298,9 @@ pub const BrilligOpcode = union(enum) {
     },
 };
 
-pub fn deserializeOpcodes(bytes: []const u8) ![]BrilligOpcode {
+pub fn deserializeOpcodes(allocator: std.mem.Allocator, bytes: []const u8) ![]BrilligOpcode {
     var reader = std.io.fixedBufferStream(bytes);
-    // TODO: Pretty sure this is just leaking mem? Use an injected Arena allocator.
-    return bincode.deserializeAlloc(&reader.reader(), std.heap.page_allocator, []BrilligOpcode) catch |err| {
+    return bincode.deserializeAlloc(&reader.reader(), allocator, []BrilligOpcode) catch |err| {
         std.debug.print("Error deserializing: {}\n", .{err});
         return err;
     };

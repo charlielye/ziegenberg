@@ -8,7 +8,9 @@ const root = @import("../root.zig");
 const blackbox = @import("../blackbox/blackbox.zig");
 
 pub fn execute(file_path: []const u8, calldata_path: ?[]const u8) !void {
-    var allocator = std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
 
     var serialized_data: []u8 = undefined;
     if (std.mem.eql(u8, file_path, "-")) {
@@ -19,54 +21,36 @@ pub fn execute(file_path: []const u8, calldata_path: ?[]const u8) !void {
         defer file.close();
         serialized_data = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
     }
-    defer allocator.free(serialized_data);
 
     // Temp hack to locate start of brillig.
     // Assume first opcode is always the same.
-    const find = @byteSwap(@as(u256, 0x0900000002000000000000000100000004000000400000000000000030303030));
-    var start: usize = 0;
-    for (0..serialized_data.len) |i| {
-        if (@as(*align(1) u256, @ptrCast(&serialized_data[i])).* == find) {
-            // Jump back 8 bytes to include the opcode count.
-            start = i - 8;
-            break;
-        }
-    }
+    const find: [32]u8 = @bitCast(@byteSwap(@as(u256, 0x0900000002000000000000000100000004000000400000000000000030303030)));
+    const start = std.mem.indexOf(u8, serialized_data, find[0..]) orelse return error.FirstOpcodeNotFound;
 
-    if (start == 0) {
-        // std.debug.print("Failed to find first opcode.\n", .{});
-        return error.FirstOpcodeNotFound;
-    }
-
-    const opcodes = deserializeOpcodes(serialized_data[start..]) catch |err| {
-        // std.debug.print("Deserialization failed.\n", .{});
-        return err;
-    };
+    // Jump back 8 bytes to include the opcode count.
+    const opcodes = try deserializeOpcodes(allocator, serialized_data[start - 8 ..]);
 
     // for (opcodes) |elem| {
     //     std.debug.print("{any}\n", .{elem});
     // }
 
-    var calldata_bytes: []u8 = undefined;
     var calldata: []u256 = &[_]u256{};
     if (calldata_path) |path| {
         const f = try std.fs.cwd().openFile(path, .{});
         defer f.close();
-        calldata_bytes = try f.readToEndAlloc(allocator, std.math.maxInt(usize));
+        const calldata_bytes = try f.readToEndAlloc(allocator, std.math.maxInt(usize));
         // Alignment cast here will probably break things. Just a hack.
-        calldata = @alignCast(std.mem.bytesAsSlice(u256, calldata_bytes)); //@ptrCast(calldata_bytes);
+        calldata = @alignCast(std.mem.bytesAsSlice(u256, calldata_bytes));
         for (0..calldata.len) |i| {
             calldata[i] = @byteSwap(calldata[i]);
         }
     }
-    defer allocator.free(calldata_bytes);
 
     var t = try std.time.Timer.start();
     var brillig_vm = try BrilligVm.init(allocator);
     defer brillig_vm.deinit(allocator);
     const result = brillig_vm.execute_vm(opcodes, calldata);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
-    // brillig_vm.dumpMem(10);
     return result;
 }
 
@@ -130,11 +114,9 @@ const BrilligVm = struct {
                     pc += 1;
                 },
                 .Cast => |cast| {
-                    // std.debug.print("source {}\n", .{memory[cast.source]});
                     switch (cast.bit_size) {
                         .Integer => |int_size| {
                             root.bn254_fr_normalize(@ptrCast(&memory[cast.source]));
-                            // std.debug.print("source normalized {} size {}\n", .{ memory[cast.source], @intFromEnum(int_size) });
                             const mask = (@as(u256, 1) << getBitSize(int_size)) - 1;
                             memory[cast.destination] = memory[cast.source] & mask;
                         },
@@ -142,7 +124,6 @@ const BrilligVm = struct {
                             memory[cast.destination] = memory[cast.source];
                         },
                     }
-                    // std.debug.print("cast dest {}\n", .{memory[cast.destination]});
                     pc += 1;
                 },
                 .Mov => |mov| {
