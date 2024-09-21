@@ -14,7 +14,7 @@ parallel --joblog parallel.log ./run-test.sh {} ::: $BYTECODES
 echo
 echo "Summary:"
 echo -e "   Time: ${SECONDS}s"
-echo -e "Success: ${GREEN}$(awk '$7 == 0' parallel.log | wc -l)${NC}"
-echo -e " Failed: ${RED}$(awk '$7 != 0' parallel.log | wc -l)${NC}"
+echo -e "Success: ${GREEN}$(cat parallel.log | tail -n +2 | awk '$7 == 0' | wc -l)${NC}"
+echo -e " Failed: ${RED}$(cat parallel.log | tail -n +2 | awk '$7 != 0' | wc -l)${NC}"
 
 rm parallel.log
