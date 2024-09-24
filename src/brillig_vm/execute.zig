@@ -26,9 +26,11 @@ pub fn execute(file_path: []const u8, calldata_path: ?[]const u8) !void {
     // Assume first opcode is always the same.
     const find: [32]u8 = @bitCast(@byteSwap(@as(u256, 0x0900000002000000000000000100000004000000400000000000000030303030)));
     const start = std.mem.indexOf(u8, serialized_data, find[0..]) orelse return error.FirstOpcodeNotFound;
+    std.debug.print("First opcode found at: {x}\n", .{start});
 
     // Jump back 8 bytes to include the opcode count.
     const opcodes = try deserializeOpcodes(allocator, serialized_data[start - 8 ..]);
+    std.debug.print("Deserialized {} opcodes.\n", .{opcodes.len});
 
     // for (opcodes) |elem| {
     //     std.debug.print("{any}\n", .{elem});
@@ -45,17 +47,19 @@ pub fn execute(file_path: []const u8, calldata_path: ?[]const u8) !void {
             calldata[i] = @byteSwap(calldata[i]);
         }
     }
+    std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
     var t = try std.time.Timer.start();
     var brillig_vm = try BrilligVm.init(allocator);
     defer brillig_vm.deinit(allocator);
+    std.debug.print("Executing...\n", .{});
     const result = brillig_vm.execute_vm(opcodes, calldata);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
     return result;
 }
 
 const BrilligVm = struct {
-    const mem_size = 1024 * 1024 * 8;
+    const mem_size = 1024 * 1024 * 1024;
     memory: []align(32) u256,
     callstack: std.ArrayList(u64),
 
@@ -200,13 +204,6 @@ const BrilligVm = struct {
                 },
                 .BlackBox => |blackbox_op| {
                     switch (blackbox_op) {
-                        .Sha256 => |op| {
-                            blackbox.blackbox_sha256(
-                                @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-                                @truncate(memory[op.message.size]),
-                                @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-                            );
-                        },
                         .Sha256Compression => |op| {
                             blackbox.blackbox_sha256_compression(
                                 @ptrCast(&memory[@truncate(memory[op.input.pointer])]),

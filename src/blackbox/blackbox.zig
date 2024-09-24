@@ -14,20 +14,6 @@ const sha256_compress = @import("sha256_compress.zig").round;
 const msm = @import("../msm/naive.zig").msm;
 const schnorr_verify_signature = @import("../schnorr/schnorr.zig").schnorr_verify_signature;
 
-pub export fn blackbox_sha256(input: [*]const u256, length: usize, result: [*]u256) void {
-    // TODO: Use some global memory to move allocs off VM path.
-    var message = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
-    defer message.deinit();
-    for (0..length) |i| {
-        _ = message.append(@truncate(input[i])) catch unreachable;
-    }
-    var output: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(message.items, &output, .{});
-    for (0..32) |i| {
-        result[i] = output[i];
-    }
-}
-
 pub export fn blackbox_sha256_compression(input: [*]const u256, hash_values: [*]const u256, result: [*]u256) void {
     var in: [16]u32 = undefined;
     for (0..16) |i| {

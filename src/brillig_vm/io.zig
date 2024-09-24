@@ -91,10 +91,6 @@ const BlackBoxOp = union(enum) {
         key: HeapArray,
         outputs: HeapVector,
     },
-    Sha256: struct {
-        message: HeapVector,
-        output: HeapArray,
-    },
     Blake2s: struct {
         message: HeapVector,
         output: HeapArray,
