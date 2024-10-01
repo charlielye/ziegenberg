@@ -184,21 +184,6 @@ pub export fn blackbox_schnorr_verify_signature(
     result.* = @intFromBool(r);
 }
 
-pub export fn blackbox_to_radix(input: *Bn254Fr, output: [*]u256, size: u64, radix: u64) void {
-    var in = decode_fr(input).to_int();
-
-    for (0..size) |i| {
-        const quotient = in / radix;
-        // const remainder = in % radix;
-        // Might be faster? Optimiser might do the right thing.
-        const remainder = in - (quotient * radix);
-        // bb has a divmod function (ported below). Seems way less performant?
-        // const quotient: u256, const remainder: u256 = divmod(in, radix_);
-        output[i] = remainder;
-        in = quotient;
-    }
-}
-
 const Point = struct {
     x: Bn254Fr,
     y: Bn254Fr,
@@ -256,6 +241,26 @@ pub export fn blackbox_msm(points_: [*]Point, num_fields: usize, scalars_: [*]Sc
     output.*.y = e.y;
     encode_fr(&output.*.x);
     encode_fr(&output.*.y);
+}
+
+pub export fn blackbox_to_radix(input: *Bn254Fr, output: [*]u256, size: u64, radix: u64) void {
+    var in = decode_fr(input).to_int();
+
+    // std.debug.print("{} {} {}\n", .{ in, radix, size });
+    for (0..size) |i| {
+        if (in == 0) {
+            @memset(output[i..size], 0);
+            return;
+        }
+        const quotient = in / radix;
+        // const remainder = in % radix;
+        // Might be faster? Optimiser might do the right thing.
+        const remainder = in - (quotient * radix);
+        // bb has a divmod function (ported below). Seems way less performant?
+        // const quotient: u256, const remainder: u256 = divmod(in, radix_);
+        output[i] = remainder;
+        in = quotient;
+    }
 }
 
 // const rdtsc = @import("../timer/rdtsc.zig").rdtsc;

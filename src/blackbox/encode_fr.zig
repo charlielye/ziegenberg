@@ -1,5 +1,3 @@
-const Bn254Fr = @import("../bn254/fr.zig").Fr;
-
 pub inline fn decode_fr(lhs: anytype) @TypeOf(lhs.*) {
     if (lhs.*.limbs[3] >> 63 == 0) {
         // std.debug.print("converting {}\n", .{asU256.*});

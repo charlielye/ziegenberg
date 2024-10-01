@@ -16,11 +16,11 @@ EXIT_ON_FAIL=${EXIT_ON_FAIL:-0}
 
 run_cmd() {
     BASE="$(basename $1)"
-    jq -r .bytecode "$1/target/$BASE.json" | base64 -d | gunzip | ./zig-out/bin/ziegenberg - "$1/target/calldata" 2>&1
+    jq -r .bytecode "$1/target/$BASE.json" | base64 -d | gunzip | ./zig-out/bin/zb-bvm run - "$1/target/calldata" 2>&1
 }
 
 # Limit to generic cpu to prevent avx as avx is just worse performance.
-zig_args="-Dcpu=x86_64"
+# zig_args="-Dcpu=x86_64"
 [ "$RELEASE" -eq 1 ] && zig_args+=" --release=fast"
 zig build $zig_args
 

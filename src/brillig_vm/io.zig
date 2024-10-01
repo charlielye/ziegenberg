@@ -12,11 +12,21 @@ const MemoryAddress = u64;
 const HeapArray = struct {
     pointer: MemoryAddress,
     size: u64,
+
+    pub fn format(self: HeapArray, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("HeapArray ", .{});
+        try format_struct(HeapArray, self, writer);
+    }
 };
 
 const HeapVector = struct {
     pointer: MemoryAddress,
     size: MemoryAddress,
+
+    pub fn format(self: HeapVector, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("HeapVector ", .{});
+        try format_struct(HeapVector, self, writer);
+    }
 };
 
 const BinaryFieldOp = enum {
@@ -28,6 +38,10 @@ const BinaryFieldOp = enum {
     Equals,
     LessThan,
     LessThanEquals,
+
+    pub fn format(self: BinaryFieldOp, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s}", .{@tagName(self)});
+    }
 };
 
 const BinaryIntOp = enum {
@@ -43,6 +57,10 @@ const BinaryIntOp = enum {
     Xor,
     Shl,
     Shr,
+
+    pub fn format(self: BinaryIntOp, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s}", .{@tagName(self)});
+    }
 };
 
 pub const IntegerBitSize = enum {
@@ -53,11 +71,22 @@ pub const IntegerBitSize = enum {
     U32,
     U64,
     U128,
+
+    pub fn format(self: IntegerBitSize, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s}", .{@tagName(self)});
+    }
 };
 
 pub const BitSize = union(enum) {
     Field,
     Integer: IntegerBitSize,
+
+    pub fn format(self: BitSize, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self) {
+            .Integer => |i| try writer.print("{s}", .{i}),
+            .Field => try writer.print("Field", .{}),
+        }
+    }
 };
 
 const Label = u64;
@@ -84,7 +113,7 @@ const Meta = struct {
     src_type: type,
 };
 
-const BlackBoxOp = union(enum) {
+pub const BlackBoxOp = union(enum) {
     AES128Encrypt: struct {
         inputs: HeapVector,
         iv: HeapArray,
@@ -197,6 +226,15 @@ const BlackBoxOp = union(enum) {
         output: HeapArray,
         output_bits: bool,
     },
+
+    pub fn format(self: BlackBoxOp, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s} ", .{@tagName(self)});
+        inline for (@typeInfo(BlackBoxOp).Union.fields) |field| {
+            if (self == @field(BlackBoxOp, field.name)) {
+                try format_struct(field.type, @field(self, field.name), writer);
+            }
+        }
+    }
 };
 
 pub const BrilligOpcode = union(enum) {
@@ -292,9 +330,34 @@ pub const BrilligOpcode = union(enum) {
         return_data_offset: u64,
         return_data_size: u64,
     },
+
+    pub fn format(self: BrilligOpcode, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s: >16} ", .{@tagName(self)});
+        inline for (@typeInfo(BrilligOpcode).Union.fields) |field| {
+            if (self == @field(BrilligOpcode, field.name)) {
+                const field_ptr = @field(self, field.name);
+                switch (@typeInfo(field.type)) {
+                    .Void => return,
+                    .Struct => try format_struct(field.type, field_ptr, writer),
+                    else => try writer.print("{}", .{field_ptr}),
+                }
+            }
+        }
+    }
 };
 
-pub fn deserializeOpcodes(allocator: std.mem.Allocator, bytes: []const u8) ![]BrilligOpcode {
+fn format_struct(comptime T: type, ptr: anytype, writer: anytype) !void {
+    try writer.print("{{ ", .{});
+    var first = true;
+    inline for (@typeInfo(T).Struct.fields) |field| {
+        if (!first) try writer.print(", ", .{});
+        first = false;
+        try writer.print(".{s} = {any}", .{ field.name, @field(ptr, field.name) });
+    }
+    try writer.print(" }}", .{});
+}
+
+pub fn deserialize_opcodes(allocator: std.mem.Allocator, bytes: []const u8) ![]BrilligOpcode {
     var reader = std.io.fixedBufferStream(bytes);
     return bincode.deserializeAlloc(&reader.reader(), allocator, []BrilligOpcode) catch |err| {
         std.debug.print("Error deserializing: {}\n", .{err});
@@ -302,10 +365,31 @@ pub fn deserializeOpcodes(allocator: std.mem.Allocator, bytes: []const u8) ![]Br
     };
 }
 
+pub fn load(allocator: std.mem.Allocator, file_path: ?[]const u8) ![]BrilligOpcode {
+    var serialized_data: []u8 = undefined;
+    if (file_path) |p| {
+        const file = try std.fs.cwd().openFile(p, .{});
+        defer file.close();
+        serialized_data = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    } else {
+        const stdin = std.io.getStdIn();
+        serialized_data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
+    }
+
+    // Temp hack to locate start of brillig.
+    // Assume first opcode is always the same.
+    const find: [32]u8 = @bitCast(@byteSwap(@as(u256, 0x0900000002000000000000000100000004000000400000000000000030303030)));
+    const start = std.mem.indexOf(u8, serialized_data, find[0..]) orelse return error.FirstOpcodeNotFound;
+    // std.debug.print("First opcode found at: {x}\n", .{start});
+
+    // Jump back 8 bytes to include the opcode count.
+    return try deserialize_opcodes(allocator, serialized_data[start - 8 ..]);
+}
+
 test "deserialize" {
     const serialized_data = @embedFile("bytecode");
 
-    const result = deserializeOpcodes(serialized_data[0x36a..]) catch {
+    const result = deserialize_opcodes(serialized_data[0x36a..]) catch {
         std.debug.print("Deserialization failed\n", .{});
         return;
     };

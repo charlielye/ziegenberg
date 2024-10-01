@@ -7,11 +7,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Dependencies.
+    const yazap = b.dependency("yazap", .{});
+
     // Lib.
     {
         const lib = b.addStaticLibrary(.{
-            .name = "ziegenberg",
-            .root_source_file = b.path("src/root.zig"),
+            .name = "zb",
+            .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
             .pic = true,
@@ -25,30 +28,34 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(lib);
     }
 
-    // zig_poseidon dependency. Leaving in as an example of how to add a dependency.
-    // const poseidon = b.dependency("zig_poseidon", .{
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // lib.root_module.addImport("poseidon", poseidon.module("poseidon"));
-    // lib.linkLibrary(poseidon.artifact("zig-poseidon"));
-
-    // const bincode_zig = b.dependency("bincode", .{
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // lib.root_module.addImport("bincode", bincode_zig.module("bincode-zig"));
-
-    // Exe.
+    // Brillig VM Exe.
     {
         const exe = b.addExecutable(.{
-            .name = "ziegenberg",
-            .root_source_file = b.path("src/main.zig"),
+            .name = "zb-bvm",
+            .root_source_file = b.path("src/zb_bvm.zig"),
             .target = target,
             .optimize = optimize,
             .pic = true,
         });
         exe.bundle_compiler_rt = true;
+        exe.root_module.addImport("yazap", yazap.module("yazap"));
+        exe.linkSystemLibrary("c");
+
+        b.installArtifact(exe);
+    }
+
+    // AVM Exe.
+    {
+        const exe = b.addExecutable(.{
+            .name = "zb-avm",
+            .root_source_file = b.path("src/zb_avm.zig"),
+            .target = target,
+            .optimize = optimize,
+            .pic = true,
+        });
+        exe.bundle_compiler_rt = true;
+        exe.root_module.addImport("yazap", yazap.module("yazap"));
+        exe.linkSystemLibrary("c");
 
         b.installArtifact(exe);
     }
@@ -59,16 +66,11 @@ pub fn build(b: *std.Build) void {
         // but does not run it.
         const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
         const lib_unit_tests = b.addTest(.{
-            .root_source_file = b.path("src/root.zig"),
+            .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
             .filters = test_filters,
         });
-
-        // Leaving in as an example of how to link to a dependency.
-        // lib_unit_tests.root_module.addImport("poseidon", poseidon.module("poseidon"));
-        // lib_unit_tests.linkLibrary(poseidon.artifact("zig-poseidon"));
-        // lib_unit_tests.root_module.addImport("bincode", bincode_zig.module("bincode-zig"));
 
         const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
         run_lib_unit_tests.step.dependOn(b.getInstallStep());
