@@ -1,5 +1,5 @@
 const std = @import("std");
-const deserializeOpcodes = @import("io.zig").deserialize_opcodes;
+const deserializeOpcodes = @import("io.zig").deserializeOpcodes;
 const BrilligOpcode = @import("io.zig").BrilligOpcode;
 const BitSize = @import("io.zig").BitSize;
 const io = @import("io.zig");
@@ -35,9 +35,9 @@ pub fn execute(file_path: []const u8, calldata_path: ?[]const u8, show_stats: bo
 
     std.debug.print("Executing...\n", .{});
     t.reset();
-    const result = brillig_vm.execute_vm(opcodes);
+    const result = brillig_vm.executeVm(opcodes);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
-    if (show_stats) brillig_vm.dump_stats();
+    if (show_stats) brillig_vm.dumpStats();
     return result;
 }
 
@@ -46,26 +46,26 @@ extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 const BrilligVm = struct {
     const mem_size = 1024 * 1024 * (512 + 128);
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) void{
-        &process_binary_field_op,
-        &process_binary_int_op,
-        &process_not,
-        &process_cast,
-        &process_jump_if_not,
-        &process_jump_if,
-        &process_jump,
-        &process_calldatacopy,
-        &process_call,
-        &process_const,
-        &process_indirect_const,
-        &process_return,
-        &process_foreign_call,
-        &process_mov,
-        &process_cmov,
-        &process_load,
-        &process_store,
-        &process_blackbox,
-        &process_trap,
-        &process_stop,
+        &processBinaryFieldOp,
+        &processBinaryIntOp,
+        &processNot,
+        &processCast,
+        &processJumpIfNot,
+        &processJumpIf,
+        &processJump,
+        &processCalldatacopy,
+        &processCall,
+        &processConst,
+        &processIndirectConst,
+        &processReturn,
+        &processForeignCall,
+        &processMov,
+        &processCmov,
+        &processLoad,
+        &processStore,
+        &processBlackbox,
+        &processTrap,
+        &processStop,
     };
     memory: []align(4096) u256,
     calldata: []u256,
@@ -106,7 +106,7 @@ const BrilligVm = struct {
         allocator.free(self.memory);
     }
 
-    pub fn execute_vm(self: *BrilligVm, opcodes: []BrilligOpcode) !void {
+    pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode) !void {
         while (!self.halted) {
             const opcode = &opcodes[self.pc];
             // std.debug.print("{}: {any}\n", .{ pc, opcode });
@@ -123,7 +123,7 @@ const BrilligVm = struct {
         }
     }
 
-    fn process_const(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processConst(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.Const;
         const dest_index = op.destination;
         // TODO: Move to deserialize time. Convert to montgomery if a field so it happens just once.
@@ -134,7 +134,7 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn process_indirect_const(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processIndirectConst(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.IndirectConst;
         const dest_ptr_index = op.destination_pointer;
         const dest_address = self.memory[dest_ptr_index];
@@ -146,7 +146,7 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn process_calldatacopy(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processCalldatacopy(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.CalldataCopy;
         const size: u64 = @truncate(self.memory[op.size_address]);
         const offset: u64 = @truncate(self.memory[op.offset_address]);
@@ -163,12 +163,12 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn process_cast(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processCast(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.Cast;
         switch (op.bit_size) {
             .Integer => |int_size| {
                 root.bn254_fr_normalize(@ptrCast(&self.memory[op.source]));
-                const mask = (@as(u256, 1) << get_bit_size(int_size)) - 1;
+                const mask = (@as(u256, 1) << getBitSize(int_size)) - 1;
                 self.memory[op.destination] = self.memory[op.source] & mask;
             },
             .Field => {
@@ -178,84 +178,84 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn process_mov(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processMov(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const mov = &opcode.Mov;
         self.memory[mov.destination] = self.memory[mov.source];
         self.pc += 1;
     }
 
-    fn process_cmov(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processCmov(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const mov = &opcode.ConditionalMov;
         self.memory[mov.destination] = self.memory[if (self.memory[mov.condition] != 0) mov.source_a else mov.source_b];
         self.pc += 1;
     }
 
-    fn process_store(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processStore(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const store = &opcode.Store;
         self.memory[@truncate(self.memory[store.destination_pointer])] = self.memory[store.source];
         self.pc += 1;
     }
 
-    fn process_load(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processLoad(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const load = &opcode.Load;
         self.memory[load.destination] = self.memory[@truncate(self.memory[load.source_pointer])];
         self.pc += 1;
     }
 
-    fn process_call(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processCall(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const call = &opcode.Call;
         self.callstack.append(self.pc + 1) catch unreachable;
         self.pc = call.location;
     }
 
-    fn process_return(self: *BrilligVm, _: *BrilligOpcode) void {
+    fn processReturn(self: *BrilligVm, _: *BrilligOpcode) void {
         self.pc = self.callstack.pop();
     }
 
-    fn process_jump(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processJump(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.Jump;
         self.pc = jmp.location;
     }
 
-    fn process_jump_if(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processJumpIf(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.JumpIf;
         self.pc = if (self.memory[jmp.condition] == 1) jmp.location else self.pc + 1;
     }
 
-    fn process_jump_if_not(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processJumpIfNot(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.JumpIfNot;
         self.pc = if (self.memory[jmp.condition] == 0) jmp.location else self.pc + 1;
     }
 
-    fn process_not(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processNot(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const not = &opcode.Not;
         self.memory[not.destination] = switch (not.bit_size) {
             .U0 => unreachable,
-            .U1 => self.unary_not(u1, not),
-            .U8 => self.unary_not(u8, not),
-            .U16 => self.unary_not(u16, not),
-            .U32 => self.unary_not(u32, not),
-            .U64 => self.unary_not(u64, not),
-            .U128 => self.unary_not(u128, not),
+            .U1 => self.unaryNot(u1, not),
+            .U8 => self.unaryNot(u8, not),
+            .U16 => self.unaryNot(u16, not),
+            .U32 => self.unaryNot(u32, not),
+            .U64 => self.unaryNot(u64, not),
+            .U128 => self.unaryNot(u128, not),
         };
         self.pc += 1;
     }
 
-    fn process_binary_int_op(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processBinaryIntOp(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const int_op = &opcode.BinaryIntOp;
         self.memory[int_op.destination] = switch (int_op.bit_size) {
             .U0 => unreachable,
-            .U1 => self.binary_int_op(u1, opcode.BinaryIntOp),
-            .U8 => self.binary_int_op(u8, opcode.BinaryIntOp),
-            .U16 => self.binary_int_op(u16, opcode.BinaryIntOp),
-            .U32 => self.binary_int_op(u32, opcode.BinaryIntOp),
-            .U64 => self.binary_int_op(u64, opcode.BinaryIntOp),
-            .U128 => self.binary_int_op(u128, opcode.BinaryIntOp),
+            .U1 => self.binaryIntOp(u1, opcode.BinaryIntOp),
+            .U8 => self.binaryIntOp(u8, opcode.BinaryIntOp),
+            .U16 => self.binaryIntOp(u16, opcode.BinaryIntOp),
+            .U32 => self.binaryIntOp(u32, opcode.BinaryIntOp),
+            .U64 => self.binaryIntOp(u64, opcode.BinaryIntOp),
+            .U128 => self.binaryIntOp(u128, opcode.BinaryIntOp),
         };
         self.pc += 1;
     }
 
-    fn process_binary_field_op(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processBinaryFieldOp(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const field_op = &opcode.BinaryFieldOp;
         const lhs = &self.memory[field_op.lhs];
         const rhs = &self.memory[field_op.rhs];
@@ -273,7 +273,7 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn process_blackbox(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processBlackbox(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const blackbox_op = &opcode.BlackBox;
         const memory = self.memory;
 
@@ -407,7 +407,7 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn process_foreign_call(self: *BrilligVm, opcode: *BrilligOpcode) void {
+    fn processForeignCall(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const fc = &opcode.ForeignCall;
         if (std.mem.eql(u8, "print", fc.function)) {
             std.debug.print("print called\n", .{});
@@ -418,23 +418,23 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn process_stop(self: *BrilligVm, _: *BrilligOpcode) void {
+    fn processStop(self: *BrilligVm, _: *BrilligOpcode) void {
         self.halted = true;
     }
 
-    fn process_trap(self: *BrilligVm, _: *BrilligOpcode) void {
+    fn processTrap(self: *BrilligVm, _: *BrilligOpcode) void {
         self.halted = true;
         self.trapped = true;
         std.debug.print("Trap! (todo print revert_data)\n", .{});
     }
 
-    pub fn dump_mem(self: *BrilligVm, n: usize) void {
+    pub fn dumpMem(self: *BrilligVm, n: usize) void {
         for (0..n) |i| {
             std.debug.print("{:0>3}: 0x{x:0>64}\n", .{ i, self.memory[i] });
         }
     }
 
-    pub fn dump_stats(self: *BrilligVm) void {
+    pub fn dumpStats(self: *BrilligVm) void {
         std.debug.print("Opcodes executed: {}\n", .{self.ops_executed});
 
         // Print the counters next to the enum variant names
@@ -444,7 +444,7 @@ const BrilligVm = struct {
         }
     }
 
-    fn binary_int_op(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
+    fn binaryIntOp(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
         const lhs: int_type = @truncate(self.memory[op.lhs]);
         const rhs: int_type = @truncate(self.memory[op.rhs]);
         const bit_size = @bitSizeOf(int_type);
@@ -466,13 +466,13 @@ const BrilligVm = struct {
         return r;
     }
 
-    fn unary_not(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
+    fn unaryNot(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
         const rhs: int_type = @truncate(~self.memory[op.source]);
         return rhs;
     }
 };
 
-fn get_bit_size(int_size: io.IntegerBitSize) u8 {
+fn getBitSize(int_size: io.IntegerBitSize) u8 {
     return switch (int_size) {
         .U0 => unreachable,
         .U1 => 1,

@@ -11,7 +11,7 @@ BYTECODE_PATH=$1
 test_name="$(basename $BYTECODE_PATH .bytecode | awk '{ if (length($0) > 80) print substr($0, 1, 40) "..." substr($0, length($0)-40+1); else print $0 }')"
 
 function run_cmd() {
-  ./zig-out/bin/zb-bvm run $1 2>&1
+  ./zig-out/bin/zb bvm run $1 2>&1
 }
 
 should="${test_name%.*}"

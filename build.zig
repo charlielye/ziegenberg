@@ -28,27 +28,11 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(lib);
     }
 
-    // Brillig VM Exe.
+    // Exe.
     {
         const exe = b.addExecutable(.{
-            .name = "zb-bvm",
-            .root_source_file = b.path("src/zb_bvm.zig"),
-            .target = target,
-            .optimize = optimize,
-            .pic = true,
-        });
-        exe.bundle_compiler_rt = true;
-        exe.root_module.addImport("yazap", yazap.module("yazap"));
-        exe.linkSystemLibrary("c");
-
-        b.installArtifact(exe);
-    }
-
-    // AVM Exe.
-    {
-        const exe = b.addExecutable(.{
-            .name = "zb-avm",
-            .root_source_file = b.path("src/zb_avm.zig"),
+            .name = "zb",
+            .root_source_file = b.path("src/zb.zig"),
             .target = target,
             .optimize = optimize,
             .pic = true,

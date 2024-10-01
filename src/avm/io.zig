@@ -33,7 +33,7 @@ const ExternalCallOperands = struct {
     functionSelector: u32,
 };
 
-const OpCode = union(enum) {
+const AvmOpcode = union(enum) {
     // Compute - Arithmetic. 0
     ADD_8: ThreeOperands8,
     ADD_16: ThreeOperands16,
@@ -142,22 +142,22 @@ const OpCode = union(enum) {
         packed_: u8,
     },
 
-    pub fn format(self: OpCode, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: AvmOpcode, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const tag_name = @tagName(self);
         try writer.print("{s: >16} ", .{tag_name});
 
-        const union_info = @typeInfo(OpCode).Union;
+        const union_info = @typeInfo(AvmOpcode).Union;
         inline for (union_info.fields) |field| {
-            if (self == @field(OpCode, field.name)) {
+            if (self == @field(AvmOpcode, field.name)) {
                 const field_ptr = @field(self, field.name);
-                try format_struct(field.type, field_ptr, writer);
+                try formatStruct(field.type, field_ptr, writer);
             }
         }
     }
 };
 
 // Function to read operands into the operand struct
-fn read_operands(comptime T: type, bytes: []const u8, index: *usize) !T {
+fn readOperands(comptime T: type, bytes: []const u8, index: *usize) !T {
     var result: T = undefined;
     var i = index.*;
 
@@ -182,35 +182,7 @@ fn read_operands(comptime T: type, bytes: []const u8, index: *usize) !T {
     return result;
 }
 
-pub fn deserialize_opcodes(
-    allocator: std.mem.Allocator,
-    bytes: []const u8,
-) ![]OpCode {
-    var instructions = std.ArrayList(OpCode).init(allocator);
-    defer instructions.deinit();
-
-    var i: usize = 0;
-    while (i < bytes.len) {
-        const opcode_byte = bytes[i];
-        i += 1;
-
-        const union_info = @typeInfo(OpCode).Union;
-        const opcode: union_info.tag_type.? = @enumFromInt(opcode_byte);
-
-        inline for (union_info.fields) |field| {
-            if (opcode == @field(union_info.tag_type.?, field.name)) {
-                const operands = try read_operands(field.type, bytes, &i);
-                const instruction = @unionInit(OpCode, field.name, operands);
-                try instructions.append(instruction);
-                // std.debug.print("{any}\n", .{instruction});
-            }
-        }
-    }
-
-    return instructions.toOwnedSlice();
-}
-
-fn format_struct(comptime T: type, ptr: anytype, writer: anytype) !void {
+fn formatStruct(comptime T: type, ptr: anytype, writer: anytype) !void {
     const type_info = @typeInfo(T);
     if (type_info != .Struct) {
         return;
@@ -226,4 +198,46 @@ fn format_struct(comptime T: type, ptr: anytype, writer: anytype) !void {
         try writer.print(".{s} = {any}", .{ field.name, field_value });
     }
     try writer.print("}}", .{});
+}
+
+pub fn deserializeOpcodes(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+) ![]AvmOpcode {
+    var instructions = std.ArrayList(AvmOpcode).init(allocator);
+    defer instructions.deinit();
+
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const opcode_byte = bytes[i];
+        i += 1;
+
+        const union_info = @typeInfo(AvmOpcode).Union;
+        const opcode: union_info.tag_type.? = @enumFromInt(opcode_byte);
+
+        inline for (union_info.fields) |field| {
+            if (opcode == @field(union_info.tag_type.?, field.name)) {
+                const operands = try readOperands(field.type, bytes, &i);
+                const instruction = @unionInit(AvmOpcode, field.name, operands);
+                try instructions.append(instruction);
+                // std.debug.print("{any}\n", .{instruction});
+            }
+        }
+    }
+
+    return instructions.toOwnedSlice();
+}
+
+pub fn load(allocator: std.mem.Allocator, file_path: ?[]const u8) ![]AvmOpcode {
+    var serialized_data: []u8 = undefined;
+    if (file_path) |p| {
+        const file = try std.fs.cwd().openFile(p, .{});
+        defer file.close();
+        serialized_data = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    } else {
+        const stdin = std.io.getStdIn();
+        serialized_data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
+    }
+
+    return try deserializeOpcodes(allocator, serialized_data);
 }
