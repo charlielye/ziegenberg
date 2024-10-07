@@ -1,19 +1,34 @@
 const std = @import("std");
 
+pub const Tag = enum {
+    UINT0,
+    UINT1,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
+    UINT128,
+    FF,
+
+    pub fn format(self: Tag, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s}", .{@tagName(self)});
+    }
+};
+
 const ThreeOperands8 = struct {
     indirect: u8,
-    tag: u8,
-    op1: u8,
-    op2: u8,
-    op3: u8,
+    tag: Tag,
+    op1_slot: u8,
+    op2_slot: u8,
+    op3_slot: u8,
 };
 
 const ThreeOperands16 = struct {
     indirect: u8,
-    tag: u8,
-    op1: u16,
-    op2: u16,
-    op3: u16,
+    tag: Tag,
+    op1_slot: u16,
+    op2_slot: u16,
+    op3_slot: u16,
 };
 
 const KernelInputOperands = struct {
@@ -33,7 +48,7 @@ const ExternalCallOperands = struct {
     functionSelector: u32,
 };
 
-const AvmOpcode = union(enum) {
+pub const AvmOpcode = union(enum) {
     // Compute - Arithmetic. 0
     ADD_8: ThreeOperands8,
     ADD_16: ThreeOperands16,
@@ -59,37 +74,37 @@ const AvmOpcode = union(enum) {
     OR_16: ThreeOperands16,
     XOR_8: ThreeOperands8,
     XOR_16: ThreeOperands16,
-    NOT_8: struct { indirect: u8, op1: u8, op2: u8 },
-    NOT_16: struct { indirect: u8, op1: u16, op2: u16 },
+    NOT_8: struct { indirect: u8, op1_slot: u8, op2_slot: u8 },
+    NOT_16: struct { indirect: u8, op1_slot: u16, op2_slot: u16 },
     SHL_8: ThreeOperands8,
     SHL_16: ThreeOperands16,
     SHR_8: ThreeOperands8,
     SHR_16: ThreeOperands16,
     // Compute - Type Conversions. 28
-    CAST_8: struct { indirect: u8, tag: u8, op1: u8, op2: u8 },
-    CAST_16: struct { indirect: u8, tag: u8, op1: u16, op2: u16 },
+    CAST_8: struct { indirect: u8, tag: Tag, op1_slot: u8, op2_slot: u8 },
+    CAST_16: struct { indirect: u8, tag: Tag, op1_slot: u16, op2_slot: u16 },
     // Execution Environment - Globals. 30
-    GETENVVAR_16: struct { indirect: u8, var_idx: u8, op1: u16 },
+    GETENVVAR_16: struct { indirect: u8, var_idx: u8, dst_slot: u16 },
     // Execution Environment - Calldata. 31
-    CALLDATACOPY: struct { indirect: u8, dest: u32, offset: u32, size: u32 },
+    CALLDATACOPY: struct { indirect: u8, start_slot: u32, size_slot: u32, dst_slot: u32 },
     // Machine State - Internal Control Flow. 32
     JUMP_16: struct { address: u16 },
-    JUMPI_16: struct { indirect: u8, condition: u16, address: u16 },
-    INTERNALCALL: struct { destination: u32 },
+    JUMPI_16: struct { indirect: u8, address: u16, condition_slot: u16 },
+    INTERNALCALL: struct { address: u32 },
     INTERNALRETURN: struct {},
     // Machine State - Memory. 36
-    SET_8: struct { indirect: u8, tag: u8, value: u8, offset: u8 },
-    SET_16: struct { indirect: u8, tag: u8, value: u16, offset: u16 },
-    SET_32: struct { indirect: u8, tag: u8, value: u32, offset: u16 },
-    SET_64: struct { indirect: u8, tag: u8, value: u64, offset: u16 },
-    SET_128: struct { indirect: u8, tag: u8, value: u128, offset: u16 },
-    SET_FF: struct { indirect: u8, tag: u8, value: u256, offset: u16 },
-    MOV_8: struct { indirect: u8, src: u8, dest: u8 },
-    MOV_16: struct { indirect: u8, src: u16, dest: u16 },
+    SET_8: struct { indirect: u8, tag: Tag, value: u8, dst_slot: u8 },
+    SET_16: struct { indirect: u8, tag: Tag, value: u16, dst_slot: u16 },
+    SET_32: struct { indirect: u8, tag: Tag, value: u32, dst_slot: u16 },
+    SET_64: struct { indirect: u8, tag: Tag, value: u64, dst_slot: u16 },
+    SET_128: struct { indirect: u8, tag: Tag, value: u128, dst_slot: u16 },
+    SET_FF: struct { indirect: u8, tag: Tag, value: u256, dst_slot: u16 },
+    MOV_8: struct { indirect: u8, src_slot: u8, dst_slot: u8 },
+    MOV_16: struct { indirect: u8, src_slot: u16, dst_slot: u16 },
     CMOV: struct { indirect: u8, condition: u32, src1: u32, src2: u32, dest: u32 },
     // Side Effects - Storage. 45
-    SLOAD: struct { indirect: u8, key: u32, value: u32 },
-    SSTORE: struct { indirect: u8, key: u32, value: u32 },
+    SLOAD: struct { indirect: u8, slot_slot: u32, dst_slot: u32 },
+    SSTORE: struct { indirect: u8, slot_slot: u32, value_slot: u32 },
     // Side Effects - Notes, Nullfiers, Logs, Messages. 47
     NOTEHASHEXISTS: struct { indirect: u8, value: u32, leafIndex: u32, result: u32 },
     EMITNOTEHASH: struct { indirect: u8, value: u32 },
@@ -107,7 +122,7 @@ const AvmOpcode = union(enum) {
     REVERT_8: struct { indirect: u8, data: u8, dataSize: u8 },
     REVERT_16: struct { indirect: u8, data: u16, dataSize: u16 },
     // Misc. 60
-    DEBUGLOG: struct { indirect: u8, value1: u32, value2: u32, value3: u32, value4: u32 },
+    DEBUGLOG: struct { indirect: u8, msg_slot: u32, msg_size: u32, fields_slot: u32, fields_size_slot: u32 },
     // Gadgets
     KECCAK: struct { indirect: u8, data: u32, dataLength: u32, result: u32 },
     POSEIDON2: struct { indirect: u8, data: u32, result: u32 },
@@ -135,11 +150,11 @@ const AvmOpcode = union(enum) {
     PEDERSENCOMMITMENT: struct { indirect: u8, data: u32, randomness: u32, length: u32, result: u32 },
     TORADIXLE: struct {
         indirect: u8,
-        input: u32,
-        base: u32,
-        limbSize: u32,
-        result: u32,
-        packed_: u8,
+        src_slot: u32,
+        dst_slot: u32,
+        radix_slot: u32,
+        num_limbs: u32,
+        output_bits: u8,
     },
 
     pub fn format(self: AvmOpcode, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -172,7 +187,12 @@ fn readOperands(comptime T: type, bytes: []const u8, index: *usize) !T {
         }
 
         // const value = try readValue(field.type, bytes, i);
-        const value = std.mem.readInt(field.type, @ptrCast(bytes[i..]), std.builtin.Endian.big);
+        const value = switch (@typeInfo(field.type)) {
+            .Int => std.mem.readInt(field.type, @ptrCast(bytes[i..]), std.builtin.Endian.big),
+            .Enum => @as(Tag, @enumFromInt(bytes[i])),
+            else => unreachable,
+        };
+        // const value = std.mem.readInt(field.type, @ptrCast(bytes[i..]), std.builtin.Endian.big);
         field_ptr.* = value;
 
         i += field_size;
@@ -195,7 +215,11 @@ fn formatStruct(comptime T: type, ptr: anytype, writer: anytype) !void {
         first = false;
 
         const field_value = @field(ptr, field.name);
+        // if (field.type == u256) {
+        //     try writer.print(".{s} = {x}", .{ field.name, field_value });
+        // } else {
         try writer.print(".{s} = {any}", .{ field.name, field_value });
+        // }
     }
     try writer.print("}}", .{});
 }

@@ -8,7 +8,8 @@ pub fn disassemble(file_path: ?[]const u8) !void {
 
     const opcodes = try load(allocator, file_path);
 
+    const stdout = std.io.getStdOut().writer();
     for (opcodes, 0..) |opcode, i| {
-        std.debug.print("{:0>4}: {any}\n", .{ i, opcode });
+        stdout.print("{:0>4}: {any}\n", .{ i, opcode }) catch unreachable;
     }
 }

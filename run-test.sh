@@ -11,10 +11,13 @@ BYTECODE_PATH=$1
 test_name="$(basename $BYTECODE_PATH .bytecode | awk '{ if (length($0) > 80) print substr($0, 1, 40) "..." substr($0, length($0)-40+1); else print $0 }')"
 
 function run_cmd() {
-  ./zig-out/bin/zb bvm run $1 2>&1
+  calldata_path=${1/.bytecode/.calldata}
+  [ -f "$calldata_path" ] && calldata_path_arg="-c $calldata_path" || calldata_path_arg=""
+  ./zig-out/bin/zb bvm run $1 $calldata_path_arg 2>&1
 }
 
-should="${test_name%.*}"
+should="${SHOULD:-${test_name##*.}}"
+[[ "$should" != "pass" && "$should" != "fail" ]] && should="pass"
 
 set +e
 output=$(run_cmd $BYTECODE_PATH)

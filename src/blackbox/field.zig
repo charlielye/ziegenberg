@@ -28,11 +28,15 @@ pub export fn bn254_fr_mul(lhs: *Fr, rhs: *Fr, result: *Fr) void {
     encode_fr(result);
 }
 
-pub export fn bn254_fr_div(lhs: *Fr, rhs: *Fr, result: *Fr) void {
+pub export fn bn254_fr_div(lhs: *Fr, rhs: *Fr, result: *Fr) bool {
     const l = decode_fr(lhs);
     const r = decode_fr(rhs);
+    if (r.is_zero()) {
+        return false;
+    }
     result.* = l.div(r);
     encode_fr(result);
+    return true;
 }
 
 pub export fn bn254_fr_add(lhs: *Fr, rhs: *Fr, result: *Fr) void {

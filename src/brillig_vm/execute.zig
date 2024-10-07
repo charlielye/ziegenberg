@@ -7,16 +7,23 @@ const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const root = @import("../blackbox/field.zig");
 const blackbox = @import("../blackbox/blackbox.zig");
 
-pub fn execute(file_path: []const u8, calldata_path: ?[]const u8, show_stats: bool) !void {
+pub const ExecuteOptions = struct {
+    file_path: ?[]const u8 = null,
+    calldata_path: ?[]const u8 = null,
+    show_stats: bool = false,
+    show_trace: bool = false,
+};
+
+pub fn execute(options: ExecuteOptions) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
 
-    const opcodes = try io.load(allocator, file_path);
+    const opcodes = try io.load(allocator, options.file_path);
     std.debug.print("Deserialized {} opcodes.\n", .{opcodes.len});
 
     var calldata: []u256 = &[_]u256{};
-    if (calldata_path) |path| {
+    if (options.calldata_path) |path| {
         const f = try std.fs.cwd().openFile(path, .{});
         defer f.close();
         const calldata_bytes = try f.readToEndAllocOptions(allocator, std.math.maxInt(usize), null, 32, null);
@@ -35,16 +42,17 @@ pub fn execute(file_path: []const u8, calldata_path: ?[]const u8, show_stats: bo
 
     std.debug.print("Executing...\n", .{});
     t.reset();
-    const result = brillig_vm.executeVm(opcodes);
+    const result = brillig_vm.executeVm(opcodes, options.show_trace);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
-    if (show_stats) brillig_vm.dumpStats();
+    if (options.show_stats) brillig_vm.dumpStats();
     return result;
 }
 
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 const BrilligVm = struct {
-    const mem_size = 1024 * 1024 * (512 + 128);
+    const mem_size = 1024 * 1024 * 256;
+    // const mem_size = 1024 * 1024 * (512 + 128);
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) void{
         &processBinaryFieldOp,
         &processBinaryIntOp,
@@ -106,10 +114,14 @@ const BrilligVm = struct {
         allocator.free(self.memory);
     }
 
-    pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode) !void {
+    pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode, show_trace: bool) !void {
         while (!self.halted) {
             const opcode = &opcodes[self.pc];
-            // std.debug.print("{}: {any}\n", .{ pc, opcode });
+
+            if (show_trace) {
+                std.debug.print("{:0>4}: {:0>4}: {any}\n", .{ self.ops_executed, self.pc, opcode });
+            }
+
             const i = @intFromEnum(opcode.*);
             if (i > BrilligVm.jump_table.len - 1) {
                 return error.UnknownOpcode;
@@ -151,7 +163,7 @@ const BrilligVm = struct {
         const size: u64 = @truncate(self.memory[op.size_address]);
         const offset: u64 = @truncate(self.memory[op.offset_address]);
         if (self.calldata.len < size) {
-            self.trapped = true;
+            self.trap();
             return;
         }
         for (0..size) |i| {
@@ -264,7 +276,7 @@ const BrilligVm = struct {
             .Add => root.bn254_fr_add(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             .Mul => root.bn254_fr_mul(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             .Sub => root.bn254_fr_sub(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-            .Div => root.bn254_fr_div(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .Div => if (!root.bn254_fr_div(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest))) self.trap(),
             .Equals => root.bn254_fr_eq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             .LessThan => root.bn254_fr_lt(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             .LessThanEquals => root.bn254_fr_leq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
@@ -423,8 +435,7 @@ const BrilligVm = struct {
     }
 
     fn processTrap(self: *BrilligVm, _: *BrilligOpcode) void {
-        self.halted = true;
-        self.trapped = true;
+        self.trap();
         std.debug.print("Trap! (todo print revert_data)\n", .{});
     }
 
@@ -451,7 +462,10 @@ const BrilligVm = struct {
         const r = switch (op.op) {
             .Add => lhs +% rhs,
             .Sub => lhs -% rhs,
-            .Div => lhs / rhs,
+            .Div => if (rhs != 0) lhs / rhs else {
+                self.trap();
+                return 0;
+            },
             .Mul => lhs *% rhs,
             .And => lhs & rhs,
             .Or => lhs | rhs,
@@ -469,6 +483,11 @@ const BrilligVm = struct {
     fn unaryNot(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
         const rhs: int_type = @truncate(~self.memory[op.source]);
         return rhs;
+    }
+
+    fn trap(self: *BrilligVm) void {
+        self.trapped = true;
+        self.halted = true;
     }
 };
 

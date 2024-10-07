@@ -407,7 +407,7 @@ fn deserializeUnion(stream: anytype, comptime info: std.builtin.Type.Union, comp
 
 pub fn serializeBool(stream: anytype, value: bool) @TypeOf(stream).Error!void {
     const code: u8 = if (value) @as(u8, 1) else @as(u8, 0);
-    return stream.writeIntLittle(u8, code);
+    return stream.writeInt(u8, code, std.builtin.Endian.little);
 }
 
 pub fn serializeFloat(stream: anytype, comptime T: type, value: T) @TypeOf(stream).Error!void {
@@ -420,16 +420,18 @@ pub fn serializeFloat(stream: anytype, comptime T: type, value: T) @TypeOf(strea
 
 pub fn serializeInt(stream: anytype, comptime T: type, value: T) @TypeOf(stream).Error!void {
     switch (T) {
-        i8 => try stream.writeIntLittle(i8, value),
-        i16 => try stream.writeIntLittle(i16, value),
-        i32 => try stream.writeIntLittle(i32, value),
-        i64 => try stream.writeIntLittle(i64, value),
-        i128 => try stream.writeIntLittle(i128, value),
-        u8 => try stream.writeIntLittle(u8, value),
-        u16 => try stream.writeIntLittle(u16, value),
-        u32 => try stream.writeIntLittle(u32, value),
-        u64 => try stream.writeIntLittle(u64, value),
-        u128 => try stream.writeIntLittle(u128, value),
+        i8 => try stream.writeInt(i8, value, std.builtin.Endian.little),
+        i16 => try stream.writeInt(i16, value, std.builtin.Endian.little),
+        i32 => try stream.writeInt(i32, value, std.builtin.Endian.little),
+        i64 => try stream.writeInt(i64, value, std.builtin.Endian.little),
+        i128 => try stream.writeInt(i128, value, std.builtin.Endian.little),
+        i256 => try stream.writeInt(i256, value, std.builtin.Endian.little),
+        u8 => try stream.writeInt(u8, value, std.builtin.Endian.little),
+        u16 => try stream.writeInt(u16, value, std.builtin.Endian.little),
+        u32 => try stream.writeInt(u32, value, std.builtin.Endian.little),
+        u64 => try stream.writeInt(u64, value, std.builtin.Endian.little),
+        u128 => try stream.writeInt(u128, value, std.builtin.Endian.little),
+        u256 => try stream.writeInt(u256, value, std.builtin.Endian.little),
         else => unsupportedType(T),
     }
 }
@@ -449,7 +451,7 @@ pub fn serializePointer(stream: anytype, comptime info: std.builtin.Type.Pointer
     switch (info.size) {
         .One => unsupportedType(T),
         .Slice => {
-            try stream.writeIntLittle(u64, value.len);
+            try stream.writeInt(u64, value.len, std.builtin.Endian.little);
             if (info.child == u8) {
                 try stream.writeAll(value);
             } else {
@@ -475,7 +477,17 @@ pub fn serializeArray(stream: anytype, comptime info: std.builtin.Type.Array, co
 }
 
 pub fn serializeStruct(stream: anytype, comptime info: std.builtin.Type.Struct, comptime T: type, value: T) @TypeOf(stream).Error!void {
-    inline for (info.fields) |field| {
+    outer: inline for (info.fields) |field| {
+        if (@hasDecl(T, "meta")) {
+            inline for (T.meta) |meta_field| {
+                if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
+                    var buffer: [64]u8 = undefined;
+                    const result = try std.fmt.bufPrint(&buffer, "{x:0>64}", .{@field(value, field.name)});
+                    try serialize(stream, result);
+                    continue :outer;
+                }
+            }
+        }
         try serialize(stream, @field(value, field.name));
     }
 }
