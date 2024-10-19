@@ -4,12 +4,16 @@ shopt -s extglob
 
 BYTECODES=$1
 RELEASE=${RELEASE:-1}
+PARALLEL=${PARALLEL:-1}
+FAIL_FAST=${FAIL_FAST:-0}
 
 [ "$RELEASE" -eq 1 ] && zig_args+=" --release=fast" || zig_args=""
-zig build $zig_args
+zig build $zig_args || exit 1
 
 SECONDS=0
-find $BYTECODES -name "*.bytecode" | parallel --joblog parallel.log ./run-test.sh {}
+[ "$FAIL_FAST" -eq 1 ] && parallel_args+=" --halt now,fail=1 -j 1" || parallel_args=""
+find $BYTECODES -name "*.bytecode" | parallel $parallel_args --joblog parallel.log ./run-test.sh {}
+code=$?
 
 RED='\033[0;31m'
 YELLOW='\033[0;33m'
@@ -23,3 +27,5 @@ echo -e "Success: ${GREEN}$(cat parallel.log | tail -n +2 | awk '$7 == 0' | wc -
 echo -e " Failed: ${RED}$(cat parallel.log | tail -n +2 | awk '$7 != 0' | wc -l)${NC}"
 
 rm parallel.log
+
+exit $code

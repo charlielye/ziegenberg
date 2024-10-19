@@ -3,8 +3,8 @@ const deserializeOpcodes = @import("io.zig").deserializeOpcodes;
 const AvmOpcode = @import("io.zig").AvmOpcode;
 const io = @import("io.zig");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
-const root = @import("../blackbox/field.zig");
 const blackbox = @import("../blackbox/blackbox.zig");
+const fieldOps = @import("../blackbox/field.zig");
 
 pub const ExecuteOptions = struct {
     file_path: ?[]const u8 = null,
@@ -53,7 +53,8 @@ pub fn execute(options: ExecuteOptions) !void {
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 const AztecVm = struct {
-    const mem_size = 1024 * 1024 * 250;
+    // const mem_size = 1024 * 1024 * 250;
+    const mem_size = 1024 * 1024;
     memory: []align(4096) u256,
     memory_tags: []align(4096) io.Tag,
     calldata: []u256,
@@ -85,7 +86,8 @@ const AztecVm = struct {
         // }
         // std.debug.print("Mem locked.\n", .{});
 
-        // @memset(vm.memory, 0);
+        @memset(vm.memory, 0);
+        @memset(vm.memory_tags, io.Tag.FF);
         return vm;
     }
 
@@ -94,11 +96,12 @@ const AztecVm = struct {
     }
 
     pub fn executeVm(self: *AztecVm, opcodes: []AvmOpcode, show_trace: bool) !void {
-        while (!self.halted) {
+        while (!self.halted and self.ops_executed < 1000) {
             const opcode = &opcodes[self.pc];
 
             if (show_trace) {
-                std.debug.print("{:0>4}: {:0>4}: {any}\n", .{ self.ops_executed, self.pc, opcode });
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("{:0>4}: {:0>4}: {any}\n", .{ self.ops_executed, self.pc, opcode });
             }
 
             switch (opcode.*) {
@@ -118,22 +121,24 @@ const AztecVm = struct {
                     self.pc = op.address - 1;
                 },
                 .INTERNALRETURN => self.pc = self.callstack.pop(),
-                .EQ_8 => |op| self.processEq(op),
-                .EQ_16 => |op| self.processEq(op),
-                .LT_8 => |op| self.processLt(op),
-                .LT_16 => |op| self.processLt(op),
-                .LTE_8 => |op| self.processLte(op),
-                .LTE_16 => |op| self.processLte(op),
-                .ADD_8 => |op| self.processAdd(op),
-                .ADD_16 => |op| self.processAdd(op),
-                .SUB_8 => |op| self.processSub(op),
-                .SUB_16 => |op| self.processSub(op),
-                .MUL_8 => |op| self.processMul(op),
-                .MUL_16 => |op| self.processMul(op),
-                .DIV_8 => |op| self.processDiv(op),
-                .DIV_16 => |op| self.processDiv(op),
-                .NOT_8 => |op| self.processNot(op),
-                .NOT_16 => |op| self.processNot(op),
+                .EQ_8 => |op| self.binaryOp(opcode, op),
+                .EQ_16 => |op| self.binaryOp(opcode, op),
+                .LT_8 => |op| self.binaryOp(opcode, op),
+                .LT_16 => |op| self.binaryOp(opcode, op),
+                .LTE_8 => |op| self.binaryOp(opcode, op),
+                .LTE_16 => |op| self.binaryOp(opcode, op),
+                .ADD_8 => |op| self.binaryOp(opcode, op),
+                .ADD_16 => |op| self.binaryOp(opcode, op),
+                .SUB_8 => |op| self.binaryOp(opcode, op),
+                .SUB_16 => |op| self.binaryOp(opcode, op),
+                .MUL_8 => |op| self.binaryOp(opcode, op),
+                .MUL_16 => |op| self.binaryOp(opcode, op),
+                .DIV_8 => |op| self.binaryOp(opcode, op),
+                .DIV_16 => |op| self.binaryOp(opcode, op),
+                .FDIV_8 => |op| self.binaryOp(opcode, op),
+                .FDIV_16 => |op| self.binaryOp(opcode, op),
+                .NOT_8 => |op| self.unaryOp(opcode, op),
+                .NOT_16 => |op| self.unaryOp(opcode, op),
                 .JUMP_16 => |op| self.pc = op.address - 1,
                 .JUMPI_16 => |o| {
                     const op = self.derefOpcodeSlots(@TypeOf(o), o);
@@ -170,8 +175,7 @@ const AztecVm = struct {
                     );
                 },
                 .REVERT_8, .REVERT_16 => {
-                    self.trapped = true;
-                    self.halted = true;
+                    self.trap();
                 },
                 else => {
                     std.debug.print("Unimplemented: {any}\n", .{opcode.*});
@@ -192,10 +196,22 @@ const AztecVm = struct {
     fn derefOpcodeSlots(self: *AztecVm, comptime T: type, opcode_in: T) T {
         var opcode = opcode_in;
         comptime var slot_field_index: usize = 0;
+        comptime var num_slot_operands: usize = 0;
+        comptime for (@typeInfo(@TypeOf(opcode)).Struct.fields) |field| {
+            if (std.mem.endsWith(u8, field.name, "_slot")) {
+                num_slot_operands += 1;
+            }
+        };
         inline for (@typeInfo(@TypeOf(opcode)).Struct.fields) |field| {
             if (comptime std.mem.endsWith(u8, field.name, "_slot")) {
                 const is_indirect = (opcode.indirect >> slot_field_index) & 0x1 == 1;
+                const is_relative = (opcode.indirect >> (num_slot_operands + slot_field_index)) & 0x1 == 1;
+                if (is_relative) {
+                    // std.debug.print("deref relative {} to {}\n", .{ @field(opcode, field.name), self.memory[0] + @field(opcode, field.name) });
+                    @field(opcode, field.name) = @truncate(self.memory[0] + @field(opcode, field.name));
+                }
                 if (is_indirect) {
+                    // std.debug.print("deref indirect {} to {}\n", .{ @field(opcode, field.name), self.memory[@field(opcode, field.name)] });
                     @field(opcode, field.name) = @truncate(self.memory[@field(opcode, field.name)]);
                 }
                 slot_field_index += 1;
@@ -204,86 +220,33 @@ const AztecVm = struct {
         return opcode;
     }
 
+    // fn getSlot(self: *AztecVm, )
+
     fn processSet(self: *AztecVm, opcode: anytype) void {
         const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
         self.memory[op.dst_slot] = op.value;
         self.memory_tags[op.dst_slot] = op.tag;
+        // std.debug.print("({}) set slot {} = {}\n", .{ op.tag, op.dst_slot, op.value });
     }
 
     fn processMov(self: *AztecVm, opcode: anytype) void {
         const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
         self.memory[op.dst_slot] = self.memory[op.src_slot];
         self.memory_tags[op.dst_slot] = self.memory_tags[op.src_slot];
-    }
-
-    fn processEq(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        self.memory[op.op3_slot] = @intFromBool(self.memory[op.op1_slot] == self.memory[op.op2_slot]);
-    }
-
-    fn processLt(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        self.memory[op.op3_slot] = @intFromBool(self.memory[op.op1_slot] < self.memory[op.op2_slot]);
-        self.memory_tags[op.op3_slot] = io.Tag.UINT1;
-    }
-
-    fn processLte(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        self.memory[op.op3_slot] = @intFromBool(self.memory[op.op1_slot] <= self.memory[op.op2_slot]);
-        self.memory_tags[op.op3_slot] = io.Tag.UINT1;
-    }
-
-    fn processAdd(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        const op1 = self.memory[op.op1_slot];
-        const op2 = self.memory[op.op2_slot];
-        const mask = getBitMask(self.memory_tags[op.op1_slot]);
-        self.memory[op.op3_slot] = (op1 +% op2) & mask;
-        self.memory_tags[op.op3_slot] = self.memory_tags[op.op1_slot];
-        // std.debug.print("op1: {} op2: {} op3: {} mask: {x}\n", .{ op1, op2, self.memory[op.op3_slot], mask });
-    }
-
-    fn processSub(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        const op1 = self.memory[op.op1_slot];
-        const op2 = self.memory[op.op2_slot];
-        const mask = getBitMask(self.memory_tags[op.op1_slot]);
-        self.memory[op.op3_slot] = (op1 -% op2) & mask;
-        self.memory_tags[op.op3_slot] = self.memory_tags[op.op1_slot];
-        // std.debug.print("op1: {} op2: {} op3: {} mask: {x}\n", .{ op1, op2, self.memory[op.op3_slot], mask });
-    }
-
-    fn processMul(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        const op1 = self.memory[op.op1_slot];
-        const op2 = self.memory[op.op2_slot];
-        const mask = getBitMask(self.memory_tags[op.op1_slot]);
-        self.memory[op.op3_slot] = (op1 *% op2) & mask;
-        self.memory_tags[op.op3_slot] = self.memory_tags[op.op1_slot];
-        // std.debug.print("op1: {} op2: {} op3: {} mask: {x}\n", .{ op1, op2, self.memory[op.op3_slot], mask });
-    }
-
-    fn processDiv(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        const op1 = self.memory[op.op1_slot];
-        const op2 = self.memory[op.op2_slot];
-        // const mask = getBitMask(self.memory_tags[op.op1_slot]);
-        self.memory[op.op3_slot] = (op1 / op2);
-        self.memory_tags[op.op3_slot] = self.memory_tags[op.op1_slot];
-        // std.debug.print("op1: {} op2: {} op3: {} mask: {x}\n", .{ op1, op2, self.memory[op.op3_slot], mask });
-    }
-
-    fn processNot(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        const mask = getBitMask(self.memory_tags[op.op1_slot]);
-        const op1 = self.memory[op.op1_slot];
-        self.memory[op.op2_slot] = (~op1) & mask;
-        self.memory_tags[op.op2_slot] = self.memory_tags[op.op1_slot];
-        // std.debug.print("op1: {} op2: {} mask: {}\n", .{ op1, self.memory[op.op2_slot], mask });
+        // std.debug.print("({}) mov slot {} = {} (value: {})\n", .{
+        //     self.memory_tags[op.src_slot],
+        //     op.src_slot,
+        //     op.dst_slot,
+        //     self.memory[op.src_slot],
+        // });
     }
 
     fn processCast(self: *AztecVm, opcode: anytype) void {
         const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
+        if (self.memory_tags[op.op1_slot] == .FF) {
+            fieldOps.bn254_fr_normalize(@ptrCast(&self.memory[op.op1_slot]));
+            // std.debug.print("dest: {}\n", .{self.memory[op.op1_slot]});
+        }
         const mask = getBitMask(op.tag);
         self.memory[op.op2_slot] = self.memory[op.op1_slot] & mask;
         self.memory_tags[op.op2_slot] = op.tag;
@@ -295,8 +258,7 @@ const AztecVm = struct {
         const start_slot: u64 = @truncate(self.memory[op.start_slot]);
         // std.debug.print("cdc {} {}\n", .{ size, start_slot });
         if (self.calldata.len < size) {
-            self.halted = true;
-            self.trapped = true;
+            self.trap();
             return;
         }
         for (0..size) |i| {
@@ -308,263 +270,93 @@ const AztecVm = struct {
         }
     }
 
-    // fn processCast(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const op = &opcode.Cast;
-    //     switch (op.bit_size) {
-    //         .Integer => |int_size| {
-    //             root.bn254_fr_normalize(@ptrCast(&self.memory[op.source]));
-    //             const mask = (@as(u256, 1) << getBitSize(int_size)) - 1;
-    //             self.memory[op.destination] = self.memory[op.source] & mask;
-    //         },
-    //         .Field => {
-    //             self.memory[op.destination] = self.memory[op.source];
-    //         },
-    //     }
-    //     self.pc += 1;
-    // }
+    fn unaryOp(self: *AztecVm, opcode_union: *AvmOpcode, opcode: anytype) void {
+        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
+        switch (self.memory_tags[op.op1_slot]) {
+            .U1 => self.unaryIntOp(u1, opcode_union, op),
+            .U8 => self.unaryIntOp(u8, opcode_union, op),
+            .U16 => self.unaryIntOp(u16, opcode_union, op),
+            .U32 => self.unaryIntOp(u32, opcode_union, op),
+            .U64 => self.unaryIntOp(u64, opcode_union, op),
+            .U128 => self.unaryIntOp(u128, opcode_union, op),
+            else => unreachable,
+        }
+        self.memory_tags[op.op2_slot] = self.memory_tags[op.op1_slot];
+    }
 
-    // fn processCmov(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const mov = &opcode.ConditionalMov;
-    //     self.memory[mov.destination] = self.memory[if (self.memory[mov.condition] != 0) mov.source_a else mov.source_b];
-    //     self.pc += 1;
-    // }
+    fn unaryIntOp(self: *AztecVm, comptime int_type: type, opcode_union: *AvmOpcode, opcode: anytype) void {
+        const lhs: int_type = @truncate(self.memory[opcode.op1_slot]);
+        const r: int_type = switch (opcode_union.*) {
+            .NOT_8, .NOT_16 => @truncate(~lhs),
+            else => unreachable,
+        };
+        self.memory[opcode.op2_slot] = r;
+        // std.debug.print("({}) op {} = {}\n", .{ int_type, lhs, r });
+    }
 
-    // fn processStore(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const store = &opcode.Store;
-    //     self.memory[@truncate(self.memory[store.destination_pointer])] = self.memory[store.source];
-    //     self.pc += 1;
-    // }
+    fn binaryOp(self: *AztecVm, opcode_union: *AvmOpcode, opcode: anytype) void {
+        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
+        switch (self.memory_tags[op.op1_slot]) {
+            .FF => self.binaryFieldOp(opcode_union, op),
+            .U1 => self.binaryIntOp(u1, opcode_union, op),
+            .U8 => self.binaryIntOp(u8, opcode_union, op),
+            .U16 => self.binaryIntOp(u16, opcode_union, op),
+            .U32 => self.binaryIntOp(u32, opcode_union, op),
+            .U64 => self.binaryIntOp(u64, opcode_union, op),
+            .U128 => self.binaryIntOp(u128, opcode_union, op),
+        }
+        switch (opcode_union.*) {
+            .EQ_8, .EQ_16, .LT_8, .LT_16, .LTE_8, .LTE_16 => self.memory_tags[op.op3_slot] = io.Tag.U1,
+            else => self.memory_tags[op.op3_slot] = self.memory_tags[op.op1_slot],
+        }
+    }
 
-    // fn processLoad(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const load = &opcode.Load;
-    //     self.memory[load.destination] = self.memory[@truncate(self.memory[load.source_pointer])];
-    //     self.pc += 1;
-    // }
+    fn binaryFieldOp(self: *AztecVm, opcode_union: *AvmOpcode, opcode: anytype) void {
+        const lhs = &self.memory[opcode.op1_slot];
+        const rhs = &self.memory[opcode.op2_slot];
+        const dest = &self.memory[opcode.op3_slot];
+        switch (opcode_union.*) {
+            .ADD_8, .ADD_16 => fieldOps.bn254_fr_add(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .MUL_8, .MUL_16 => fieldOps.bn254_fr_mul(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .SUB_8, .SUB_16 => fieldOps.bn254_fr_sub(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .FDIV_8, .FDIV_16 => if (!fieldOps.bn254_fr_div(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest))) self.trap(),
+            .EQ_8, .EQ_16 => fieldOps.bn254_fr_eq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .LT_8, .LT_16 => fieldOps.bn254_fr_lt(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .LTE_8, .LTE_16 => fieldOps.bn254_fr_leq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            else => unreachable,
+        }
+        // std.debug.print("(ff) {} op {} = {}\n", .{ lhs.*, rhs.*, dest.* });
+    }
 
-    // fn processCall(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const call = &opcode.Call;
-    //     self.callstack.append(self.pc + 1) catch unreachable;
-    //     self.pc = call.location;
-    // }
+    fn binaryIntOp(self: *AztecVm, comptime int_type: type, opcode_union: *AvmOpcode, opcode: anytype) void {
+        const lhs: int_type = @truncate(self.memory[opcode.op1_slot]);
+        const rhs: int_type = @truncate(self.memory[opcode.op2_slot]);
+        const bit_size = @bitSizeOf(int_type);
+        const r: int_type = switch (opcode_union.*) {
+            .ADD_8, .ADD_16 => lhs +% rhs,
+            .SUB_8, .SUB_16 => lhs -% rhs,
+            .DIV_8, .DIV_16 => if (rhs != 0) lhs / rhs else blk: {
+                self.trap();
+                break :blk 0;
+            },
+            .MUL_8, .MUL_16 => lhs *% rhs,
+            .AND_8, .AND_16 => lhs & rhs,
+            .OR_8, .OR_16 => lhs | rhs,
+            .XOR_8, .XOR_16 => lhs ^ rhs,
+            .SHL_8, .SHL_16 => if (rhs < bit_size) lhs << @truncate(rhs) else 0,
+            .SHR_8, .SHR_16 => if (rhs < bit_size) lhs >> @truncate(rhs) else 0,
+            .EQ_8, .EQ_16 => @intFromBool(lhs == rhs),
+            .LT_8, .LT_16 => @intFromBool(lhs < rhs),
+            .LTE_8, .LTE_16 => @intFromBool(lhs <= rhs),
+            else => unreachable,
+        };
+        self.memory[opcode.op3_slot] = r;
+        // std.debug.print("({}) {} op {} = {}\n", .{ int_type, lhs, rhs, r });
+    }
 
-    // fn processReturn(self: *AztecVm, _: *AvmOpcode) void {
-    //     self.pc = self.callstack.pop();
-    // }
-
-    // fn processJump(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const jmp = &opcode.Jump;
-    //     self.pc = jmp.location;
-    // }
-
-    // fn processJumpIf(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const jmp = &opcode.JumpIf;
-    //     self.pc = if (self.memory[jmp.condition] == 1) jmp.location else self.pc + 1;
-    // }
-
-    // fn processJumpIfNot(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const jmp = &opcode.JumpIfNot;
-    //     self.pc = if (self.memory[jmp.condition] == 0) jmp.location else self.pc + 1;
-    // }
-
-    // fn processNot(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const not = &opcode.Not;
-    //     self.memory[not.destination] = switch (not.bit_size) {
-    //         .U0 => unreachable,
-    //         .U1 => self.unaryNot(u1, not),
-    //         .U8 => self.unaryNot(u8, not),
-    //         .U16 => self.unaryNot(u16, not),
-    //         .U32 => self.unaryNot(u32, not),
-    //         .U64 => self.unaryNot(u64, not),
-    //         .U128 => self.unaryNot(u128, not),
-    //     };
-    //     self.pc += 1;
-    // }
-
-    // fn processBinaryIntOp(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const int_op = &opcode.BinaryIntOp;
-    //     self.memory[int_op.destination] = switch (int_op.bit_size) {
-    //         .U0 => unreachable,
-    //         .U1 => self.binaryIntOp(u1, opcode.BinaryIntOp),
-    //         .U8 => self.binaryIntOp(u8, opcode.BinaryIntOp),
-    //         .U16 => self.binaryIntOp(u16, opcode.BinaryIntOp),
-    //         .U32 => self.binaryIntOp(u32, opcode.BinaryIntOp),
-    //         .U64 => self.binaryIntOp(u64, opcode.BinaryIntOp),
-    //         .U128 => self.binaryIntOp(u128, opcode.BinaryIntOp),
-    //     };
-    //     self.pc += 1;
-    // }
-
-    // fn processBinaryFieldOp(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const field_op = &opcode.BinaryFieldOp;
-    //     const lhs = &self.memory[field_op.lhs];
-    //     const rhs = &self.memory[field_op.rhs];
-    //     const dest = &self.memory[field_op.destination];
-    //     switch (field_op.op) {
-    //         .Add => root.bn254_fr_add(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-    //         .Mul => root.bn254_fr_mul(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-    //         .Sub => root.bn254_fr_sub(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-    //         .Div => root.bn254_fr_div(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-    //         .Equals => root.bn254_fr_eq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-    //         .LessThan => root.bn254_fr_lt(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-    //         .LessThanEquals => root.bn254_fr_leq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-    //         else => unreachable,
-    //     }
-    //     self.pc += 1;
-    // }
-
-    // fn processBlackbox(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const blackbox_op = &opcode.BlackBox;
-    //     const memory = self.memory;
-
-    //     const idx = @intFromEnum(blackbox_op.*);
-    //     self.counters[idx] += 1;
-
-    //     switch (blackbox_op.*) {
-    //         .Sha256Compression => |op| {
-    //             blackbox.blackbox_sha256_compression(
-    //                 @ptrCast(&memory[@truncate(memory[op.input.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.hash_values.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-    //             );
-    //         },
-    //         .Blake2s => |op| {
-    //             blackbox.blackbox_blake2s(
-    //                 @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-    //                 @truncate(memory[op.message.size]),
-    //                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-    //             );
-    //         },
-    //         .Blake3 => |op| {
-    //             blackbox.blackbox_blake3(
-    //                 @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-    //                 @truncate(memory[op.message.size]),
-    //                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-    //             );
-    //         },
-    //         .Keccakf1600 => |op| {
-    //             blackbox.blackbox_keccak1600(
-    //                 @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-    //                 @truncate(memory[op.message.size]),
-    //                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-    //             );
-    //         },
-    //         .Poseidon2Permutation => |op| {
-    //             blackbox.blackbox_poseidon2_permutation(
-    //                 @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-    //                 @truncate(memory[op.message.size]),
-    //             );
-    //         },
-    //         .PedersenCommitment => |op| {
-    //             blackbox.blackbox_pedersen_commit(
-    //                 @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
-    //                 @truncate(memory[op.inputs.size]),
-    //                 @truncate(memory[op.domain_separator]),
-    //                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-    //             );
-    //         },
-    //         .PedersenHash => |op| {
-    //             blackbox.blackbox_pedersen_hash(
-    //                 @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
-    //                 @truncate(memory[op.inputs.size]),
-    //                 @truncate(memory[op.domain_separator]),
-    //                 @ptrCast(&memory[op.output]),
-    //             );
-    //         },
-    //         .ToRadix => |op| {
-    //             blackbox.blackbox_to_radix(
-    //                 @ptrCast(&memory[op.input]),
-    //                 @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-    //                 op.output.size,
-    //                 @truncate(memory[op.radix]),
-    //             );
-    //         },
-    //         .AES128Encrypt => |op| {
-    //             blackbox.blackbox_aes_encrypt(
-    //                 @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.iv.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.key.pointer])]),
-    //                 @truncate(memory[op.inputs.size]),
-    //                 @ptrCast(&memory[@truncate(memory[op.outputs.pointer])]),
-    //                 @ptrCast(&memory[op.outputs.size]),
-    //             );
-    //         },
-    //         .EcdsaSecp256k1 => |op| {
-    //             blackbox.blackbox_secp256k1_verify_signature(
-    //                 @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
-    //                 @truncate(memory[op.hashed_msg.size]),
-    //                 @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
-    //                 @ptrCast(&memory[op.result]),
-    //             );
-    //         },
-    //         .EcdsaSecp256r1 => |op| {
-    //             blackbox.blackbox_secp256r1_verify_signature(
-    //                 @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
-    //                 @truncate(memory[op.hashed_msg.size]),
-    //                 @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
-    //                 @ptrCast(&memory[op.result]),
-    //             );
-    //         },
-    //         .SchnorrVerify => |op| {
-    //             blackbox.blackbox_schnorr_verify_signature(
-    //                 @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-    //                 @truncate(memory[op.message.size]),
-    //                 @ptrCast(&memory[op.public_key_x]),
-    //                 @ptrCast(&memory[op.public_key_y]),
-    //                 @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
-    //                 @ptrCast(&memory[op.result]),
-    //             );
-    //         },
-    //         .MultiScalarMul => |op| {
-    //             blackbox.blackbox_msm(
-    //                 @ptrCast(&memory[@truncate(memory[op.points.pointer])]),
-    //                 @truncate(memory[op.points.size]),
-    //                 @ptrCast(&memory[@truncate(memory[op.scalars.pointer])]),
-    //                 @ptrCast(&memory[@truncate(memory[op.outputs.pointer])]),
-    //             );
-    //         },
-    //         .EmbeddedCurveAdd => |op| {
-    //             blackbox.blackbox_ecc_add(
-    //                 @ptrCast(&memory[op.input1_x]),
-    //                 @ptrCast(&memory[op.input1_y]),
-    //                 @ptrCast(&memory[op.input1_infinite]),
-    //                 @ptrCast(&memory[op.input2_x]),
-    //                 @ptrCast(&memory[op.input2_y]),
-    //                 @ptrCast(&memory[op.input2_infinite]),
-    //                 @ptrCast(&memory[@truncate(memory[op.result.pointer])]),
-    //             );
-    //         },
-    //         else => {
-    //             std.debug.print("Unimplemented: {}\n", .{blackbox_op});
-    //             unreachable;
-    //         },
-    //     }
-    //     self.pc += 1;
-    // }
-
-    // fn processForeignCall(self: *AztecVm, opcode: *AvmOpcode) void {
-    //     const fc = &opcode.ForeignCall;
-    //     if (std.mem.eql(u8, "print", fc.function)) {
-    //         std.debug.print("print called\n", .{});
-    //     } else {
-    //         std.debug.print("Unimplemented: {s}\n", .{fc.function});
-    //         unreachable;
-    //     }
-    //     self.pc += 1;
-    // }
-
-    // fn processStop(self: *AztecVm, _: *AvmOpcode) void {
-    //     self.halted = true;
-    // }
-
-    // fn processTrap(self: *AztecVm, _: *AvmOpcode) void {
-    //     self.halted = true;
-    //     self.trapped = true;
-    //     std.debug.print("Trap! (todo print revert_data)\n", .{});
+    // fn unaryNot(self: *AztecVm, comptime int_type: type, op: anytype) int_type {
+    //     const rhs: int_type = @truncate(~self.memory[op.source]);
+    //     return rhs;
     // }
 
     pub fn dumpMem(self: *AztecVm, n: usize, offset: usize) void {
@@ -573,65 +365,31 @@ const AztecVm = struct {
         }
     }
 
-    // pub fn dumpStats(self: *AztecVm) void {
-    //     std.debug.print("Opcodes executed: {}\n", .{self.ops_executed});
-
-    //     // Print the counters next to the enum variant names
-    //     std.debug.print("Blackbox calls:\n", .{});
-    //     inline for (@typeInfo(io.BlackBoxOp).Union.fields, 0..) |enumField, idx| {
-    //         std.debug.print("  {s}: {}\n", .{ enumField.name, self.counters[idx] });
-    //     }
-    // }
-
-    // fn binaryIntOp(self: *AztecVm, comptime int_type: type, op: anytype) int_type {
-    //     const lhs: int_type = @truncate(self.memory[op.lhs]);
-    //     const rhs: int_type = @truncate(self.memory[op.rhs]);
-    //     const bit_size = @bitSizeOf(int_type);
-    //     const r = switch (op.op) {
-    //         .Add => lhs +% rhs,
-    //         .Sub => lhs -% rhs,
-    //         .Div => lhs / rhs,
-    //         .Mul => lhs *% rhs,
-    //         .And => lhs & rhs,
-    //         .Or => lhs | rhs,
-    //         .Xor => lhs ^ rhs,
-    //         .Shl => if (rhs < bit_size) lhs << @truncate(rhs) else 0,
-    //         .Shr => if (rhs < bit_size) lhs >> @truncate(rhs) else 0,
-    //         .Equals => @intFromBool(lhs == rhs),
-    //         .LessThan => @intFromBool(lhs < rhs),
-    //         .LessThanEquals => @intFromBool(lhs <= rhs),
-    //     };
-    //     // std.debug.print("{} op {} = {}\n", .{ lhs, rhs, r });
-    //     return r;
-    // }
-
-    // fn unaryNot(self: *AztecVm, comptime int_type: type, op: anytype) int_type {
-    //     const rhs: int_type = @truncate(~self.memory[op.source]);
-    //     return rhs;
-    // }
+    fn trap(self: *AztecVm) void {
+        self.trapped = true;
+        self.halted = true;
+    }
 };
 
 fn getBitSize(int_size: io.Tag) u8 {
     return switch (int_size) {
-        .UINT1 => 1,
-        .UINT8 => 8,
-        .UINT16 => 16,
-        .UINT32 => 32,
-        .UINT64 => 64,
-        .UINT128 => 128,
-        else => unreachable,
+        .U1 => 1,
+        .U8 => 8,
+        .U16 => 16,
+        .U32 => 32,
+        .U64 => 64,
+        .U128 => 128,
     };
 }
 
 fn getBitMask(int_size: io.Tag) u256 {
     return switch (int_size) {
-        .UINT1 => 0x1,
-        .UINT8 => 0xFF,
-        .UINT16 => 0xFFFF,
-        .UINT32 => 0xFFFFFFFF,
-        .UINT64 => 0xFFFFFFFFFFFFFFFF,
-        .UINT128 => 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF,
+        .U1 => 0x1,
+        .U8 => 0xFF,
+        .U16 => 0xFFFF,
+        .U32 => 0xFFFFFFFF,
+        .U64 => 0xFFFFFFFFFFFFFFFF,
+        .U128 => 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF,
         .FF => 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF,
-        else => unreachable,
     };
 }

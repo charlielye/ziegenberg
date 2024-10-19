@@ -51,7 +51,8 @@ pub fn execute(options: ExecuteOptions) !void {
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 const BrilligVm = struct {
-    const mem_size = 1024 * 1024 * 256;
+    const mem_size = 1024 * 1024;
+    // const mem_size = 1024 * 1024 * 256;
     // const mem_size = 1024 * 1024 * (512 + 128);
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) void{
         &processBinaryFieldOp,
@@ -115,7 +116,7 @@ const BrilligVm = struct {
     }
 
     pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode, show_trace: bool) !void {
-        while (!self.halted) {
+        while (!self.halted and self.ops_executed < 1000) {
             const opcode = &opcodes[self.pc];
 
             if (show_trace) {
@@ -137,18 +138,22 @@ const BrilligVm = struct {
 
     fn processConst(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.Const;
-        const dest_index = op.destination;
         // TODO: Move to deserialize time. Convert to montgomery if a field so it happens just once.
         if (op.bit_size == BitSize.Field and (op.value & (1 << 255)) == 0) {
             op.value = @as(u256, @bitCast(Bn254Fr.from_int(op.value).limbs)) | (1 << 255);
         }
-        self.memory[dest_index] = op.value;
+        self.setSlot(op.destination, op.value);
         self.pc += 1;
+        std.debug.print("({}) set slot {} = {}\n", .{
+            op.bit_size,
+            op.destination.resolve(self.memory),
+            op.value,
+        });
     }
 
     fn processIndirectConst(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.IndirectConst;
-        const dest_ptr_index = op.destination_pointer;
+        const dest_ptr_index = self.resolveSlot(op.destination_pointer);
         const dest_address = self.memory[dest_ptr_index];
         // TODO: Move to deserialize time. Convert to montgomery if a field so it happens just once.
         if (op.bit_size == BitSize.Field and (op.value & (1 << 255)) == 0) {
@@ -156,18 +161,23 @@ const BrilligVm = struct {
         }
         self.memory[@truncate(dest_address)] = op.value;
         self.pc += 1;
+        std.debug.print("({}) set slot {} = {}\n", .{
+            op.bit_size,
+            dest_address,
+            op.value,
+        });
     }
 
     fn processCalldatacopy(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.CalldataCopy;
-        const size: u64 = @truncate(self.memory[op.size_address]);
-        const offset: u64 = @truncate(self.memory[op.offset_address]);
+        const size: u64 = @truncate(self.getSlot(op.size_address));
+        const offset: u64 = @truncate(self.getSlot(op.offset_address));
         if (self.calldata.len < size) {
             self.trap();
             return;
         }
         for (0..size) |i| {
-            const addr = op.destination_address + i;
+            const addr = self.resolveSlot(op.destination_address) + i;
             const src_index = offset + i;
             // std.debug.print("copy {} to slot {}\n", .{ calldata[src_index], addr });
             self.memory[addr] = self.calldata[src_index];
@@ -179,12 +189,12 @@ const BrilligVm = struct {
         const op = &opcode.Cast;
         switch (op.bit_size) {
             .Integer => |int_size| {
-                root.bn254_fr_normalize(@ptrCast(&self.memory[op.source]));
+                root.bn254_fr_normalize(@ptrCast(self.getSlotAddr(op.source)));
                 const mask = (@as(u256, 1) << getBitSize(int_size)) - 1;
-                self.memory[op.destination] = self.memory[op.source] & mask;
+                self.setSlot(op.destination, self.getSlot(op.source) & mask);
             },
             .Field => {
-                self.memory[op.destination] = self.memory[op.source];
+                self.setSlot(op.destination, self.getSlot(op.source));
             },
         }
         self.pc += 1;
@@ -192,25 +202,33 @@ const BrilligVm = struct {
 
     fn processMov(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const mov = &opcode.Mov;
-        self.memory[mov.destination] = self.memory[mov.source];
+        self.setSlot(mov.destination, self.getSlot(mov.source));
         self.pc += 1;
+        std.debug.print("mov slot {} = {} (value: {})\n", .{
+            mov.source.resolve(self.memory),
+            mov.destination.resolve(self.memory),
+            self.getSlot(mov.source),
+        });
     }
 
     fn processCmov(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const mov = &opcode.ConditionalMov;
-        self.memory[mov.destination] = self.memory[if (self.memory[mov.condition] != 0) mov.source_a else mov.source_b];
+        self.setSlot(
+            mov.destination,
+            if (self.getSlot(mov.condition) != 0) self.getSlot(mov.source_a) else self.getSlot(mov.source_b),
+        );
         self.pc += 1;
     }
 
     fn processStore(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const store = &opcode.Store;
-        self.memory[@truncate(self.memory[store.destination_pointer])] = self.memory[store.source];
+        self.memory[@truncate(self.getSlot(store.destination_pointer))] = self.getSlot(store.source);
         self.pc += 1;
     }
 
     fn processLoad(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const load = &opcode.Load;
-        self.memory[load.destination] = self.memory[@truncate(self.memory[load.source_pointer])];
+        self.setSlot(load.destination, self.memory[@truncate(self.getSlot(load.source_pointer))]);
         self.pc += 1;
     }
 
@@ -231,47 +249,45 @@ const BrilligVm = struct {
 
     fn processJumpIf(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.JumpIf;
-        self.pc = if (self.memory[jmp.condition] == 1) jmp.location else self.pc + 1;
+        self.pc = if (self.getSlot(jmp.condition) == 1) jmp.location else self.pc + 1;
     }
 
     fn processJumpIfNot(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.JumpIfNot;
-        self.pc = if (self.memory[jmp.condition] == 0) jmp.location else self.pc + 1;
+        self.pc = if (self.getSlot(jmp.condition) == 0) jmp.location else self.pc + 1;
     }
 
     fn processNot(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const not = &opcode.Not;
-        self.memory[not.destination] = switch (not.bit_size) {
-            .U0 => unreachable,
+        self.setSlot(not.destination, switch (not.bit_size) {
             .U1 => self.unaryNot(u1, not),
             .U8 => self.unaryNot(u8, not),
             .U16 => self.unaryNot(u16, not),
             .U32 => self.unaryNot(u32, not),
             .U64 => self.unaryNot(u64, not),
             .U128 => self.unaryNot(u128, not),
-        };
+        });
         self.pc += 1;
     }
 
     fn processBinaryIntOp(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const int_op = &opcode.BinaryIntOp;
-        self.memory[int_op.destination] = switch (int_op.bit_size) {
-            .U0 => unreachable,
+        self.setSlot(int_op.destination, switch (int_op.bit_size) {
             .U1 => self.binaryIntOp(u1, opcode.BinaryIntOp),
             .U8 => self.binaryIntOp(u8, opcode.BinaryIntOp),
             .U16 => self.binaryIntOp(u16, opcode.BinaryIntOp),
             .U32 => self.binaryIntOp(u32, opcode.BinaryIntOp),
             .U64 => self.binaryIntOp(u64, opcode.BinaryIntOp),
             .U128 => self.binaryIntOp(u128, opcode.BinaryIntOp),
-        };
+        });
         self.pc += 1;
     }
 
     fn processBinaryFieldOp(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const field_op = &opcode.BinaryFieldOp;
-        const lhs = &self.memory[field_op.lhs];
-        const rhs = &self.memory[field_op.rhs];
-        const dest = &self.memory[field_op.destination];
+        const lhs = self.getSlotAddr(field_op.lhs);
+        const rhs = self.getSlotAddr(field_op.rhs);
+        const dest = self.getSlotAddr(field_op.destination);
         switch (field_op.op) {
             .Add => root.bn254_fr_add(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             .Mul => root.bn254_fr_mul(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
@@ -287,7 +303,6 @@ const BrilligVm = struct {
 
     fn processBlackbox(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const blackbox_op = &opcode.BlackBox;
-        const memory = self.memory;
 
         const idx = @intFromEnum(blackbox_op.*);
         self.counters[idx] += 1;
@@ -295,120 +310,120 @@ const BrilligVm = struct {
         switch (blackbox_op.*) {
             .Sha256Compression => |op| {
                 blackbox.blackbox_sha256_compression(
-                    @ptrCast(&memory[@truncate(memory[op.input.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.hash_values.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                    @ptrCast(self.getIndirectSlotAddr(op.input.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.hash_values.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
                 );
             },
             .Blake2s => |op| {
                 blackbox.blackbox_blake2s(
-                    @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-                    @truncate(memory[op.message.size]),
-                    @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                    @ptrCast(self.getIndirectSlotAddr(op.message.pointer)),
+                    @truncate(self.getSlot(op.message.size)),
+                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
                 );
             },
             .Blake3 => |op| {
                 blackbox.blackbox_blake3(
-                    @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-                    @truncate(memory[op.message.size]),
-                    @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                    @ptrCast(self.getIndirectSlotAddr(op.message.pointer)),
+                    @truncate(self.getSlot(op.message.size)),
+                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
                 );
             },
             .Keccakf1600 => |op| {
                 blackbox.blackbox_keccak1600(
-                    @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-                    @truncate(memory[op.message.size]),
-                    @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                    @ptrCast(self.getIndirectSlotAddr(op.message.pointer)),
+                    @truncate(self.getSlot(op.message.size)),
+                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
                 );
             },
             .Poseidon2Permutation => |op| {
                 blackbox.blackbox_poseidon2_permutation(
-                    @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
-                    @truncate(memory[op.message.size]),
+                    @ptrCast(self.getIndirectSlotAddr(op.message.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
+                    @truncate(self.getSlot(op.message.size)),
                 );
             },
             .PedersenCommitment => |op| {
                 blackbox.blackbox_pedersen_commit(
-                    @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
-                    @truncate(memory[op.inputs.size]),
-                    @truncate(memory[op.domain_separator]),
-                    @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                    @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
+                    @truncate(self.getSlot(op.inputs.size)),
+                    @truncate(self.getSlot(op.domain_separator)),
+                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
                 );
             },
             .PedersenHash => |op| {
                 blackbox.blackbox_pedersen_hash(
-                    @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
-                    @truncate(memory[op.inputs.size]),
-                    @truncate(memory[op.domain_separator]),
-                    @ptrCast(&memory[op.output]),
+                    @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
+                    @truncate(self.getSlot(op.inputs.size)),
+                    @truncate(self.getSlot(op.domain_separator)),
+                    @ptrCast(self.getSlotAddr(op.output)),
                 );
             },
             .ToRadix => |op| {
                 blackbox.blackbox_to_radix(
-                    @ptrCast(&memory[op.input]),
-                    @ptrCast(&memory[@truncate(memory[op.output.pointer])]),
+                    @ptrCast(self.getSlotAddr(op.input)),
+                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
                     op.output.size,
-                    @truncate(memory[op.radix]),
+                    @truncate(self.getSlot(op.radix)),
                 );
             },
             .AES128Encrypt => |op| {
                 blackbox.blackbox_aes_encrypt(
-                    @ptrCast(&memory[@truncate(memory[op.inputs.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.iv.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.key.pointer])]),
-                    @truncate(memory[op.inputs.size]),
-                    @ptrCast(&memory[@truncate(memory[op.outputs.pointer])]),
-                    @ptrCast(&memory[op.outputs.size]),
+                    @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.iv.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.key.pointer)),
+                    @truncate(self.getSlot(op.inputs.size)),
+                    @ptrCast(self.getIndirectSlotAddr(op.outputs.pointer)),
+                    @ptrCast(self.getSlotAddr(op.outputs.size)),
                 );
             },
             .EcdsaSecp256k1 => |op| {
                 blackbox.blackbox_secp256k1_verify_signature(
-                    @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
-                    @truncate(memory[op.hashed_msg.size]),
-                    @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
-                    @ptrCast(&memory[op.result]),
+                    @ptrCast(self.getIndirectSlotAddr(op.hashed_msg.pointer)),
+                    @truncate(self.getSlot(op.hashed_msg.size)),
+                    @ptrCast(self.getIndirectSlotAddr(op.public_key_x.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.public_key_y.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.signature.pointer)),
+                    @ptrCast(self.getSlotAddr(op.result)),
                 );
             },
             .EcdsaSecp256r1 => |op| {
                 blackbox.blackbox_secp256r1_verify_signature(
-                    @ptrCast(&memory[@truncate(memory[op.hashed_msg.pointer])]),
-                    @truncate(memory[op.hashed_msg.size]),
-                    @ptrCast(&memory[@truncate(memory[op.public_key_x.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.public_key_y.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
-                    @ptrCast(&memory[op.result]),
+                    @ptrCast(self.getIndirectSlotAddr(op.hashed_msg.pointer)),
+                    @truncate(self.getSlot(op.hashed_msg.size)),
+                    @ptrCast(self.getIndirectSlotAddr(op.public_key_x.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.public_key_y.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.signature.pointer)),
+                    @ptrCast(self.getSlotAddr(op.result)),
                 );
             },
             .SchnorrVerify => |op| {
                 blackbox.blackbox_schnorr_verify_signature(
-                    @ptrCast(&memory[@truncate(memory[op.message.pointer])]),
-                    @truncate(memory[op.message.size]),
-                    @ptrCast(&memory[op.public_key_x]),
-                    @ptrCast(&memory[op.public_key_y]),
-                    @ptrCast(&memory[@truncate(memory[op.signature.pointer])]),
-                    @ptrCast(&memory[op.result]),
+                    @ptrCast(self.getIndirectSlotAddr(op.message.pointer)),
+                    @truncate(self.getSlot(op.message.size)),
+                    @ptrCast(self.getSlotAddr(op.public_key_x)),
+                    @ptrCast(self.getSlotAddr(op.public_key_y)),
+                    @ptrCast(self.getIndirectSlotAddr(op.signature.pointer)),
+                    @ptrCast(self.getSlotAddr(op.result)),
                 );
             },
             .MultiScalarMul => |op| {
                 blackbox.blackbox_msm(
-                    @ptrCast(&memory[@truncate(memory[op.points.pointer])]),
-                    @truncate(memory[op.points.size]),
-                    @ptrCast(&memory[@truncate(memory[op.scalars.pointer])]),
-                    @ptrCast(&memory[@truncate(memory[op.outputs.pointer])]),
+                    @ptrCast(self.getIndirectSlotAddr(op.points.pointer)),
+                    @truncate(self.getSlot(op.points.size)),
+                    @ptrCast(self.getIndirectSlotAddr(op.scalars.pointer)),
+                    @ptrCast(self.getIndirectSlotAddr(op.outputs.pointer)),
                 );
             },
             .EmbeddedCurveAdd => |op| {
                 blackbox.blackbox_ecc_add(
-                    @ptrCast(&memory[op.input1_x]),
-                    @ptrCast(&memory[op.input1_y]),
-                    @ptrCast(&memory[op.input1_infinite]),
-                    @ptrCast(&memory[op.input2_x]),
-                    @ptrCast(&memory[op.input2_y]),
-                    @ptrCast(&memory[op.input2_infinite]),
-                    @ptrCast(&memory[@truncate(memory[op.result.pointer])]),
+                    @ptrCast(self.getSlotAddr(op.input1_x)),
+                    @ptrCast(self.getSlotAddr(op.input1_y)),
+                    @ptrCast(self.getSlotAddr(op.input1_infinite)),
+                    @ptrCast(self.getSlotAddr(op.input2_x)),
+                    @ptrCast(self.getSlotAddr(op.input2_y)),
+                    @ptrCast(self.getSlotAddr(op.input2_infinite)),
+                    @ptrCast(self.getIndirectSlotAddr(op.result.pointer)),
                 );
             },
             else => {
@@ -456,15 +471,15 @@ const BrilligVm = struct {
     }
 
     fn binaryIntOp(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
-        const lhs: int_type = @truncate(self.memory[op.lhs]);
-        const rhs: int_type = @truncate(self.memory[op.rhs]);
+        const lhs: int_type = @truncate(self.getSlot(op.lhs));
+        const rhs: int_type = @truncate(self.getSlot(op.rhs));
         const bit_size = @bitSizeOf(int_type);
         const r = switch (op.op) {
             .Add => lhs +% rhs,
             .Sub => lhs -% rhs,
-            .Div => if (rhs != 0) lhs / rhs else {
+            .Div => if (rhs != 0) lhs / rhs else blk: {
                 self.trap();
-                return 0;
+                break :blk 0;
             },
             .Mul => lhs *% rhs,
             .And => lhs & rhs,
@@ -476,16 +491,35 @@ const BrilligVm = struct {
             .LessThan => @intFromBool(lhs < rhs),
             .LessThanEquals => @intFromBool(lhs <= rhs),
         };
-        // std.debug.print("{} op {} = {}\n", .{ lhs, rhs, r });
+        std.debug.print("{} op {} = {}\n", .{ lhs, rhs, r });
         return r;
     }
 
-    fn unaryNot(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
-        const rhs: int_type = @truncate(~self.memory[op.source]);
-        return rhs;
+    inline fn unaryNot(self: *BrilligVm, comptime int_type: type, op: anytype) int_type {
+        return @truncate(~self.memory[op.source.resolve(self.memory)]);
     }
 
-    fn trap(self: *BrilligVm) void {
+    inline fn resolveSlot(self: *BrilligVm, mem_address: io.MemoryAddress) usize {
+        return mem_address.resolve(self.memory);
+    }
+
+    inline fn getSlot(self: *BrilligVm, mem_address: io.MemoryAddress) u256 {
+        return self.memory[mem_address.resolve(self.memory)];
+    }
+
+    inline fn getSlotAddr(self: *BrilligVm, mem_address: io.MemoryAddress) *align(32) u256 {
+        return &self.memory[mem_address.resolve(self.memory)];
+    }
+
+    inline fn getIndirectSlotAddr(self: *BrilligVm, mem_address: io.MemoryAddress) *align(32) u256 {
+        return &self.memory[@truncate(self.getSlot(mem_address))];
+    }
+
+    inline fn setSlot(self: *BrilligVm, mem_address: io.MemoryAddress, value: u256) void {
+        self.memory[mem_address.resolve(self.memory)] = value;
+    }
+
+    inline fn trap(self: *BrilligVm) void {
         self.trapped = true;
         self.halted = true;
     }
@@ -493,7 +527,6 @@ const BrilligVm = struct {
 
 fn getBitSize(int_size: io.IntegerBitSize) u8 {
     return switch (int_size) {
-        .U0 => unreachable,
         .U1 => 1,
         .U8 => 8,
         .U16 => 16,

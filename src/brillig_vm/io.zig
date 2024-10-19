@@ -7,7 +7,33 @@ const Bn254Fr = @import("../bn254/fr.zig").Fr;
 //     opcodes: []Opcodes,
 // };
 
-const MemoryAddress = u64;
+// const MemoryAddress = u64;
+
+// const MemoryAddress = union(enum) {
+//     Direct: u64,
+//     Relative: u64,
+// };
+
+pub const MemoryAddress = struct {
+    relative: u32,
+    value: u64,
+
+    pub fn format(self: MemoryAddress, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        if (self.relative == 1) {
+            try writer.print("+{}", .{self.value});
+        } else {
+            try writer.print("{}", .{self.value});
+        }
+    }
+
+    pub inline fn resolve(self: MemoryAddress, mem: []u256) usize {
+        if (self.relative == 1) {
+            return @as(usize, @truncate(mem[0])) + self.value;
+        } else {
+            return self.value;
+        }
+    }
+};
 
 const HeapArray = struct {
     pointer: MemoryAddress,
@@ -64,7 +90,6 @@ const BinaryIntOp = enum {
 };
 
 pub const IntegerBitSize = enum {
-    U0,
     U1,
     U8,
     U16,
@@ -125,10 +150,6 @@ pub const BlackBoxOp = union(enum) {
         output: HeapArray,
     },
     Blake3: struct {
-        message: HeapVector,
-        output: HeapArray,
-    },
-    Keccak256: struct {
         message: HeapVector,
         output: HeapArray,
     },
@@ -378,7 +399,8 @@ pub fn load(allocator: std.mem.Allocator, file_path: ?[]const u8) ![]BrilligOpco
 
     // Temp hack to locate start of brillig.
     // Assume first opcode is always the same.
-    const find: [32]u8 = @bitCast(@byteSwap(@as(u256, 0x0900000002000000000000000100000004000000400000000000000030303030)));
+    // const find: [32]u8 = @bitCast(@byteSwap(@as(u256, 0x0900000002000000000000000100000003000000400000000000000030303030)));
+    const find: [32]u8 = @bitCast(@byteSwap(@as(u256, 0x0900000000000000020000000000000001000000030000004000000000000000)));
     const start = std.mem.indexOf(u8, serialized_data, find[0..]) orelse return error.FirstOpcodeNotFound;
     // std.debug.print("First opcode found at: {x}\n", .{start});
 
