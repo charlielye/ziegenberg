@@ -51,7 +51,7 @@ pub fn execute(options: ExecuteOptions) !void {
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 const BrilligVm = struct {
-    const mem_size = 1024 * 1024;
+    const mem_size = 1024 * 1024 * 32;
     // const mem_size = 1024 * 1024 * 256;
     // const mem_size = 1024 * 1024 * (512 + 128);
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) void{
@@ -93,12 +93,8 @@ const BrilligVm = struct {
             .counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).Union.fields.len]usize),
         };
 
-        // Advise huge pages.
-        // try std.posix.madvise(@ptrCast(vm.memory.ptr), mem_size * 32, std.posix.MADV.HUGEPAGE);
-        // std.debug.print("Memory allocated with Transparent Huge Pages enabled {}\n", .{mem_size * 32});
-
         // Lock the allocated memory in RAM using mlock.
-        // This is really so we can perf test execution without is polluting the callstacks with page faults.
+        // This is really so we can perf test execution without polluting the callstacks with page faults.
         // It's worse performance overall.
         // const mlock_result = mlock(@ptrCast(vm.memory.ptr), mem_size * 32);
         // if (mlock_result != 0) {
@@ -116,11 +112,12 @@ const BrilligVm = struct {
     }
 
     pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode, show_trace: bool) !void {
-        while (!self.halted and self.ops_executed < 1000) {
+        while (!self.halted) {
             const opcode = &opcodes[self.pc];
 
             if (show_trace) {
-                std.debug.print("{:0>4}: {:0>4}: {any}\n", .{ self.ops_executed, self.pc, opcode });
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("{:0>4}: {:0>4}: {any}\n", .{ self.ops_executed, self.pc, opcode });
             }
 
             const i = @intFromEnum(opcode.*);
@@ -144,11 +141,11 @@ const BrilligVm = struct {
         }
         self.setSlot(op.destination, op.value);
         self.pc += 1;
-        std.debug.print("({}) set slot {} = {}\n", .{
-            op.bit_size,
-            op.destination.resolve(self.memory),
-            op.value,
-        });
+        // std.debug.print("({}) set slot {} = {}\n", .{
+        //     op.bit_size,
+        //     op.destination.resolve(self.memory),
+        //     op.value,
+        // });
     }
 
     fn processIndirectConst(self: *BrilligVm, opcode: *BrilligOpcode) void {
@@ -161,11 +158,11 @@ const BrilligVm = struct {
         }
         self.memory[@truncate(dest_address)] = op.value;
         self.pc += 1;
-        std.debug.print("({}) set slot {} = {}\n", .{
-            op.bit_size,
-            dest_address,
-            op.value,
-        });
+        // std.debug.print("({}) set slot {} = {}\n", .{
+        //     op.bit_size,
+        //     dest_address,
+        //     op.value,
+        // });
     }
 
     fn processCalldatacopy(self: *BrilligVm, opcode: *BrilligOpcode) void {
@@ -204,11 +201,11 @@ const BrilligVm = struct {
         const mov = &opcode.Mov;
         self.setSlot(mov.destination, self.getSlot(mov.source));
         self.pc += 1;
-        std.debug.print("mov slot {} = {} (value: {})\n", .{
-            mov.source.resolve(self.memory),
-            mov.destination.resolve(self.memory),
-            self.getSlot(mov.source),
-        });
+        // std.io.getStdOut().writer().print("mov slot {} = {} (value: {})\n", .{
+        //     mov.source.resolve(self.memory),
+        //     mov.destination.resolve(self.memory),
+        //     self.getSlot(mov.source),
+        // }) catch unreachable;
     }
 
     fn processCmov(self: *BrilligVm, opcode: *BrilligOpcode) void {
@@ -230,6 +227,11 @@ const BrilligVm = struct {
         const load = &opcode.Load;
         self.setSlot(load.destination, self.memory[@truncate(self.getSlot(load.source_pointer))]);
         self.pc += 1;
+        // std.io.getStdOut().writer().print("load slot {} = {} (value: {})\n", .{
+        //     load.destination.resolve(self.memory),
+        //     self.memory[load.source_pointer.resolve(self.memory)],
+        //     self.memory[@truncate(self.memory[load.source_pointer.resolve(self.memory)])],
+        // }) catch unreachable;
     }
 
     fn processCall(self: *BrilligVm, opcode: *BrilligOpcode) void {
@@ -259,6 +261,7 @@ const BrilligVm = struct {
 
     fn processNot(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const not = &opcode.Not;
+        // std.io.getStdOut().writer().print("{} = ", .{self.getSlot(not.source)}) catch unreachable;
         self.setSlot(not.destination, switch (not.bit_size) {
             .U1 => self.unaryNot(u1, not),
             .U8 => self.unaryNot(u8, not),
@@ -267,6 +270,7 @@ const BrilligVm = struct {
             .U64 => self.unaryNot(u64, not),
             .U128 => self.unaryNot(u128, not),
         });
+        // std.io.getStdOut().writer().print("{}\n", .{self.getSlot(not.destination)}) catch unreachable;
         self.pc += 1;
     }
 
@@ -491,7 +495,7 @@ const BrilligVm = struct {
             .LessThan => @intFromBool(lhs < rhs),
             .LessThanEquals => @intFromBool(lhs <= rhs),
         };
-        std.debug.print("{} op {} = {}\n", .{ lhs, rhs, r });
+        // std.io.getStdOut().writer().print("({}) {} op {} = {}\n", .{ int_type, lhs, rhs, r }) catch unreachable;
         return r;
     }
 

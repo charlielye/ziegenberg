@@ -9,6 +9,7 @@ NC='\033[0m'
 BYTECODE_PATH=$1
 VM=${VM:-bvm}
 VERBOSE=${VERBOSE:-0}
+FAIL_FAST=${FAIL_FAST:-0}
 
 test_name="$(basename $BYTECODE_PATH .bytecode | awk '{ if (length($0) > 80) print substr($0, 1, 40) "..." substr($0, length($0)-40+1); else print $0 }')"
 
@@ -24,7 +25,9 @@ function run_cmd() {
       ;;
     "avm")
       cat $1 | ./zig-out/bin/zb bvm dis -b | ~/aztec-repos/aztec-packages/avm-transpiler/target/release/avm-transpiler 2>/dev/null | ./zig-out/bin/zb avm run $zb_args
-      return $?
+      statuses=("${PIPESTATUS[@]}")
+      [ ${statuses[2]} -ne 0 ] && return 4
+      return ${statuses[3]}
       ;;
     *)
       echo "Unknown vm."
@@ -38,14 +41,19 @@ should="${SHOULD:-${test_name##*.}}"
 set +e
 output=$(run_cmd $BYTECODE_PATH $VERBOSE 2>&1 1>/dev/tty)
 result=$?
+set -e
 if { [[ $result -ne 0 && "$should" == "pass" ]]; } || \
    { [[ $result -ne 2 && "$should" == "fail" ]]; } || \
    echo "$output" | grep -qi "segmentation fault"
 then
-  echo -e "$test_name: ${RED}FAILED${NC}"
-  run_cmd $BYTECODE_PATH 1
-  exit 1
+  case $result in
+    3) echo -e "$test_name: ${RED}UNIMPLEMENTED${NC}";;
+    4) echo -e "$test_name: ${YELLOW}TRANSPILE FAILED${NC}";;
+    *) echo -e "$test_name: ${RED}FAILED${NC}"
+       [ "$FAIL_FAST" -eq 1 ] && run_cmd $BYTECODE_PATH 1
+       ;;
+  esac
+  exit $result
 fi
-set -e
 
 echo -e "$test_name: ${GREEN}PASSED${NC} ($(echo "$output" | grep 'time taken' | sed 's/time taken: //'))"

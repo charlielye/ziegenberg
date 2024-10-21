@@ -12,7 +12,7 @@ zig build $zig_args || exit 1
 
 SECONDS=0
 [ "$FAIL_FAST" -eq 1 ] && parallel_args+=" --halt now,fail=1 -j 1" || parallel_args=""
-find $BYTECODES -name "*.bytecode" | parallel $parallel_args --joblog parallel.log ./run-test.sh {}
+find $BYTECODES -name "*.bytecode" | parallel $parallel_args --joblog parallel.log --timeout 3 ./run-test.sh {}
 code=$?
 
 RED='\033[0;31m'
@@ -24,7 +24,8 @@ echo
 echo "Summary:"
 echo -e "   Time: ${SECONDS}s"
 echo -e "Success: ${GREEN}$(cat parallel.log | tail -n +2 | awk '$7 == 0' | wc -l)${NC}"
-echo -e " Failed: ${RED}$(cat parallel.log | tail -n +2 | awk '$7 != 0' | wc -l)${NC}"
+echo -e "Skipped: ${YELLOW}$(cat parallel.log | tail -n +2 | awk '$7 == 4' | wc -l)${NC}"
+echo -e " Failed: ${RED}$(cat parallel.log | tail -n +2 | awk '$7 == 1 || $7 == 2 || $7 > 4' | wc -l)${NC}"
 
 rm parallel.log
 

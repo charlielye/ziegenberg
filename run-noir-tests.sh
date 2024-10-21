@@ -1,8 +1,10 @@
 #!/bin/bash
+set -u
 shopt -s extglob
 
 NARGO=${NARGO:-0}
 NOIR_REPO=~/aztec-repos/aztec-packages/noir/noir-repo
+FAIL_FAST=${FAIL_FAST:-0}
 
 # regression_4709: Produces so much bytecode it's too slow to wait for (and segfaults as needs tonnes of mem).
 # is_unconstrained: Fails because it expects main to be constrained, but we force all programs to be unconstrained.
@@ -16,6 +18,6 @@ if [ "$NARGO" -eq 1 ]; then
 fi
 
 ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_success
-[ $? -ne 0 ] && [ "$FAIL_FAST" -eq 1 ] && exit 1
+[ "$?" -ne 0 ] && [ "$FAIL_FAST" -eq 1 ] && exit 1
 echo
 SHOULD=fail ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_failure

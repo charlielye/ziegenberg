@@ -1,6 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const deserializeOpcodes = @import("io.zig").deserializeOpcodes;
-const AvmOpcode = @import("io.zig").AvmOpcode;
+const AvmOpcode = @import("io.zig").AvmOpcode32;
 const io = @import("io.zig");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const blackbox = @import("../blackbox/blackbox.zig");
@@ -54,7 +55,7 @@ extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 const AztecVm = struct {
     // const mem_size = 1024 * 1024 * 250;
-    const mem_size = 1024 * 1024;
+    const mem_size = 1024 * 1024 * 32;
     memory: []align(4096) u256,
     memory_tags: []align(4096) io.Tag,
     calldata: []u256,
@@ -86,8 +87,10 @@ const AztecVm = struct {
         // }
         // std.debug.print("Mem locked.\n", .{});
 
-        @memset(vm.memory, 0);
-        @memset(vm.memory_tags, io.Tag.FF);
+        // @memset(vm.memory, 0);
+        if (builtin.mode == .Debug) {
+            @memset(vm.memory_tags, io.Tag.UNSET);
+        }
         return vm;
     }
 
@@ -96,7 +99,7 @@ const AztecVm = struct {
     }
 
     pub fn executeVm(self: *AztecVm, opcodes: []AvmOpcode, show_trace: bool) !void {
-        while (!self.halted and self.ops_executed < 1000) {
+        while (!self.halted) {
             const opcode = &opcodes[self.pc];
 
             if (show_trace) {
@@ -105,42 +108,36 @@ const AztecVm = struct {
             }
 
             switch (opcode.*) {
-                .SET_8 => |op| self.processSet(op),
-                .SET_16 => |op| self.processSet(op),
-                .SET_32 => |op| self.processSet(op),
-                .SET_64 => |op| self.processSet(op),
-                .SET_128 => |op| self.processSet(op),
-                .SET_FF => |op| self.processSet(op),
-                .MOV_8 => |op| self.processMov(op),
-                .MOV_16 => |op| self.processMov(op),
-                .CAST_8 => |op| self.processCast(op),
-                .CAST_16 => |op| self.processCast(op),
+                .SET8 => |op| self.processSet(op),
+                .SET16 => |op| self.processSet(op),
+                .SET32 => |op| self.processSet(op),
+                .SET64 => |op| self.processSet(op),
+                .SET128 => |op| self.processSet(op),
+                .SETFF => |op| self.processSet(op),
+                .MOV => |op| self.processMov(op),
+                .CAST => |op| self.processCast(op),
                 .CALLDATACOPY => |op| self.processCalldatacopy(op),
                 .INTERNALCALL => |op| {
                     try self.callstack.append(self.pc);
                     self.pc = op.address - 1;
                 },
                 .INTERNALRETURN => self.pc = self.callstack.pop(),
-                .EQ_8 => |op| self.binaryOp(opcode, op),
-                .EQ_16 => |op| self.binaryOp(opcode, op),
-                .LT_8 => |op| self.binaryOp(opcode, op),
-                .LT_16 => |op| self.binaryOp(opcode, op),
-                .LTE_8 => |op| self.binaryOp(opcode, op),
-                .LTE_16 => |op| self.binaryOp(opcode, op),
-                .ADD_8 => |op| self.binaryOp(opcode, op),
-                .ADD_16 => |op| self.binaryOp(opcode, op),
-                .SUB_8 => |op| self.binaryOp(opcode, op),
-                .SUB_16 => |op| self.binaryOp(opcode, op),
-                .MUL_8 => |op| self.binaryOp(opcode, op),
-                .MUL_16 => |op| self.binaryOp(opcode, op),
-                .DIV_8 => |op| self.binaryOp(opcode, op),
-                .DIV_16 => |op| self.binaryOp(opcode, op),
-                .FDIV_8 => |op| self.binaryOp(opcode, op),
-                .FDIV_16 => |op| self.binaryOp(opcode, op),
-                .NOT_8 => |op| self.unaryOp(opcode, op),
-                .NOT_16 => |op| self.unaryOp(opcode, op),
-                .JUMP_16 => |op| self.pc = op.address - 1,
-                .JUMPI_16 => |o| {
+                .EQ => |op| self.binaryOp(opcode, op),
+                .LT => |op| self.binaryOp(opcode, op),
+                .LTE => |op| self.binaryOp(opcode, op),
+                .ADD => |op| self.binaryOp(opcode, op),
+                .SUB => |op| self.binaryOp(opcode, op),
+                .MUL => |op| self.binaryOp(opcode, op),
+                .DIV => |op| self.binaryOp(opcode, op),
+                .FDIV => |op| self.binaryOp(opcode, op),
+                .AND => |op| self.binaryOp(opcode, op),
+                .OR => |op| self.binaryOp(opcode, op),
+                .SHL => |op| self.binaryOp(opcode, op),
+                .SHR => |op| self.binaryOp(opcode, op),
+                .XOR => |op| self.binaryOp(opcode, op),
+                .NOT => |op| self.unaryOp(opcode, op),
+                .JUMP => |op| self.pc = op.address - 1,
+                .JUMPI => |o| {
                     const op = self.derefOpcodeSlots(@TypeOf(o), o);
                     if (self.memory[op.condition_slot] != 0) {
                         self.pc = op.address - 1;
@@ -160,7 +157,7 @@ const AztecVm = struct {
                     self.memory[op.dst_slot] = self.storage.get(self.memory[op.slot_slot]) orelse 0;
                     self.memory_tags[op.dst_slot] = io.Tag.FF;
                 },
-                .GETENVVAR_16 => |o| {
+                .GETENVVAR => |o| {
                     const op = self.derefOpcodeSlots(@TypeOf(o), o);
                     // TODO.
                     self.memory[op.dst_slot] = 0;
@@ -173,10 +170,90 @@ const AztecVm = struct {
                         op.num_limbs,
                         @truncate(self.memory[op.radix_slot]),
                     );
+                    if (o.output_bits == 1) {
+                        @memset(self.memory_tags[op.dst_slot .. op.dst_slot + op.num_limbs], io.Tag.U1);
+                    } else {
+                        @memset(self.memory_tags[op.dst_slot .. op.dst_slot + op.num_limbs], io.Tag.U8);
+                    }
                 },
-                .REVERT_8, .REVERT_16 => {
+                .SHA256COMPRESSION => |o| {
+                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
+                    blackbox.blackbox_sha256_compression(
+                        @ptrCast(&self.memory[op.inputs_slot]),
+                        @ptrCast(&self.memory[op.state_slot]),
+                        @ptrCast(&self.memory[op.output_slot]),
+                    );
+                    @memset(self.memory_tags[op.output_slot .. op.output_slot + 16], io.Tag.U32);
+                },
+                .MSM => |o| {
+                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
+                    blackbox.blackbox_msm(
+                        @ptrCast(&self.memory[op.points_slot]),
+                        @truncate(self.memory[op.size_slot]),
+                        @ptrCast(&self.memory[op.scalars_slot]),
+                        @ptrCast(&self.memory[op.dst_slot]),
+                    );
+                    self.memory_tags[op.dst_slot] = io.Tag.FF;
+                    self.memory_tags[op.dst_slot + 1] = io.Tag.FF;
+                    self.memory_tags[op.dst_slot + 2] = io.Tag.U1;
+                },
+                .ECADD => |o| {
+                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
+                    blackbox.blackbox_ecc_add(
+                        @ptrCast(&self.memory[op.lhs_x_slot]),
+                        @ptrCast(&self.memory[op.lhs_y_slot]),
+                        @ptrCast(&self.memory[op.lhs_inf_slot]),
+                        @ptrCast(&self.memory[op.rhs_x_slot]),
+                        @ptrCast(&self.memory[op.rhs_y_slot]),
+                        @ptrCast(&self.memory[op.rhs_inf_slot]),
+                        @ptrCast(&self.memory[op.dst_slot]),
+                    );
+                    self.memory_tags[op.dst_slot] = io.Tag.FF;
+                    self.memory_tags[op.dst_slot + 1] = io.Tag.FF;
+                    self.memory_tags[op.dst_slot + 2] = io.Tag.U1;
+                },
+                .KECCAKF1600 => |o| {
+                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
+                    blackbox.blackbox_keccak1600(
+                        @ptrCast(&self.memory[op.msg_slot]),
+                        @truncate(self.memory[op.size_slot]),
+                        @ptrCast(&self.memory[op.dst_slot]),
+                    );
+                    @memset(self.memory_tags[op.dst_slot .. op.dst_slot + 25], io.Tag.U64);
+                },
+                .PEDERSEN => |o| {
+                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
+                    blackbox.blackbox_pedersen_hash(
+                        @ptrCast(&self.memory[op.msg_slot]),
+                        @truncate(self.memory[op.size_slot]),
+                        @truncate(self.memory[op.index_slot]),
+                        @ptrCast(&self.memory[op.dest_slot]),
+                    );
+                    self.memory_tags[op.dest_slot] = io.Tag.FF;
+                },
+                .PEDERSENCOMMITMENT => |o| {
+                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
+                    blackbox.blackbox_pedersen_commit(
+                        @ptrCast(&self.memory[op.msg_slot]),
+                        @truncate(self.memory[op.size_slot]),
+                        @truncate(self.memory[op.index_slot]),
+                        @ptrCast(&self.memory[op.dest_slot]),
+                    );
+                    @memset(self.memory_tags[op.dest_slot .. op.dest_slot + 2], io.Tag.FF);
+                },
+                .POSEIDON2 => |o| {
+                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
+                    blackbox.blackbox_poseidon2_permutation(
+                        @ptrCast(&self.memory[op.input_slot]),
+                        @ptrCast(&self.memory[op.output_slot]),
+                        0,
+                    );
+                    @memset(self.memory_tags[op.output_slot .. op.output_slot + 4], io.Tag.FF);
+                },
+                .REVERT => {
                     self.trap();
                 },
+                .NOOP => {},
                 else => {
                     std.debug.print("Unimplemented: {any}\n", .{opcode.*});
                     return error.Unimplemented;
@@ -220,25 +297,12 @@ const AztecVm = struct {
         return opcode;
     }
 
-    // fn getSlot(self: *AztecVm, )
-
     fn processSet(self: *AztecVm, opcode: anytype) void {
         const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
         self.memory[op.dst_slot] = op.value;
         self.memory_tags[op.dst_slot] = op.tag;
+        // std.io.getStdOut().writer().print("{} = {}\n", .{ op.dst_slot, op.tag }) catch unreachable;
         // std.debug.print("({}) set slot {} = {}\n", .{ op.tag, op.dst_slot, op.value });
-    }
-
-    fn processMov(self: *AztecVm, opcode: anytype) void {
-        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        self.memory[op.dst_slot] = self.memory[op.src_slot];
-        self.memory_tags[op.dst_slot] = self.memory_tags[op.src_slot];
-        // std.debug.print("({}) mov slot {} = {} (value: {})\n", .{
-        //     self.memory_tags[op.src_slot],
-        //     op.src_slot,
-        //     op.dst_slot,
-        //     self.memory[op.src_slot],
-        // });
     }
 
     fn processCast(self: *AztecVm, opcode: anytype) void {
@@ -250,6 +314,7 @@ const AztecVm = struct {
         const mask = getBitMask(op.tag);
         self.memory[op.op2_slot] = self.memory[op.op1_slot] & mask;
         self.memory_tags[op.op2_slot] = op.tag;
+        // std.io.getStdOut().writer().print("{} = {}\n", .{ op.op2_slot, op.tag }) catch unreachable;
     }
 
     fn processCalldatacopy(self: *AztecVm, opcode: anytype) void {
@@ -267,11 +332,33 @@ const AztecVm = struct {
             // std.debug.print("copy {} to slot {}\n", .{ self.calldata[src_index], addr });
             self.memory[addr] = self.calldata[src_index];
             self.memory_tags[addr] = io.Tag.FF;
+            // std.io.getStdOut().writer().print("{} = {}\n", .{ addr, io.Tag.FF }) catch unreachable;
         }
+    }
+
+    fn processMov(self: *AztecVm, opcode: anytype) void {
+        const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
+        // std.io.getStdOut().writer().print("{any} tag: {} value: {}\n", .{
+        //     op,
+        //     self.memory_tags[op.src_slot],
+        //     self.memory[op.src_slot],
+        // }) catch unreachable;
+        std.debug.assert(self.memory_tags[op.src_slot] != io.Tag.UNSET);
+        self.memory[op.dst_slot] = self.memory[op.src_slot];
+        self.memory_tags[op.dst_slot] = self.memory_tags[op.src_slot];
+        // std.debug.print("({}) mov slot {} = {} (value: {})\n", .{
+        //     self.memory_tags[op.src_slot],
+        //     op.src_slot,
+        //     op.dst_slot,
+        //     self.memory[op.src_slot],
+        // });
     }
 
     fn unaryOp(self: *AztecVm, opcode_union: *AvmOpcode, opcode: anytype) void {
         const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
+        std.debug.assert(self.memory_tags[op.op1_slot] != io.Tag.UNSET);
+        // const stdout = std.io.getStdOut().writer();
+        // stdout.print("({}) op {} = {}\n", .{ self.memory_tags[op.op1_slot], op.op1_slot, op.op2_slot }) catch unreachable;
         switch (self.memory_tags[op.op1_slot]) {
             .U1 => self.unaryIntOp(u1, opcode_union, op),
             .U8 => self.unaryIntOp(u8, opcode_union, op),
@@ -279,23 +366,35 @@ const AztecVm = struct {
             .U32 => self.unaryIntOp(u32, opcode_union, op),
             .U64 => self.unaryIntOp(u64, opcode_union, op),
             .U128 => self.unaryIntOp(u128, opcode_union, op),
+            .UNSET => unreachable,
             else => unreachable,
         }
         self.memory_tags[op.op2_slot] = self.memory_tags[op.op1_slot];
+        // std.io.getStdOut().writer().print("{} from {} = {}\n", .{ op.op2_slot, op.op1_slot, self.memory_tags[op.op2_slot] }) catch unreachable;
     }
 
     fn unaryIntOp(self: *AztecVm, comptime int_type: type, opcode_union: *AvmOpcode, opcode: anytype) void {
         const lhs: int_type = @truncate(self.memory[opcode.op1_slot]);
         const r: int_type = switch (opcode_union.*) {
-            .NOT_8, .NOT_16 => @truncate(~lhs),
+            .NOT => @truncate(~lhs),
             else => unreachable,
         };
         self.memory[opcode.op2_slot] = r;
-        // std.debug.print("({}) op {} = {}\n", .{ int_type, lhs, r });
+        // std.io.getStdOut().writer().print("({}) op {} = {}\n", .{ int_type, lhs, r }) catch unreachable;
     }
 
     fn binaryOp(self: *AztecVm, opcode_union: *AvmOpcode, opcode: anytype) void {
         const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
+        // std.io.getStdOut().writer().print("{} = {}({}) op {}({})\n", .{
+        //     op.op3_slot,
+        //     self.memory_tags[op.op1_slot],
+        //     op.op1_slot,
+        //     self.memory_tags[op.op2_slot],
+        //     op.op2_slot,
+        // }) catch unreachable;
+        std.debug.assert(self.memory_tags[op.op1_slot] != io.Tag.UNSET);
+        std.debug.assert(self.memory_tags[op.op2_slot] != io.Tag.UNSET);
+        std.debug.assert(self.memory_tags[op.op1_slot] == self.memory_tags[op.op2_slot]);
         switch (self.memory_tags[op.op1_slot]) {
             .FF => self.binaryFieldOp(opcode_union, op),
             .U1 => self.binaryIntOp(u1, opcode_union, op),
@@ -304,11 +403,12 @@ const AztecVm = struct {
             .U32 => self.binaryIntOp(u32, opcode_union, op),
             .U64 => self.binaryIntOp(u64, opcode_union, op),
             .U128 => self.binaryIntOp(u128, opcode_union, op),
+            .UNSET => unreachable,
         }
-        switch (opcode_union.*) {
-            .EQ_8, .EQ_16, .LT_8, .LT_16, .LTE_8, .LTE_16 => self.memory_tags[op.op3_slot] = io.Tag.U1,
-            else => self.memory_tags[op.op3_slot] = self.memory_tags[op.op1_slot],
-        }
+        self.memory_tags[op.op3_slot] = switch (opcode_union.*) {
+            .EQ, .LT, .LTE => io.Tag.U1,
+            else => self.memory_tags[op.op1_slot],
+        };
     }
 
     fn binaryFieldOp(self: *AztecVm, opcode_union: *AvmOpcode, opcode: anytype) void {
@@ -316,13 +416,13 @@ const AztecVm = struct {
         const rhs = &self.memory[opcode.op2_slot];
         const dest = &self.memory[opcode.op3_slot];
         switch (opcode_union.*) {
-            .ADD_8, .ADD_16 => fieldOps.bn254_fr_add(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-            .MUL_8, .MUL_16 => fieldOps.bn254_fr_mul(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-            .SUB_8, .SUB_16 => fieldOps.bn254_fr_sub(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-            .FDIV_8, .FDIV_16 => if (!fieldOps.bn254_fr_div(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest))) self.trap(),
-            .EQ_8, .EQ_16 => fieldOps.bn254_fr_eq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-            .LT_8, .LT_16 => fieldOps.bn254_fr_lt(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-            .LTE_8, .LTE_16 => fieldOps.bn254_fr_leq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .ADD => fieldOps.bn254_fr_add(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .MUL => fieldOps.bn254_fr_mul(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .SUB => fieldOps.bn254_fr_sub(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .FDIV => if (!fieldOps.bn254_fr_div(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest))) self.trap(),
+            .EQ => fieldOps.bn254_fr_eq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .LT => fieldOps.bn254_fr_lt(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
+            .LTE => fieldOps.bn254_fr_leq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             else => unreachable,
         }
         // std.debug.print("(ff) {} op {} = {}\n", .{ lhs.*, rhs.*, dest.* });
@@ -333,31 +433,26 @@ const AztecVm = struct {
         const rhs: int_type = @truncate(self.memory[opcode.op2_slot]);
         const bit_size = @bitSizeOf(int_type);
         const r: int_type = switch (opcode_union.*) {
-            .ADD_8, .ADD_16 => lhs +% rhs,
-            .SUB_8, .SUB_16 => lhs -% rhs,
-            .DIV_8, .DIV_16 => if (rhs != 0) lhs / rhs else blk: {
+            .ADD => lhs +% rhs,
+            .SUB => lhs -% rhs,
+            .DIV => if (rhs != 0) lhs / rhs else blk: {
                 self.trap();
                 break :blk 0;
             },
-            .MUL_8, .MUL_16 => lhs *% rhs,
-            .AND_8, .AND_16 => lhs & rhs,
-            .OR_8, .OR_16 => lhs | rhs,
-            .XOR_8, .XOR_16 => lhs ^ rhs,
-            .SHL_8, .SHL_16 => if (rhs < bit_size) lhs << @truncate(rhs) else 0,
-            .SHR_8, .SHR_16 => if (rhs < bit_size) lhs >> @truncate(rhs) else 0,
-            .EQ_8, .EQ_16 => @intFromBool(lhs == rhs),
-            .LT_8, .LT_16 => @intFromBool(lhs < rhs),
-            .LTE_8, .LTE_16 => @intFromBool(lhs <= rhs),
+            .MUL => lhs *% rhs,
+            .AND => lhs & rhs,
+            .OR => lhs | rhs,
+            .XOR => lhs ^ rhs,
+            .SHL => if (rhs < bit_size) lhs << @truncate(rhs) else 0,
+            .SHR => if (rhs < bit_size) lhs >> @truncate(rhs) else 0,
+            .EQ => @intFromBool(lhs == rhs),
+            .LT => @intFromBool(lhs < rhs),
+            .LTE => @intFromBool(lhs <= rhs),
             else => unreachable,
         };
         self.memory[opcode.op3_slot] = r;
-        // std.debug.print("({}) {} op {} = {}\n", .{ int_type, lhs, rhs, r });
+        // std.io.getStdOut().writer().print("({}) {} op {} = {}\n", .{ int_type, lhs, rhs, r }) catch unreachable;
     }
-
-    // fn unaryNot(self: *AztecVm, comptime int_type: type, op: anytype) int_type {
-    //     const rhs: int_type = @truncate(~self.memory[op.source]);
-    //     return rhs;
-    // }
 
     pub fn dumpMem(self: *AztecVm, n: usize, offset: usize) void {
         for (offset..offset + n) |i| {
@@ -371,17 +466,6 @@ const AztecVm = struct {
     }
 };
 
-fn getBitSize(int_size: io.Tag) u8 {
-    return switch (int_size) {
-        .U1 => 1,
-        .U8 => 8,
-        .U16 => 16,
-        .U32 => 32,
-        .U64 => 64,
-        .U128 => 128,
-    };
-}
-
 fn getBitMask(int_size: io.Tag) u256 {
     return switch (int_size) {
         .U1 => 0x1,
@@ -391,5 +475,6 @@ fn getBitMask(int_size: io.Tag) u256 {
         .U64 => 0xFFFFFFFFFFFFFFFF,
         .U128 => 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF,
         .FF => 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF,
+        .UNSET => unreachable,
     };
 }
