@@ -78,8 +78,8 @@ const BrilligVm = struct {
     };
     memory: []align(4096) u256,
     calldata: []u256,
-    callstack: std.ArrayList(u64),
-    pc: u64 = 0,
+    callstack: std.ArrayList(usize),
+    pc: usize = 0,
     halted: bool = false,
     trapped: bool = false,
     ops_executed: u64 = 0,
@@ -89,7 +89,7 @@ const BrilligVm = struct {
         const vm = BrilligVm{
             .memory = try allocator.alignedAlloc(u256, 4096, mem_size),
             .calldata = calldata,
-            .callstack = try std.ArrayList(u64).initCapacity(allocator, 1024),
+            .callstack = try std.ArrayList(usize).initCapacity(allocator, 1024),
             .counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).Union.fields.len]usize),
         };
 
@@ -167,8 +167,8 @@ const BrilligVm = struct {
 
     fn processCalldatacopy(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const op = &opcode.CalldataCopy;
-        const size: u64 = @truncate(self.getSlot(op.size_address));
-        const offset: u64 = @truncate(self.getSlot(op.offset_address));
+        const size: usize = @truncate(self.getSlot(op.size_address));
+        const offset: usize = @truncate(self.getSlot(op.offset_address));
         if (self.calldata.len < size) {
             self.trap();
             return;
@@ -237,7 +237,7 @@ const BrilligVm = struct {
     fn processCall(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const call = &opcode.Call;
         self.callstack.append(self.pc + 1) catch unreachable;
-        self.pc = call.location;
+        self.pc = @truncate(call.location);
     }
 
     fn processReturn(self: *BrilligVm, _: *BrilligOpcode) void {
@@ -246,17 +246,17 @@ const BrilligVm = struct {
 
     fn processJump(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.Jump;
-        self.pc = jmp.location;
+        self.pc = @truncate(jmp.location);
     }
 
     fn processJumpIf(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.JumpIf;
-        self.pc = if (self.getSlot(jmp.condition) == 1) jmp.location else self.pc + 1;
+        self.pc = if (self.getSlot(jmp.condition) == 1) @truncate(jmp.location) else self.pc + 1;
     }
 
     fn processJumpIfNot(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const jmp = &opcode.JumpIfNot;
-        self.pc = if (self.getSlot(jmp.condition) == 0) jmp.location else self.pc + 1;
+        self.pc = if (self.getSlot(jmp.condition) == 0) @truncate(jmp.location) else self.pc + 1;
     }
 
     fn processNot(self: *BrilligVm, opcode: *BrilligOpcode) void {
@@ -367,7 +367,7 @@ const BrilligVm = struct {
                 blackbox.blackbox_to_radix(
                     @ptrCast(self.getSlotAddr(op.input)),
                     @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
-                    op.output.size,
+                    @truncate(op.output.size),
                     @truncate(self.getSlot(op.radix)),
                 );
             },

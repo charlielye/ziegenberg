@@ -28,9 +28,9 @@ pub const MemoryAddress = struct {
 
     pub inline fn resolve(self: MemoryAddress, mem: []u256) usize {
         if (self.relative == 1) {
-            return @as(usize, @truncate(mem[0])) + self.value;
+            return @as(usize, @truncate(mem[0] + self.value));
         } else {
-            return self.value;
+            return @truncate(self.value);
         }
     }
 };

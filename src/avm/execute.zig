@@ -59,8 +59,8 @@ const AztecVm = struct {
     memory: []align(4096) u256,
     memory_tags: []align(4096) io.Tag,
     calldata: []u256,
-    callstack: std.ArrayList(u64),
-    pc: u64 = 0,
+    callstack: std.ArrayList(usize),
+    pc: usize = 0,
     halted: bool = false,
     trapped: bool = false,
     ops_executed: u64 = 0,
@@ -72,7 +72,7 @@ const AztecVm = struct {
             .memory = try allocator.alignedAlloc(u256, 4096, mem_size),
             .memory_tags = try allocator.alignedAlloc(io.Tag, 4096, mem_size),
             .calldata = calldata,
-            .callstack = try std.ArrayList(u64).initCapacity(allocator, 1024),
+            .callstack = try std.ArrayList(usize).initCapacity(allocator, 1024),
             .storage = std.AutoHashMap(u256, u256).init(allocator),
             // .counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).Union.fields.len]usize),
         };
@@ -319,8 +319,8 @@ const AztecVm = struct {
 
     fn processCalldatacopy(self: *AztecVm, opcode: anytype) void {
         const op = self.derefOpcodeSlots(@TypeOf(opcode), opcode);
-        const size: u64 = @truncate(self.memory[op.size_slot]);
-        const start_slot: u64 = @truncate(self.memory[op.start_slot]);
+        const size: usize = @truncate(self.memory[op.size_slot]);
+        const start_slot: usize = @truncate(self.memory[op.start_slot]);
         // std.debug.print("cdc {} {}\n", .{ size, start_slot });
         if (self.calldata.len < size) {
             self.trap();

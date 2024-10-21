@@ -115,8 +115,8 @@ pub export fn blackbox_keccak1600(input: [*]const u256, _: usize, result: [*]u25
     }
 }
 
-pub export fn blackbox_aes_encrypt(in: [*]const u256, iv: [*]const u256, key: [*]const u256, length: u64, result: [*]u256, r_size: *u256) void {
-    const padded_length = (length + 15) & ~@as(u64, 15);
+pub export fn blackbox_aes_encrypt(in: [*]const u256, iv: [*]const u256, key: [*]const u256, length: usize, result: [*]u256, r_size: *u256) void {
+    const padded_length = (length + 15) & ~@as(usize, 15);
     const padding_length = padded_length - length;
     var input = std.ArrayList(u8).initCapacity(std.heap.page_allocator, padded_length) catch unreachable;
     for (0..length) |i| {
@@ -162,7 +162,7 @@ pub export fn blackbox_secp256r1_verify_signature(
 
 pub export fn blackbox_schnorr_verify_signature(
     message: [*]const u256,
-    size: u64,
+    size: usize,
     pub_key_x: *Bn254Fr,
     pub_key_y: *Bn254Fr,
     sig: [*]const u256,
@@ -243,7 +243,7 @@ pub export fn blackbox_msm(points_: [*]Point, num_fields: usize, scalars_: [*]Sc
     encode_fr(&output.*.y);
 }
 
-pub export fn blackbox_to_radix(input: *Bn254Fr, output: [*]u256, size: u64, radix: u64) void {
+pub export fn blackbox_to_radix(input: *Bn254Fr, output: [*]u256, size: usize, radix: u64) void {
     var in = decode_fr(input).to_int();
 
     // std.debug.print("{} {} {}\n", .{ in, radix, size });

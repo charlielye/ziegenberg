@@ -23,11 +23,25 @@ function run_cmd() {
       ./zig-out/bin/zb bvm run $1 $zb_args
       return $?
       ;;
+    "bvm-wasm")
+      wasmtime --dir $HOME ./zig-out/bin/zb.wasm bvm run $1 $zb_args
+      return $?
+      ;;
     "avm")
       cat $1 | ./zig-out/bin/zb bvm dis -b | ~/aztec-repos/aztec-packages/avm-transpiler/target/release/avm-transpiler 2>/dev/null | ./zig-out/bin/zb avm run $zb_args
       statuses=("${PIPESTATUS[@]}")
       [ ${statuses[2]} -ne 0 ] && return 4
       return ${statuses[3]}
+      ;;
+    "avm-wasm")
+      cat $1 | ./zig-out/bin/zb bvm dis -b | ~/aztec-repos/aztec-packages/avm-transpiler/target/release/avm-transpiler 2>/dev/null | wasmtime --dir $HOME ./zig-out/bin/zb.wasm avm run $zb_args
+      statuses=("${PIPESTATUS[@]}")
+      [ ${statuses[2]} -ne 0 ] && return 4
+      return ${statuses[3]}
+      ;;
+    "nargo")
+      cd $(dirname $BYTECODE_PATH)
+      ~/aztec-repos/aztec-packages/noir/noir-repo/target/release/nargo execute --force-brillig --silence-warnings 1>&2
       ;;
     *)
       echo "Unknown vm."
