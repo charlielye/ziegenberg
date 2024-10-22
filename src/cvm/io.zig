@@ -1,6 +1,6 @@
 const std = @import("std");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
-const BrilligOpcode = @import("../brillig_vm/io.zig").BrilligOpcode;
+const BrilligOpcode = @import("../bvm/io.zig").BrilligOpcode;
 const bincode = @import("../bincode/bincode.zig");
 
 const BrilligBytecode = []BrilligOpcode;
