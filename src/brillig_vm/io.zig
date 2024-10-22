@@ -1,5 +1,5 @@
 const std = @import("std");
-const bincode = @import("./bincode.zig");
+const bincode = @import("../bincode/bincode.zig");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
 
 // const Circuit = struct {
@@ -131,11 +131,6 @@ const ValueOrArray = union(enum) {
     MemoryAddress: MemoryAddress,
     HeapArray: HeapArray,
     HeapVector: HeapVector,
-};
-
-const Meta = struct {
-    field: []const u8,
-    src_type: type,
 };
 
 pub const BlackBoxOp = union(enum) {
@@ -302,7 +297,7 @@ pub const BrilligOpcode = union(enum) {
         location: Label,
     },
     Const: struct {
-        pub const meta = [_]Meta{
+        pub const meta = [_]bincode.Meta{
             .{ .field = "value", .src_type = []const u8 },
         };
         destination: MemoryAddress,
@@ -310,7 +305,7 @@ pub const BrilligOpcode = union(enum) {
         value: u256,
     },
     IndirectConst: struct {
-        pub const meta = [_]Meta{
+        pub const meta = [_]bincode.Meta{
             .{ .field = "value", .src_type = []const u8 },
         };
         destination_pointer: MemoryAddress,

@@ -1,6 +1,6 @@
 const std = @import("std");
 const load = @import("io.zig").load;
-const serialize = @import("bincode.zig").serialize;
+const serialize = @import("../bincode/bincode.zig").serialize;
 
 pub fn disassemble(file_path: ?[]const u8, as_binary: bool) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

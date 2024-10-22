@@ -1,5 +1,10 @@
 const std = @import("std");
 
+pub const Meta = struct {
+    field: []const u8,
+    src_type: type,
+};
+
 pub fn deserializeAlloc(stream: anytype, allocator: std.mem.Allocator, comptime T: type) !T {
     return switch (@typeInfo(T)) {
         .Void => {},
