@@ -108,12 +108,7 @@ const AztecVm = struct {
             }
 
             switch (opcode.*) {
-                .SET8 => |op| self.processSet(op),
-                .SET16 => |op| self.processSet(op),
-                .SET32 => |op| self.processSet(op),
-                .SET64 => |op| self.processSet(op),
-                .SET128 => |op| self.processSet(op),
-                .SETFF => |op| self.processSet(op),
+                inline .SET8, .SET16, .SET32, .SET64, .SET128, .SETFF => |op| self.processSet(op),
                 .MOV => |op| self.processMov(op),
                 .CAST => |op| self.processCast(op),
                 .CALLDATACOPY => |op| self.processCalldatacopy(op),
@@ -122,19 +117,20 @@ const AztecVm = struct {
                     self.pc = op.address - 1;
                 },
                 .INTERNALRETURN => self.pc = self.callstack.pop(),
-                .EQ => |op| self.binaryOp(opcode, op),
-                .LT => |op| self.binaryOp(opcode, op),
-                .LTE => |op| self.binaryOp(opcode, op),
-                .ADD => |op| self.binaryOp(opcode, op),
-                .SUB => |op| self.binaryOp(opcode, op),
-                .MUL => |op| self.binaryOp(opcode, op),
-                .DIV => |op| self.binaryOp(opcode, op),
-                .FDIV => |op| self.binaryOp(opcode, op),
-                .AND => |op| self.binaryOp(opcode, op),
-                .OR => |op| self.binaryOp(opcode, op),
-                .SHL => |op| self.binaryOp(opcode, op),
-                .SHR => |op| self.binaryOp(opcode, op),
-                .XOR => |op| self.binaryOp(opcode, op),
+                .EQ,
+                .LT,
+                .LTE,
+                .ADD,
+                .SUB,
+                .MUL,
+                .DIV,
+                .FDIV,
+                .AND,
+                .OR,
+                .SHL,
+                .SHR,
+                .XOR,
+                => |op| self.binaryOp(opcode, op),
                 .NOT => |op| self.unaryOp(opcode, op),
                 .JUMP => |op| self.pc = op.address - 1,
                 .JUMPI => |o| {
@@ -216,30 +212,10 @@ const AztecVm = struct {
                     const op = self.derefOpcodeSlots(@TypeOf(o), o);
                     blackbox.blackbox_keccak1600(
                         @ptrCast(&self.memory[op.msg_slot]),
-                        @truncate(self.memory[op.size_slot]),
+                        0,
                         @ptrCast(&self.memory[op.dst_slot]),
                     );
                     @memset(self.memory_tags[op.dst_slot .. op.dst_slot + 25], io.Tag.U64);
-                },
-                .PEDERSEN => |o| {
-                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
-                    blackbox.blackbox_pedersen_hash(
-                        @ptrCast(&self.memory[op.msg_slot]),
-                        @truncate(self.memory[op.size_slot]),
-                        @truncate(self.memory[op.index_slot]),
-                        @ptrCast(&self.memory[op.dest_slot]),
-                    );
-                    self.memory_tags[op.dest_slot] = io.Tag.FF;
-                },
-                .PEDERSENCOMMITMENT => |o| {
-                    const op = self.derefOpcodeSlots(@TypeOf(o), o);
-                    blackbox.blackbox_pedersen_commit(
-                        @ptrCast(&self.memory[op.msg_slot]),
-                        @truncate(self.memory[op.size_slot]),
-                        @truncate(self.memory[op.index_slot]),
-                        @ptrCast(&self.memory[op.dest_slot]),
-                    );
-                    @memset(self.memory_tags[op.dest_slot .. op.dest_slot + 2], io.Tag.FF);
                 },
                 .POSEIDON2 => |o| {
                     const op = self.derefOpcodeSlots(@TypeOf(o), o);

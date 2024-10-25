@@ -3,6 +3,7 @@ const avmExecute = @import("./avm/execute.zig").execute;
 const avmDisassemble = @import("./avm/disassemble.zig").disassemble;
 const bvmExecute = @import("./bvm/execute.zig").execute;
 const bvmDisassemble = @import("./bvm/disassemble.zig").disassemble;
+const cvmExecute = @import("./cvm/execute.zig").execute;
 const cvmDisassemble = @import("./cvm/disassemble.zig").disassemble;
 const App = @import("yazap").App;
 const Arg = @import("yazap").Arg;
@@ -56,17 +57,18 @@ pub fn main() !void {
     {
         var cvm_cmd = app.createCommand("cvm", "Circuit VM commands.");
 
-        // var run_cmd = app.createCommand("run", "Run the given bytecode with the given calldata.");
-        // try run_cmd.addArg(Arg.positional("bytecode_path", null, null));
-        // try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing calldata."));
-        // try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
-        // try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
+        var run_cmd = app.createCommand("run", "Run the given bytecode with the given calldata.");
+        try run_cmd.addArg(Arg.positional("bytecode_path", null, null));
+        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing calldata."));
+        try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
+        try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
+        try run_cmd.addArg(Arg.booleanOption("binary", 'b', "Output the witness as binary."));
         // run_cmd.setProperty(.help_on_empty_args);
 
         var dis_cmd = app.createCommand("dis", "Disassemble the given bytecode.");
         try dis_cmd.addArg(Arg.positional("bytecode_path", null, null));
 
-        // try cvm_cmd.addSubcommand(run_cmd);
+        try cvm_cmd.addSubcommand(run_cmd);
         try cvm_cmd.addSubcommand(dis_cmd);
         try root.addSubcommand(cvm_cmd);
     }
@@ -163,25 +165,26 @@ fn handleBvm(matches: ArgMatches) !void {
 }
 
 fn handleCvm(matches: ArgMatches) !void {
-    // if (matches.subcommandMatches("run")) |cmd_matches| {
-    //     const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
-    //     const calldata_path = cmd_matches.getSingleValue("calldata_path");
-    //     cvmExecute(.{
-    //         .file_path = bytecode_path,
-    //         .calldata_path = calldata_path,
-    //         .show_stats = cmd_matches.containsArg("stats"),
-    //         .show_trace = cmd_matches.containsArg("trace"),
-    //     }) catch |err| {
-    //         std.debug.print("{}\n", .{err});
-    //         // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
-    //         if (err == error.Trapped) {
-    //             std.posix.exit(2);
-    //         } else {
-    //             std.posix.exit(1);
-    //         }
-    //     };
-    //     return;
-    // }
+    if (matches.subcommandMatches("run")) |cmd_matches| {
+        const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
+        const calldata_path = cmd_matches.getSingleValue("calldata_path");
+        cvmExecute(.{
+            .file_path = bytecode_path,
+            .calldata_path = calldata_path,
+            .show_stats = cmd_matches.containsArg("stats"),
+            .show_trace = cmd_matches.containsArg("trace"),
+            .binary = cmd_matches.containsArg("binary"),
+        }) catch |err| {
+            std.debug.print("{}\n", .{err});
+            // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
+            if (err == error.Trapped) {
+                std.posix.exit(2);
+            } else {
+                std.posix.exit(1);
+            }
+        };
+        return;
+    }
 
     if (matches.subcommandMatches("dis")) |cmd_matches| {
         const bytecode_path = cmd_matches.getSingleValue("bytecode_path") orelse null;

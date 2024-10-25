@@ -50,10 +50,9 @@ pub fn execute(options: ExecuteOptions) !void {
 
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
-const BrilligVm = struct {
-    const mem_size = 1024 * 1024 * 32;
-    // const mem_size = 1024 * 1024 * 256;
-    // const mem_size = 1024 * 1024 * (512 + 128);
+pub const BrilligVm = struct {
+    const mem_size = 1024 * 1024;
+    // const mem_size = 1024 * 1024 * 32;
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) void{
         &processBinaryFieldOp,
         &processBinaryIntOp,
@@ -82,7 +81,9 @@ const BrilligVm = struct {
     pc: usize = 0,
     halted: bool = false,
     trapped: bool = false,
+    return_data: []align(32) u256,
     ops_executed: u64 = 0,
+    max_slot_set: u64 = 0,
     counters: [@typeInfo(io.BlackBoxOp).Union.fields.len]usize,
 
     pub fn init(allocator: std.mem.Allocator, calldata: []u256) !BrilligVm {
@@ -91,6 +92,7 @@ const BrilligVm = struct {
             .calldata = calldata,
             .callstack = try std.ArrayList(usize).initCapacity(allocator, 1024),
             .counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).Union.fields.len]usize),
+            .return_data = &.{},
         };
 
         // Lock the allocated memory in RAM using mlock.
@@ -156,7 +158,7 @@ const BrilligVm = struct {
         if (op.bit_size == BitSize.Field and (op.value & (1 << 255)) == 0) {
             op.value = @as(u256, @bitCast(Bn254Fr.from_int(op.value).limbs)) | (1 << 255);
         }
-        self.memory[@truncate(dest_address)] = op.value;
+        self.setSlotAtIndex(@truncate(dest_address), op.value);
         self.pc += 1;
         // std.debug.print("({}) set slot {} = {}\n", .{
         //     op.bit_size,
@@ -177,7 +179,7 @@ const BrilligVm = struct {
             const addr = self.resolveSlot(op.destination_address) + i;
             const src_index = offset + i;
             // std.debug.print("copy {} to slot {}\n", .{ calldata[src_index], addr });
-            self.memory[addr] = self.calldata[src_index];
+            self.setSlotAtIndex(addr, self.calldata[src_index]);
         }
         self.pc += 1;
     }
@@ -219,7 +221,7 @@ const BrilligVm = struct {
 
     fn processStore(self: *BrilligVm, opcode: *BrilligOpcode) void {
         const store = &opcode.Store;
-        self.memory[@truncate(self.getSlot(store.destination_pointer))] = self.getSlot(store.source);
+        self.setSlotAtIndex(@truncate(self.getSlot(store.destination_pointer)), self.getSlot(store.source));
         self.pc += 1;
     }
 
@@ -300,7 +302,11 @@ const BrilligVm = struct {
             .Equals => root.bn254_fr_eq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             .LessThan => root.bn254_fr_lt(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
             .LessThanEquals => root.bn254_fr_leq(@ptrCast(lhs), @ptrCast(rhs), @ptrCast(dest)),
-            else => unreachable,
+            .IntegerDiv => {
+                root.bn254_fr_normalize(@ptrCast(lhs));
+                root.bn254_fr_normalize(@ptrCast(rhs));
+                dest.* = lhs.* / rhs.*;
+            },
         }
         self.pc += 1;
     }
@@ -336,7 +342,7 @@ const BrilligVm = struct {
             .Keccakf1600 => |op| {
                 blackbox.blackbox_keccak1600(
                     @ptrCast(self.getIndirectSlotAddr(op.message.pointer)),
-                    @truncate(self.getSlot(op.message.size)),
+                    @truncate(self.memory[op.message.size]),
                     @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
                 );
             },
@@ -347,22 +353,22 @@ const BrilligVm = struct {
                     @truncate(self.getSlot(op.message.size)),
                 );
             },
-            .PedersenCommitment => |op| {
-                blackbox.blackbox_pedersen_commit(
-                    @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
-                    @truncate(self.getSlot(op.inputs.size)),
-                    @truncate(self.getSlot(op.domain_separator)),
-                    @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
-                );
-            },
-            .PedersenHash => |op| {
-                blackbox.blackbox_pedersen_hash(
-                    @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
-                    @truncate(self.getSlot(op.inputs.size)),
-                    @truncate(self.getSlot(op.domain_separator)),
-                    @ptrCast(self.getSlotAddr(op.output)),
-                );
-            },
+            // .PedersenCommitment => |op| {
+            //     blackbox.blackbox_pedersen_commit(
+            //         @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
+            //         @truncate(self.getSlot(op.inputs.size)),
+            //         @truncate(self.getSlot(op.domain_separator)),
+            //         @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
+            //     );
+            // },
+            // .PedersenHash => |op| {
+            //     blackbox.blackbox_pedersen_hash(
+            //         @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
+            //         @truncate(self.getSlot(op.inputs.size)),
+            //         @truncate(self.getSlot(op.domain_separator)),
+            //         @ptrCast(self.getSlotAddr(op.output)),
+            //     );
+            // },
             .ToRadix => |op| {
                 blackbox.blackbox_to_radix(
                     @ptrCast(self.getSlotAddr(op.input)),
@@ -449,8 +455,11 @@ const BrilligVm = struct {
         self.pc += 1;
     }
 
-    fn processStop(self: *BrilligVm, _: *BrilligOpcode) void {
+    fn processStop(self: *BrilligVm, opcode: *BrilligOpcode) void {
+        const op = &opcode.Stop;
         self.halted = true;
+        self.return_data = self.memory[op.return_data_offset .. op.return_data_offset + op.return_data_size];
+        for (self.return_data) |*v| root.bn254_fr_normalize(@ptrCast(v));
     }
 
     fn processTrap(self: *BrilligVm, _: *BrilligOpcode) void {
@@ -466,6 +475,7 @@ const BrilligVm = struct {
 
     pub fn dumpStats(self: *BrilligVm) void {
         std.debug.print("Opcodes executed: {}\n", .{self.ops_executed});
+        std.debug.print("Max slot set: {}\n", .{self.max_slot_set});
 
         // Print the counters next to the enum variant names
         std.debug.print("Blackbox calls:\n", .{});
@@ -520,7 +530,14 @@ const BrilligVm = struct {
     }
 
     inline fn setSlot(self: *BrilligVm, mem_address: io.MemoryAddress, value: u256) void {
-        self.memory[mem_address.resolve(self.memory)] = value;
+        self.setSlotAtIndex(mem_address.resolve(self.memory), value);
+    }
+
+    inline fn setSlotAtIndex(self: *BrilligVm, index: usize, value: u256) void {
+        if (self.max_slot_set < index) {
+            self.max_slot_set = index;
+        }
+        self.memory[index] = value;
     }
 
     inline fn trap(self: *BrilligVm) void {

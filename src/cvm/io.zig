@@ -2,6 +2,9 @@ const std = @import("std");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const BrilligOpcode = @import("../bvm/io.zig").BrilligOpcode;
 const bincode = @import("../bincode/bincode.zig");
+const formatOpcode = @import("../bvm/io.zig").formatOpcode;
+const formatStruct = @import("../bvm/io.zig").formatStruct;
+const formatUnionBody = @import("../bvm/io.zig").formatUnionBody;
 
 const BrilligBytecode = []BrilligOpcode;
 
@@ -41,12 +44,50 @@ pub const Circuit = struct {
     recursive: bool,
 };
 
-const Witness = u32;
+pub const Witness = u32;
 const BlockId = u32;
 const BrilligFunctionId = u32;
 const AcirFunctionId = u32;
+const F = Bn254Fr;
+pub const WitnessMap = std.AutoHashMap(Witness, F);
+pub const WitnessEntry = struct {
+    pub const meta = [_]bincode.Meta{
+        .{ .field = "value", .src_type = []const u8 },
+    };
+    index: u32,
+    value: u256,
+};
+pub const StackItem = struct {
+    index: u32,
+    witnesses: []WitnessEntry,
+};
 
-const Expression = struct {
+pub const LinearCombination = struct {
+    pub const meta = [_]bincode.Meta{
+        .{ .field = "q_l", .src_type = []const u8 },
+    };
+    q_l: F,
+    w_l: Witness,
+
+    pub fn format(self: LinearCombination, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatStruct(self, writer);
+    }
+};
+
+pub const MulTerm = struct {
+    pub const meta = [_]bincode.Meta{
+        .{ .field = "q_m", .src_type = []const u8 },
+    };
+    q_m: F,
+    w_l: Witness,
+    w_r: Witness,
+
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatStruct(self, writer);
+    }
+};
+
+pub const Expression = struct {
     pub const meta = [_]bincode.Meta{
         .{ .field = "q_c", .src_type = []const u8 },
     };
@@ -55,25 +96,31 @@ const Expression = struct {
     // We collect all of the multiplication terms in the assert-zero opcode
     // A multiplication term if of the form q_M * wL * wR
     // Hence this vector represents the following sum: q_M1 * wL1 * wR1 + q_M2 * wL2 * wR2 + .. +
-    mul_terms: []struct {
-        pub const meta = [_]bincode.Meta{
-            .{ .field = "q_m", .src_type = []const u8 },
-        };
-        q_m: u256,
-        w_l: Witness,
-        w_r: Witness,
-    },
+    mul_terms: []MulTerm,
 
-    linear_combinations: []struct {
-        pub const meta = [_]bincode.Meta{
-            .{ .field = "q_l", .src_type = []const u8 },
-        };
-        q_l: u256,
-        w_l: Witness,
-    },
+    linear_combinations: []LinearCombination,
 
     // Constant term.
-    q_c: u256,
+    q_c: F,
+
+    pub fn isConst(self: Expression) bool {
+        return self.mul_terms.len == 0 and self.linear_combinations.len == 0;
+    }
+
+    pub fn format(self: Expression, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        // try formatStruct(self, writer);
+        try writer.print("{{", .{});
+        if (self.mul_terms.len > 0) {
+            try writer.print(" .mt = {any}", .{self.mul_terms});
+        }
+        if (self.linear_combinations.len > 0) {
+            try writer.print(" .lc = {any}", .{self.linear_combinations});
+        }
+        if (!self.q_c.is_zero()) {
+            try writer.print(" .qc = {short}", .{self.q_c});
+        }
+        try writer.print(" }}", .{});
+    }
 };
 
 const ExpressionWidth = union(enum) {
@@ -110,13 +157,21 @@ const AssertionPayload = union(enum) {
 
 const BrilligInputs = union(enum) {
     Single: Expression,
-    Array: Expression,
+    Array: []Expression,
     MemoryArray: BlockId,
+
+    pub fn format(self: BrilligInputs, comptime str: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatUnionBody(self, str, options, writer);
+    }
 };
 
 const BrilligOutputs = union(enum) {
     Simple: Witness,
     Array: []Witness,
+
+    pub fn format(self: BrilligOutputs, comptime str: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatUnionBody(self, str, options, writer);
+    }
 };
 
 const BlockType = union(enum) {
@@ -125,7 +180,7 @@ const BlockType = union(enum) {
     ReturnData,
 };
 
-const Opcode = union(enum) {
+pub const Opcode = union(enum) {
     /// An `AssertZero` opcode adds the constraint that `P(w) = 0`, where
     /// `w=(w_1,..w_n)` is a tuple of `n` witnesses, and `P` is a multi-variate
     /// polynomial of total degree at most `2`.
@@ -165,7 +220,7 @@ const Opcode = union(enum) {
     ///
     /// Aztec's Barretenberg uses BN254 as the main curve and Grumpkin as the
     /// embedded curve.
-    BlackBoxFuncCall: BlackBoxFuncCall,
+    BlackBoxOp: BlackBoxOp,
 
     /// This opcode is a specialization of a Brillig opcode. Instead of having
     /// some generic assembly code like Brillig, a directive has a hardcoded
@@ -231,6 +286,10 @@ const Opcode = union(enum) {
         /// Predicate of the circuit execution - indicates if it should be skipped
         predicate: ?Expression,
     },
+
+    pub fn format(self: Opcode, comptime str: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatOpcode(self, str, options, writer);
+    }
 };
 
 const Directive = struct {
@@ -242,16 +301,27 @@ const ConstantOrWitnessEnum = union(enum) {
     pub const meta = [_]bincode.Meta{
         .{ .field = "Constant", .src_type = []const u8 },
     };
-    Constant: u256,
+    Constant: F,
     Witness: Witness,
+
+    pub fn format(self: ConstantOrWitnessEnum, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self) {
+            .Constant => |i| try writer.print("{s}", .{i}),
+            .Witness => |w| try writer.print("{}>", .{w}),
+        }
+    }
 };
 
 const FunctionInput = struct {
     input: ConstantOrWitnessEnum,
     num_bits: u32,
+
+    pub fn format(self: FunctionInput, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({}){}", .{ self.num_bits, self.input });
+    }
 };
 
-const BlackBoxFuncCall = union(enum) {
+const BlackBoxOp = union(enum) {
     AES128Encrypt: struct {
         inputs: []FunctionInput,
         iv: [16]FunctionInput,
@@ -394,6 +464,15 @@ const BlackBoxFuncCall = union(enum) {
         /// Output of the compression, represented by 8 u32s
         outputs: [8]Witness,
     },
+
+    pub fn format(self: BlackBoxOp, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s} ", .{@tagName(self)});
+        inline for (@typeInfo(BlackBoxOp).Union.fields) |field| {
+            if (self == @field(BlackBoxOp, field.name)) {
+                try formatStruct(@field(self, field.name), writer);
+            }
+        }
+    }
 };
 
 pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Program {

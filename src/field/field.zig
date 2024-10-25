@@ -165,9 +165,16 @@ pub fn Field(comptime Params: type) type {
             options: std.fmt.FormatOptions,
             writer: anytype,
         ) !void {
-            _ = fmt;
             _ = options;
-            try writer.print("0x{x:0>64}", .{self.to_int()});
+            if (std.mem.eql(u8, fmt, "x")) {
+                try writer.print("0x{x:0>64}", .{self.to_int()});
+            } else if (std.mem.eql(u8, fmt, "short")) {
+                var buffer: [64]u8 = undefined;
+                const result = try std.fmt.bufPrint(&buffer, "{x:0>64}", .{self.to_int()});
+                try writer.print("0x{s}..{s}", .{ result[0..8], result[result.len - 8 ..] });
+            } else {
+                try writer.print("{}", .{self.to_int()});
+            }
         }
 
         pub fn print(self: Fe) void {

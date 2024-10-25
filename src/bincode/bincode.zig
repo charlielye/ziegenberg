@@ -1,4 +1,5 @@
 const std = @import("std");
+const Bn254Fr = @import("../bn254/fr.zig").Fr;
 
 pub const Meta = struct {
     field: []const u8,
@@ -336,7 +337,11 @@ fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struc
                 if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
                     // @compileLog(field.name, " ", meta_field.field);
                     const intermediate = try deserializeAlloc(stream, allocator, meta_field.src_type);
-                    @field(value, field.name) = std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError;
+                    @field(value, field.name) = switch (field.type) {
+                        u256 => std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError,
+                        Bn254Fr => Bn254Fr.from_int(std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError),
+                        else => unreachable,
+                    };
                     // std.debug.print("{s}\n", .{intermediate});
                     // @field(value, field.name) = field.type.deserialize(intermediate) catch return DeserializeError.CustomDeserializeError;
                     // std.debug.print("{any}\n", .{@field(value, field.name)});
@@ -358,7 +363,11 @@ fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.Struct, co
             inline for (T.meta) |meta_field| {
                 if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
                     const intermediate = try deserialize(stream, meta_field.src_type);
-                    @field(value, field.name) = std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError;
+                    @field(value, field.name) = switch (field.type) {
+                        u256 => std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError,
+                        Bn254Fr => Bn254Fr.from_int(std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError),
+                        else => unreachable,
+                    };
                     // @field(value, field.name) = try field.type.deserializer(intermediate);
                     // const field_value = @field(value, field.name);
                     // @field(value, field.name) = try @TypeOf(field_value).deserialize(intermediate);

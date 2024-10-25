@@ -9,11 +9,13 @@ NC='\033[0m'
 BYTECODE_PATH=$1
 VM=${VM:-bvm}
 VERBOSE=${VERBOSE:-0}
-FAIL_FAST=${FAIL_FAST:-0}
+VERBOSE_FAIL=${VERBOSE_FAIL:-0}
 
 test_name="$(basename $BYTECODE_PATH .bytecode | awk '{ if (length($0) > 80) print substr($0, 1, 40) "..." substr($0, length($0)-40+1); else print $0 }')"
 
 function run_cmd() {
+  json_path=${1/.bytecode/.json}
+  witness_path=${1/.bytecode/.gz}
   calldata_path=${1/.bytecode/.calldata}
   zb_args=""
   [ -f "$calldata_path" ] && zb_args+="-c $calldata_path"
@@ -39,9 +41,19 @@ function run_cmd() {
       [ ${statuses[2]} -ne 0 ] && return 4
       return ${statuses[3]}
       ;;
-    "nargo")
+    "cvm")
+      cmp <(jq -r .bytecode $json_path | base64 -d | gunzip | ./zig-out/bin/zb cvm run -c $calldata_path -b) <(cat $witness_path | gunzip)
+      return $?
+      ;;
+    "nargo-bvm")
       cd $(dirname $BYTECODE_PATH)
-      ~/aztec-repos/aztec-packages/noir/noir-repo/target/release/nargo execute --force-brillig --silence-warnings 1>&2
+      rm $json_path $witness_path
+      ~/aztec-repos/aztec-packages/noir/noir-repo/target/release/nargo execute --force-brillig --silence-warnings | tr -d '\0' 1>&2
+      ;;
+    "nargo-cvm")
+      cd $(dirname $BYTECODE_PATH)
+      rm $json_path $witness_path
+      ~/aztec-repos/aztec-packages/noir/noir-repo/target/release/nargo execute --silence-warnings | tr -d '\0' 1>&2
       ;;
     *)
       echo "Unknown vm."
@@ -64,7 +76,8 @@ then
     3) echo -e "$test_name: ${RED}UNIMPLEMENTED${NC}";;
     4) echo -e "$test_name: ${YELLOW}TRANSPILE FAILED${NC}";;
     *) echo -e "$test_name: ${RED}FAILED${NC}"
-       [ "$FAIL_FAST" -eq 1 ] && run_cmd $BYTECODE_PATH 1
+       run_cmd $BYTECODE_PATH $VERBOSE_FAIL 2> /dev/null
+       exit 1
        ;;
   esac
   exit $result

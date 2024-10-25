@@ -98,7 +98,6 @@ fn AvmOpcodes(slot_type: type) type {
         // Control Flow - Contract Calls. 55
         CALL: ExternalCallOperands,
         STATICCALL: ExternalCallOperands,
-        DELEGATE_CALL: struct {},
         RETURN: struct { indirect: u8, data_slot: slot_type, size_slot: slot_type },
         REVERT: struct { indirect: u8, data_slot: slot_type, size_slot: slot_type },
         // Misc. 60
@@ -110,7 +109,6 @@ fn AvmOpcodes(slot_type: type) type {
             fields_size_slot: slot_type,
         },
         // Gadgets
-        KECCAK: struct { indirect: u8, data: u32, dataLength: u32, result: u32 },
         POSEIDON2: struct { indirect: u8, input_slot: slot_type, output_slot: slot_type },
         SHA256COMPRESSION: struct {
             indirect: u8,
@@ -118,14 +116,7 @@ fn AvmOpcodes(slot_type: type) type {
             state_slot: slot_type,
             inputs_slot: slot_type,
         },
-        KECCAKF1600: struct { indirect: u8, dst_slot: slot_type, msg_slot: slot_type, size_slot: slot_type },
-        PEDERSEN: struct {
-            indirect: u8,
-            index_slot: slot_type,
-            dest_slot: slot_type,
-            msg_slot: slot_type,
-            size_slot: slot_type,
-        },
+        KECCAKF1600: struct { indirect: u8, dst_slot: slot_type, msg_slot: slot_type },
         ECADD: struct {
             indirect: u16,
             lhs_x_slot: slot_type,
@@ -142,13 +133,6 @@ fn AvmOpcodes(slot_type: type) type {
             scalars_slot: slot_type,
             dst_slot: slot_type,
             size_slot: slot_type,
-        },
-        PEDERSENCOMMITMENT: struct {
-            indirect: u8,
-            msg_slot: slot_type,
-            dest_slot: slot_type,
-            size_slot: slot_type,
-            index_slot: slot_type,
         },
         TORADIXLE: struct {
             indirect: u8,
@@ -249,10 +233,10 @@ const AvmWireOpcode = union(enum) {
     SETFF: getUnionFieldType(AvmOpcode16, "SETFF"),
     MOV_8: getUnionFieldType(AvmOpcode8, "MOV"),
     MOV_16: getUnionFieldType(AvmOpcode16, "MOV"),
-    // Side Effects - Storage. 45
+    // Side Effects - Storage. 44
     SLOAD: getUnionFieldType(AvmOpcode16, "SLOAD"),
     SSTORE: getUnionFieldType(AvmOpcode16, "SSTORE"),
-    // Side Effects - Notes, Nullfiers, Logs, Messages. 47
+    // Side Effects - Notes, Nullfiers, Logs, Messages. 46
     NOTEHASHEXISTS: getUnionFieldType(AvmOpcode16, "NOTEHASHEXISTS"),
     EMITNOTEHASH: getUnionFieldType(AvmOpcode16, "EMITNOTEHASH"),
     NULLIFIEREXISTS: getUnionFieldType(AvmOpcode16, "NULLIFIEREXISTS"),
@@ -261,24 +245,20 @@ const AvmWireOpcode = union(enum) {
     GETCONTRACTINSTANCE: getUnionFieldType(AvmOpcode32, "GETCONTRACTINSTANCE"),
     EMITUNENCRYPTEDLOG: getUnionFieldType(AvmOpcode16, "EMITUNENCRYPTEDLOG"),
     SENDL2TOL1MSG: getUnionFieldType(AvmOpcode16, "SENDL2TOL1MSG"),
-    // Control Flow - Contract Calls. 55
+    // Control Flow - Contract Calls. 54
     CALL: getUnionFieldType(AvmOpcode16, "CALL"),
     STATICCALL: getUnionFieldType(AvmOpcode16, "STATICCALL"),
-    DELEGATE_CALL: getUnionFieldType(AvmOpcode16, "DELEGATE_CALL"),
     RETURN: getUnionFieldType(AvmOpcode16, "RETURN"),
     REVERT_8: getUnionFieldType(AvmOpcode8, "REVERT"),
     REVERT_16: getUnionFieldType(AvmOpcode16, "REVERT"),
-    // Misc. 60
+    // Misc. 59
     DEBUGLOG: getUnionFieldType(AvmOpcode16, "DEBUGLOG"),
-    // Gadgets
-    KECCAK: getUnionFieldType(AvmOpcode32, "KECCAK"),
+    // Gadgets. 60
     POSEIDON2: getUnionFieldType(AvmOpcode16, "POSEIDON2"),
     SHA256COMPRESSION: getUnionFieldType(AvmOpcode16, "SHA256COMPRESSION"),
     KECCAKF1600: getUnionFieldType(AvmOpcode16, "KECCAKF1600"),
-    PEDERSEN: getUnionFieldType(AvmOpcode32, "PEDERSEN"),
     ECADD: getUnionFieldType(AvmOpcode16, "ECADD"),
     MSM: getUnionFieldType(AvmOpcode16, "MSM"),
-    PEDERSENCOMMITMENT: getUnionFieldType(AvmOpcode32, "PEDERSENCOMMITMENT"),
     TORADIXLE: getUnionFieldType(AvmOpcode16, "TORADIXLE"),
     NOOP: getUnionFieldType(AvmOpcode16, "NOOP"),
 

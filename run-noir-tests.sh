@@ -14,7 +14,8 @@ FAIL_FAST=${FAIL_FAST:-0}
 if [ "$NARGO" -eq 1 ]; then
   export RAYON_NUM_THREADS=4
   echo "Compiling..."
-  parallel "(cd {} && $NOIR_REPO/target/release/nargo dump)" ::: $NOIR_REPO/test_programs/execution_*/!(regression_4709|is_unconstrained|brillig_oracle|bigint|workspace_fail)
+  nargo=$NOIR_REPO/target/release/nargo
+  parallel "(cd {} && $nargo dump && $nargo compile --silence-warnings)" ::: $NOIR_REPO/test_programs/execution_*/!(regression_4709|is_unconstrained|brillig_oracle|bigint|workspace_fail)
 fi
 
 ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_success

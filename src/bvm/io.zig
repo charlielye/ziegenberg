@@ -41,7 +41,7 @@ const HeapArray = struct {
 
     pub fn format(self: HeapArray, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("HeapArray ", .{});
-        try formatStruct(HeapArray, self, writer);
+        try formatStruct(self, writer);
     }
 };
 
@@ -51,7 +51,7 @@ const HeapVector = struct {
 
     pub fn format(self: HeapVector, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("HeapVector ", .{});
-        try formatStruct(HeapVector, self, writer);
+        try formatStruct(self, writer);
     }
 };
 
@@ -149,7 +149,7 @@ pub const BlackBoxOp = union(enum) {
         output: HeapArray,
     },
     Keccakf1600: struct {
-        message: HeapVector,
+        message: HeapArray,
         output: HeapArray,
     },
     EcdsaSecp256k1: struct {
@@ -172,16 +172,6 @@ pub const BlackBoxOp = union(enum) {
         message: HeapVector,
         signature: HeapVector,
         result: MemoryAddress,
-    },
-    PedersenCommitment: struct {
-        inputs: HeapVector,
-        domain_separator: MemoryAddress,
-        output: HeapArray,
-    },
-    PedersenHash: struct {
-        inputs: HeapVector,
-        domain_separator: MemoryAddress,
-        output: MemoryAddress,
     },
     MultiScalarMul: struct {
         points: HeapVector,
@@ -232,8 +222,8 @@ pub const BlackBoxOp = union(enum) {
         len: MemoryAddress,
     },
     Sha256Compression: struct {
-        input: HeapVector,
-        hash_values: HeapVector,
+        input: HeapArray,
+        hash_values: HeapArray,
         output: HeapArray,
     },
     ToRadix: struct {
@@ -247,7 +237,7 @@ pub const BlackBoxOp = union(enum) {
         try writer.print("{s} ", .{@tagName(self)});
         inline for (@typeInfo(BlackBoxOp).Union.fields) |field| {
             if (self == @field(BlackBoxOp, field.name)) {
-                try formatStruct(field.type, @field(self, field.name), writer);
+                try formatStruct(@field(self, field.name), writer);
             }
         }
     }
@@ -347,28 +337,58 @@ pub const BrilligOpcode = union(enum) {
         return_data_size: u64,
     },
 
-    pub fn format(self: BrilligOpcode, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{s: >16} ", .{@tagName(self)});
-        inline for (@typeInfo(BrilligOpcode).Union.fields) |field| {
-            if (self == @field(BrilligOpcode, field.name)) {
-                const field_ptr = @field(self, field.name);
-                switch (@typeInfo(field.type)) {
-                    .Void => return,
-                    .Struct => try formatStruct(field.type, field_ptr, writer),
-                    else => try writer.print("{}", .{field_ptr}),
-                }
-            }
-        }
+    pub fn format(self: BrilligOpcode, comptime str: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatOpcode(self, str, options, writer);
+        // try writer.print("{s: >16} ", .{@tagName(self)});
+        // inline for (@typeInfo(BrilligOpcode).Union.fields) |field| {
+        //     if (self == @field(BrilligOpcode, field.name)) {
+        //         const field_ptr = @field(self, field.name);
+        //         switch (@typeInfo(field.type)) {
+        //             .Void => return,
+        //             .Struct => try formatStruct(field.type, field_ptr, writer),
+        //             else => try writer.print("{}", .{field_ptr}),
+        //         }
+        //     }
+        // }
     }
 };
 
-fn formatStruct(comptime T: type, ptr: anytype, writer: anytype) !void {
-    try writer.print("{{ ", .{});
-    var first = true;
-    inline for (@typeInfo(T).Struct.fields) |field| {
-        if (!first) try writer.print(", ", .{});
-        first = false;
-        try writer.print(".{s} = {any}", .{ field.name, @field(ptr, field.name) });
+pub fn formatOpcode(self: anytype, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    try writer.print("{s: >16} ", .{@tagName(self)});
+    inline for (@typeInfo(@TypeOf(self)).Union.fields) |field| {
+        if (self == @field(@TypeOf(self), field.name)) {
+            const field_ptr = @field(self, field.name);
+            switch (@typeInfo(field.type)) {
+                .Void => return,
+                // .Struct => try formatStruct(field_ptr, writer),
+                else => {
+                    if (!@hasDecl(field.type, "format")) {
+                        try formatStruct(field_ptr, writer);
+                    } else {
+                        try writer.print("{}", .{field_ptr});
+                    }
+                },
+            }
+        }
+    }
+}
+pub fn formatUnionBody(self: anytype, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    inline for (@typeInfo(@TypeOf(self)).Union.fields) |field| {
+        if (self == @field(@TypeOf(self), field.name)) {
+            const field_ptr = @field(self, field.name);
+            try writer.print("{any}", .{field_ptr});
+        }
+    }
+}
+
+pub fn formatStruct(ptr: anytype, writer: anytype) !void {
+    try writer.print("{{", .{});
+    inline for (@typeInfo(@TypeOf(ptr)).Struct.fields) |field| {
+        if (field.type == Bn254Fr) {
+            try writer.print(" .{s} = {short}", .{ field.name, @field(ptr, field.name) });
+        } else {
+            try writer.print(" .{s} = {any}", .{ field.name, @field(ptr, field.name) });
+        }
     }
     try writer.print(" }}", .{});
 }
