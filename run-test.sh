@@ -10,15 +10,20 @@ BYTECODE_PATH=$1
 VM=${VM:-bvm}
 VERBOSE=${VERBOSE:-0}
 VERBOSE_FAIL=${VERBOSE_FAIL:-0}
+NO_TRUNC=${NO_TRUNC:-0}
 
-test_name="$(basename $BYTECODE_PATH .bytecode | awk '{ if (length($0) > 80) print substr($0, 1, 40) "..." substr($0, length($0)-40+1); else print $0 }')"
+if [ "$NO_TRUNC" -eq 0 ]; then
+  test_name="$(basename $BYTECODE_PATH .bytecode | awk '{ if (length($0) > 80) print substr($0, 1, 40) "..." substr($0, length($0)-40+1); else print $0 }')"
+else
+  test_name="$(basename $BYTECODE_PATH .bytecode)"
+fi
 
 function run_cmd() {
   json_path=${1/.bytecode/.json}
   witness_path=${1/.bytecode/.gz}
   calldata_path=${1/.bytecode/.calldata}
-  zb_args=""
-  [ -f "$calldata_path" ] && zb_args+="-c $calldata_path"
+  zb_args="-s"
+  [ -f "$calldata_path" ] && zb_args+=" -c $calldata_path"
   [ "$2" -eq 1 ] && zb_args+=" -t"
   case $VM in
     "bvm")
@@ -42,7 +47,7 @@ function run_cmd() {
       return ${statuses[3]}
       ;;
     "cvm")
-      cmp <(jq -r .bytecode $json_path | base64 -d | gunzip | ./zig-out/bin/zb cvm run -c $calldata_path -b) <(cat $witness_path | gunzip)
+      cmp <(jq -r .bytecode $json_path | base64 -d | gunzip | ./zig-out/bin/zb cvm run -c $calldata_path -b) <(cat $witness_path | gunzip) > /dev/null
       return $?
       ;;
     "nargo-bvm")
@@ -83,4 +88,4 @@ then
   exit $result
 fi
 
-echo -e "$test_name: ${GREEN}PASSED${NC} ($(echo "$output" | grep 'time taken' | sed 's/time taken: //'))"
+echo -e "$test_name: ${GREEN}PASSED${NC} ($(echo "$output" | grep -i 'time taken' | sed 's/time taken: //i'))"

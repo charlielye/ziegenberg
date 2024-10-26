@@ -6,6 +6,7 @@ const io = @import("io.zig");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const root = @import("../blackbox/field.zig");
 const blackbox = @import("../blackbox/blackbox.zig");
+const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
 
 pub const ExecuteOptions = struct {
     file_path: ?[]const u8 = null,
@@ -41,9 +42,7 @@ pub fn execute(options: ExecuteOptions) !void {
     std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
     std.debug.print("Executing...\n", .{});
-    t.reset();
-    const result = brillig_vm.executeVm(opcodes, options.show_trace);
-    std.debug.print("time taken: {}us\n", .{t.read() / 1000});
+    const result = brillig_vm.executeVm(opcodes, options.show_trace, if (options.show_stats) 1000 else 0);
     if (options.show_stats) brillig_vm.dumpStats();
     return result;
 }
@@ -51,8 +50,8 @@ pub fn execute(options: ExecuteOptions) !void {
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 pub const BrilligVm = struct {
-    const mem_size = 1024 * 1024;
-    // const mem_size = 1024 * 1024 * 32;
+    // const mem_size = 1024 * 1024;
+    const mem_size = 1024 * 1024 * 32;
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) void{
         &processBinaryFieldOp,
         &processBinaryIntOp,
@@ -84,14 +83,19 @@ pub const BrilligVm = struct {
     return_data: []align(32) u256,
     ops_executed: u64 = 0,
     max_slot_set: u64 = 0,
-    counters: [@typeInfo(io.BlackBoxOp).Union.fields.len]usize,
+    blackbox_counters: [@typeInfo(io.BlackBoxOp).Union.fields.len]u64,
+    opcode_counters: [@typeInfo(io.BrilligOpcode).Union.fields.len]u64,
+    opcode_time: [@typeInfo(io.BrilligOpcode).Union.fields.len]u64,
+    time_taken: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, calldata: []u256) !BrilligVm {
         const vm = BrilligVm{
             .memory = try allocator.alignedAlloc(u256, 4096, mem_size),
             .calldata = calldata,
             .callstack = try std.ArrayList(usize).initCapacity(allocator, 1024),
-            .counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).Union.fields.len]usize),
+            .blackbox_counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).Union.fields.len]u64),
+            .opcode_counters = std.mem.zeroes([@typeInfo(io.BrilligOpcode).Union.fields.len]u64),
+            .opcode_time = std.mem.zeroes([@typeInfo(io.BrilligOpcode).Union.fields.len]u64),
             .return_data = &.{},
         };
 
@@ -113,7 +117,9 @@ pub const BrilligVm = struct {
         allocator.free(self.memory);
     }
 
-    pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode, show_trace: bool) !void {
+    pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode, show_trace: bool, sample_rate: u64) !void {
+        var t = try std.time.Timer.start();
+
         while (!self.halted) {
             const opcode = &opcodes[self.pc];
 
@@ -126,9 +132,25 @@ pub const BrilligVm = struct {
             if (i > BrilligVm.jump_table.len - 1) {
                 return error.UnknownOpcode;
             }
+
+            // Take a timing sample every 1000th.
+            const idx = @intFromEnum(opcode.*);
+            var before: u64 = 0;
+            if (sample_rate > 0 and self.ops_executed % sample_rate == 0) {
+                before = rdtsc();
+            }
+
+            // Execute opcode.
             BrilligVm.jump_table[i](self, opcode);
+
+            if (sample_rate > 0 and self.ops_executed % sample_rate == 0) {
+                self.opcode_time[idx] += rdtsc() - before;
+            }
+            self.opcode_counters[idx] += 1;
             self.ops_executed += 1;
         }
+
+        self.time_taken = t.read();
 
         if (self.trapped) {
             return error.Trapped;
@@ -315,7 +337,7 @@ pub const BrilligVm = struct {
         const blackbox_op = &opcode.BlackBox;
 
         const idx = @intFromEnum(blackbox_op.*);
-        self.counters[idx] += 1;
+        self.blackbox_counters[idx] += 1;
 
         switch (blackbox_op.*) {
             .Sha256Compression => |op| {
@@ -474,13 +496,25 @@ pub const BrilligVm = struct {
     }
 
     pub fn dumpStats(self: *BrilligVm) void {
+        std.debug.print("Time taken: {}us\n", .{self.time_taken / 1000});
         std.debug.print("Opcodes executed: {}\n", .{self.ops_executed});
         std.debug.print("Max slot set: {}\n", .{self.max_slot_set});
 
-        // Print the counters next to the enum variant names
+        var total_cycles: u64 = 0;
+        for (self.opcode_time) |x| total_cycles += x;
+
+        std.debug.print("Opcode hit / time:\n", .{});
+        inline for (@typeInfo(io.BrilligOpcode).Union.fields, 0..) |enumField, idx| {
+            std.debug.print("  {s}: {} / {d:.2}%\n", .{
+                enumField.name,
+                self.opcode_counters[idx],
+                @as(f64, @floatFromInt(self.opcode_time[idx] * 100)) / @as(f64, @floatFromInt(total_cycles)),
+            });
+        }
+
         std.debug.print("Blackbox calls:\n", .{});
         inline for (@typeInfo(io.BlackBoxOp).Union.fields, 0..) |enumField, idx| {
-            std.debug.print("  {s}: {}\n", .{ enumField.name, self.counters[idx] });
+            std.debug.print("  {s}: {}\n", .{ enumField.name, self.blackbox_counters[idx] });
         }
     }
 

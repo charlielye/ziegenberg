@@ -108,7 +108,7 @@ const CircuitVm = struct {
                     }
                     var brillig_vm = try BrilligVm.init(self.allocator, calldata.items);
                     defer brillig_vm.deinit(self.allocator);
-                    try brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace);
+                    try brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0);
                     for (brillig_vm.return_data, op.outputs) |v, o| {
                         switch (o) {
                             .Simple => |ow| try self.witnesses.put(ow, Fr.from_int(v)),
