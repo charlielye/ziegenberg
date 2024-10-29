@@ -39,7 +39,8 @@ pub fn build(b: *std.Build) void {
         });
         exe.bundle_compiler_rt = true;
         exe.root_module.addImport("yazap", yazap.module("yazap"));
-        exe.linkSystemLibrary("c");
+        // exe.linkSystemLibrary("c");
+        exe.linkLibC();
 
         b.installArtifact(exe);
     }
@@ -55,6 +56,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .filters = test_filters,
         });
+        lib_unit_tests.linkLibC();
 
         const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
         run_lib_unit_tests.step.dependOn(b.getInstallStep());

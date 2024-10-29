@@ -246,7 +246,7 @@ pub export fn blackbox_msm(points_: [*]Point, num_fields: usize, scalars_: [*]Sc
 pub export fn blackbox_to_radix(input: *Bn254Fr, output: [*]u256, size: usize, radix: u64) void {
     var in = decode_fr(input).to_int();
 
-    // std.debug.print("{} {} {}\n", .{ in, radix, size });
+    // std.io.getStdOut().writer().print("{} {} {}\n", .{ in, radix, size }) catch unreachable;
     for (0..size) |i| {
         if (in == 0) {
             @memset(output[i..size], 0);

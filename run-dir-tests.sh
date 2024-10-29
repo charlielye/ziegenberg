@@ -7,6 +7,8 @@ RELEASE=${RELEASE:-1}
 PARALLEL=${PARALLEL:-1}
 FAIL_FAST=${FAIL_FAST:-0}
 TIMEOUT=${TIMEOUT:-10}
+VM=${VM:-bvm}
+ENGINE=${ENGINE:-zb}
 
 [ "$RELEASE" -eq 1 ] && zig_args+=" --release=fast" || zig_args=""
 zig build $zig_args || exit 1
@@ -15,7 +17,7 @@ SECONDS=0
 parallel_args=""
 [ "$FAIL_FAST" -eq 1 ] && parallel_args+=" --halt now,fail=1 -j 1" && export VERBOSE_FAIL=1
 [ "$TIMEOUT" -ne 0 ] && parallel_args+=" --timeout $TIMEOUT"
-find $BYTECODES -name "*.bytecode" | sort | parallel $parallel_args -k --joblog parallel.log ./run-test.sh {}
+find $BYTECODES -name "*.${VM}_bytecode" | sort | parallel $parallel_args -k --joblog parallel.log ./run-test.sh {}
 code=$?
 
 RED='\033[0;31m'

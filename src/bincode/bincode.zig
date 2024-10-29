@@ -368,6 +368,7 @@ fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.Struct, co
                         Bn254Fr => Bn254Fr.from_int(std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError),
                         else => unreachable,
                     };
+                    // std.debug.print("{any}\n", .{@field(value, field.name)});
                     // @field(value, field.name) = try field.type.deserializer(intermediate);
                     // const field_value = @field(value, field.name);
                     // @field(value, field.name) = try @TypeOf(field_value).deserialize(intermediate);
@@ -392,6 +393,7 @@ fn deserializeUnionAlloc(stream: anytype, comptime info: std.builtin.Type.Union,
 
         inline for (info.fields) |field| {
             if (tag == @field(Tag, field.name)) {
+                // std.debug.print("Tag {s}: ", .{field.name});
                 const inner = try deserializeAlloc(stream, allocator, field.type);
                 const r = @unionInit(T, field.name, inner);
                 // std.debug.print("{}\n", .{r});

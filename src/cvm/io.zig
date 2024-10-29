@@ -1,5 +1,5 @@
 const std = @import("std");
-const Bn254Fr = @import("../bn254/fr.zig").Fr;
+const Fr = @import("../bn254/fr.zig").Fr;
 const BrilligOpcode = @import("../bvm/io.zig").BrilligOpcode;
 const bincode = @import("../bincode/bincode.zig");
 const formatOpcode = @import("../bvm/io.zig").formatOpcode;
@@ -48,8 +48,6 @@ pub const Witness = u32;
 const BlockId = u32;
 const BrilligFunctionId = u32;
 const AcirFunctionId = u32;
-const F = Bn254Fr;
-pub const WitnessMap = std.AutoHashMap(Witness, F);
 pub const WitnessEntry = struct {
     pub const meta = [_]bincode.Meta{
         .{ .field = "value", .src_type = []const u8 },
@@ -66,7 +64,7 @@ pub const LinearCombination = struct {
     pub const meta = [_]bincode.Meta{
         .{ .field = "q_l", .src_type = []const u8 },
     };
-    q_l: F,
+    q_l: Fr,
     w_l: Witness,
 
     pub fn format(self: LinearCombination, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -78,7 +76,7 @@ pub const MulTerm = struct {
     pub const meta = [_]bincode.Meta{
         .{ .field = "q_m", .src_type = []const u8 },
     };
-    q_m: F,
+    q_m: Fr,
     w_l: Witness,
     w_r: Witness,
 
@@ -101,7 +99,7 @@ pub const Expression = struct {
     linear_combinations: []LinearCombination,
 
     // Constant term.
-    q_c: F,
+    q_c: Fr,
 
     pub fn isConst(self: Expression) bool {
         return self.mul_terms.len == 0 and self.linear_combinations.len == 0;
@@ -292,16 +290,25 @@ pub const Opcode = union(enum) {
     }
 };
 
-const Directive = struct {
+const Directive = union(enum) {
     //decomposition of a: a=\sum b[i]*radix^i where b is an array of witnesses < radix in little endian form
     ToLeRadix: struct { a: Expression, b: []Witness, radix: u32 },
+
+    pub fn format(self: Directive, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s} ", .{@tagName(self)});
+        inline for (@typeInfo(@TypeOf(self)).Union.fields) |field| {
+            if (self == @field(@TypeOf(self), field.name)) {
+                try formatStruct(@field(self, field.name), writer);
+            }
+        }
+    }
 };
 
 const ConstantOrWitnessEnum = union(enum) {
     pub const meta = [_]bincode.Meta{
         .{ .field = "Constant", .src_type = []const u8 },
     };
-    Constant: F,
+    Constant: Fr,
     Witness: Witness,
 
     pub fn format(self: ConstantOrWitnessEnum, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -312,7 +319,7 @@ const ConstantOrWitnessEnum = union(enum) {
     }
 };
 
-const FunctionInput = struct {
+pub const FunctionInput = struct {
     input: ConstantOrWitnessEnum,
     num_bits: u32,
 
@@ -354,18 +361,6 @@ const BlackBoxOp = union(enum) {
         public_key_y: FunctionInput,
         signature: [64]FunctionInput,
         message: []FunctionInput,
-        output: Witness,
-    },
-    /// Will be deprecated
-    PedersenCommitment: struct {
-        inputs: []FunctionInput,
-        domain_separator: u32,
-        outputs: struct { x: Witness, y: Witness },
-    },
-    /// Will be deprecated
-    PedersenHash: struct {
-        inputs: []FunctionInput,
-        domain_separator: u32,
         output: Witness,
     },
     EcdsaSecp256k1: struct {

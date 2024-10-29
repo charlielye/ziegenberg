@@ -1,10 +1,10 @@
 const std = @import("std");
 const io = @import("./io.zig");
 const F = @import("../bn254/fr.zig").Fr;
+const WitnessMap = @import("./witness_map.zig").WitnessMap;
 
 const Witness = io.Witness;
 const Expression = io.Expression;
-const WitnessMap = io.WitnessMap;
 const MulTerm = io.MulTerm;
 const LinearCombination = io.LinearCombination;
 
@@ -55,16 +55,16 @@ const OpcodeResolutionError = error{
     UnsatisfiedConstraint,
 };
 
-fn insert_value(witness: Witness, value: F, witness_assignments: *WitnessMap) !void {
-    const r = try witness_assignments.getOrPut(witness);
-    if (r.found_existing) {
-        if (!r.value_ptr.eql(value)) {
-            return OpcodeResolutionError.UnsatisfiedConstraint;
-        }
-    } else {
-        r.value_ptr.* = value;
-    }
-}
+// fn insert_value(witness: Witness, value: F, witness_assignments: *WitnessMap) !void {
+//     const r = try witness_assignments.getOrPut(witness);
+//     if (r.found_existing) {
+//         if (!r.value_ptr.eql(value)) {
+//             return OpcodeResolutionError.UnsatisfiedConstraint;
+//         }
+//     } else {
+//         r.value_ptr.* = value;
+//     }
+// }
 
 pub fn solve(allocator: std.mem.Allocator, initial_witness: *WitnessMap, opcode: *const io.Expression) !void {
     var evaluated_opcode = evaluate(allocator, opcode, initial_witness);
@@ -88,7 +88,7 @@ pub fn solve(allocator: std.mem.Allocator, initial_witness: *WitnessMap, opcode:
                             return;
                         } else {
                             const assignment = total_sum.neg().div(one_unknown.q_l.add(solvable.unknown_var.q_l));
-                            try insert_value(one_unknown.w_l, assignment, initial_witness);
+                            try initial_witness.put(one_unknown.w_l, assignment);
                         }
                     } else {
                         return OpcodeResolutionError.OpcodeNotSolvable;
@@ -104,7 +104,7 @@ pub fn solve(allocator: std.mem.Allocator, initial_witness: *WitnessMap, opcode:
                         }
                     } else {
                         const assignment = total_sum.neg().div(one_unknown.q_l);
-                        try insert_value(one_unknown.w_l, assignment, initial_witness);
+                        try initial_witness.put(one_unknown.w_l, assignment);
                     }
                 },
             }
@@ -127,7 +127,7 @@ pub fn solve(allocator: std.mem.Allocator, initial_witness: *WitnessMap, opcode:
                         return;
                     } else {
                         const assignment = total_sum.neg().div(solvable.unknown_var.q_l);
-                        try insert_value(solvable.unknown_var.w_l, assignment, initial_witness);
+                        try initial_witness.put(solvable.unknown_var.w_l, assignment);
                     }
                 },
                 OpcodeStatus.OpcodeUnsolvable => return OpcodeResolutionError.OpcodeNotSolvable,

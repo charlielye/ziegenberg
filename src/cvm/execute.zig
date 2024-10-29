@@ -3,8 +3,9 @@ const io = @import("io.zig");
 const Fr = @import("../bn254/fr.zig").Fr;
 const solve = @import("./expression_solver.zig").solve;
 const evaluate = @import("./expression_solver.zig").evaluate;
-const serialize = @import("../bincode/bincode.zig").serialize;
 const BrilligVm = @import("../bvm/execute.zig").BrilligVm;
+const sha256_compress = @import("../blackbox/sha256_compress.zig").round;
+const WitnessMap = @import("./witness_map.zig").WitnessMap;
 // const root = @import("../blackbox/field.zig");
 // const blackbox = @import("../blackbox/blackbox.zig");
 
@@ -50,11 +51,7 @@ pub fn execute(options: ExecuteOptions) !void {
     const result = vm.executeVm(0, options.show_trace);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 
-    if (options.binary) {
-        try vm.dumpWitnesses();
-    } else {
-        try vm.printWitnesses();
-    }
+    try vm.witnesses.printWitnesses(options.binary);
 
     return result;
 }
@@ -62,10 +59,10 @@ pub fn execute(options: ExecuteOptions) !void {
 const CircuitVm = struct {
     allocator: std.mem.Allocator,
     program: *const io.Program,
-    witnesses: io.WitnessMap,
+    witnesses: WitnessMap,
 
     pub fn init(allocator: std.mem.Allocator, program: *const io.Program, calldata: []Fr) !CircuitVm {
-        var witnesses = io.WitnessMap.init(allocator);
+        var witnesses = WitnessMap.init(allocator);
         for (calldata, 0..) |e, i| {
             try witnesses.put(@truncate(i), e);
         }
@@ -92,28 +89,48 @@ const CircuitVm = struct {
                 .BrilligCall => |op| {
                     var calldata = std.ArrayList(u256).init(self.allocator);
                     for (op.inputs) |input| {
-                        switch (input) {
-                            .Single => |expr| {
+                        if (input == .MemoryArray) {
+                            unreachable;
+                        } else {
+                            const elems = switch (input) {
+                                .Single => &[_]io.Expression{input.Single},
+                                .Array => input.Array,
+                                .MemoryArray => unreachable,
+                            };
+                            for (elems) |expr| {
                                 const e = evaluate(self.allocator, &expr, &self.witnesses);
                                 if (!e.isConst()) return error.OpcodeNotSolvable;
                                 try calldata.append(e.q_c.to_int());
-                            },
-                            .Array => |arr| for (arr) |expr| {
-                                const e = evaluate(self.allocator, &expr, &self.witnesses);
-                                if (!e.isConst()) return error.OpcodeNotSolvable;
-                                try calldata.append(e.q_c.to_int());
-                            },
-                            .MemoryArray => unreachable,
+                            }
                         }
                     }
                     var brillig_vm = try BrilligVm.init(self.allocator, calldata.items);
                     defer brillig_vm.deinit(self.allocator);
                     try brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0);
-                    for (brillig_vm.return_data, op.outputs) |v, o| {
-                        switch (o) {
-                            .Simple => |ow| try self.witnesses.put(ow, Fr.from_int(v)),
-                            else => unreachable,
+                    var return_data_idx: u32 = 0;
+                    for (op.outputs) |o| {
+                        const witnesses = switch (o) {
+                            .Simple => &[_]io.Witness{o.Simple},
+                            .Array => o.Array,
+                        };
+                        for (witnesses) |w| {
+                            try self.witnesses.put(w, Fr.from_int(brillig_vm.return_data[return_data_idx]));
+                            return_data_idx += 1;
                         }
+                    }
+                },
+                .BlackBoxOp => |op| {
+                    switch (op) {
+                        .RANGE => {},
+                        .Sha256Compression => |sha_op| {
+                            var input: [16]u32 = undefined;
+                            var hash_values: [8]u32 = undefined;
+                            for (sha_op.inputs, 0..) |fi, j| input[j] = self.resolveFunctionInput(u32, fi);
+                            for (sha_op.hash_values, 0..) |fi, j| hash_values[j] = self.resolveFunctionInput(u32, fi);
+                            sha256_compress(&input, &hash_values);
+                            for (sha_op.outputs, 0..) |w, wi| try self.witnesses.put(w, Fr.from_int(hash_values[wi]));
+                        },
+                        else => unreachable,
                     }
                 },
                 // else => std.debug.print("Skipping {}\n", .{opcode}),
@@ -122,48 +139,10 @@ const CircuitVm = struct {
         }
     }
 
-    pub fn printWitnesses(self: *CircuitVm) !void {
-        var keys = try self.allocator.alloc(u32, self.witnesses.count());
-        defer self.allocator.free(keys);
-
-        var index: usize = 0;
-        var it = self.witnesses.iterator();
-        while (it.next()) |entry| {
-            keys[index] = entry.key_ptr.*;
-            index += 1;
-        }
-
-        std.mem.sort(u32, keys, {}, std.sort.asc(u32));
-
-        var stdout = std.io.getStdOut().writer();
-        for (keys) |key| {
-            const value = self.witnesses.get(key) orelse unreachable;
-            try stdout.print("{}: {x}\n", .{ key, value });
-        }
-    }
-
-    pub fn dumpWitnesses(self: *CircuitVm) !void {
-        var keys = try self.allocator.alloc(u32, self.witnesses.count());
-        defer self.allocator.free(keys);
-
-        var index: usize = 0;
-        var it = self.witnesses.iterator();
-        while (it.next()) |entry| {
-            keys[index] = entry.key_ptr.*;
-            index += 1;
-        }
-        std.mem.sort(u32, keys, {}, std.sort.asc(u32));
-
-        var witnesses = try std.ArrayList(io.WitnessEntry).initCapacity(self.allocator, keys.len);
-        defer witnesses.deinit();
-
-        for (keys) |key| {
-            const value = self.witnesses.get(key) orelse unreachable;
-            try witnesses.append(.{ .index = key, .value = value.to_int() });
-        }
-
-        var out = [_]io.StackItem{.{ .index = 0, .witnesses = witnesses.items }};
-        const out2: []io.StackItem = &out;
-        try serialize(std.io.getStdOut().writer(), out2);
+    pub fn resolveFunctionInput(self: *CircuitVm, comptime T: type, fi: io.FunctionInput) T {
+        return switch (fi.input) {
+            .Constant => |v| @truncate(v.to_int()),
+            .Witness => |w| @truncate((self.witnesses.get(w) orelse unreachable).to_int()),
+        };
     }
 };

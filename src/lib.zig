@@ -9,6 +9,7 @@ usingnamespace @import("msm/naive.zig");
 usingnamespace @import("blackbox/field.zig");
 usingnamespace @import("blackbox/blackbox.zig");
 usingnamespace @import("cvm/execute.zig");
+// usingnamespace @import("merkle_tree/merkle_tree.zig");
 // pub usingnamespace @import("bvm/execute.zig");
 // const rdtsc = @import("timer/rdtsc.zig").rdtsc;
 // const field_arith = @import("field/field_arith.zig");

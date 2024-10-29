@@ -1,18 +1,6 @@
 const std = @import("std");
 const bincode = @import("../bincode/bincode.zig");
-const Bn254Fr = @import("../bn254/fr.zig").Fr;
-
-// const Circuit = struct {
-//     current_witness_index: u32,
-//     opcodes: []Opcodes,
-// };
-
-// const MemoryAddress = u64;
-
-// const MemoryAddress = union(enum) {
-//     Direct: u64,
-//     Relative: u64,
-// };
+const Fr = @import("../bn254/fr.zig").Fr;
 
 pub const MemoryAddress = struct {
     relative: u32,
@@ -339,44 +327,36 @@ pub const BrilligOpcode = union(enum) {
 
     pub fn format(self: BrilligOpcode, comptime str: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         try formatOpcode(self, str, options, writer);
-        // try writer.print("{s: >16} ", .{@tagName(self)});
-        // inline for (@typeInfo(BrilligOpcode).Union.fields) |field| {
-        //     if (self == @field(BrilligOpcode, field.name)) {
-        //         const field_ptr = @field(self, field.name);
-        //         switch (@typeInfo(field.type)) {
-        //             .Void => return,
-        //             .Struct => try formatStruct(field.type, field_ptr, writer),
-        //             else => try writer.print("{}", .{field_ptr}),
-        //         }
-        //     }
-        // }
     }
 };
 
 pub fn formatOpcode(self: anytype, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
     try writer.print("{s: >16} ", .{@tagName(self)});
+    try formatUnionBody(self, "", .{}, writer);
+}
+
+pub fn formatUnionBody(self: anytype, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
     inline for (@typeInfo(@TypeOf(self)).Union.fields) |field| {
         if (self == @field(@TypeOf(self), field.name)) {
             const field_ptr = @field(self, field.name);
             switch (@typeInfo(field.type)) {
                 .Void => return,
-                // .Struct => try formatStruct(field_ptr, writer),
-                else => {
+                .Struct => {
                     if (!@hasDecl(field.type, "format")) {
                         try formatStruct(field_ptr, writer);
                     } else {
                         try writer.print("{}", .{field_ptr});
                     }
                 },
+                .Union => {
+                    if (!@hasDecl(field.type, "format")) {
+                        try formatUnionBody(field_ptr, "", {}, writer);
+                    } else {
+                        try writer.print("{}", .{field_ptr});
+                    }
+                },
+                else => try writer.print("{any}", .{field_ptr}),
             }
-        }
-    }
-}
-pub fn formatUnionBody(self: anytype, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-    inline for (@typeInfo(@TypeOf(self)).Union.fields) |field| {
-        if (self == @field(@TypeOf(self), field.name)) {
-            const field_ptr = @field(self, field.name);
-            try writer.print("{any}", .{field_ptr});
         }
     }
 }
@@ -384,7 +364,7 @@ pub fn formatUnionBody(self: anytype, comptime _: []const u8, _: std.fmt.FormatO
 pub fn formatStruct(ptr: anytype, writer: anytype) !void {
     try writer.print("{{", .{});
     inline for (@typeInfo(@TypeOf(ptr)).Struct.fields) |field| {
-        if (field.type == Bn254Fr) {
+        if (field.type == Fr) {
             try writer.print(" .{s} = {short}", .{ field.name, @field(ptr, field.name) });
         } else {
             try writer.print(" .{s} = {any}", .{ field.name, @field(ptr, field.name) });
