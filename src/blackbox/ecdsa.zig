@@ -4,6 +4,7 @@ const std = @import("std");
 const PassThroughHasher = struct {
     hash: [32]u8 = undefined,
     pub const digest_length: usize = 32;
+    // pub const block_length: usize = 32;
 
     pub fn init(_: struct {}) PassThroughHasher {
         return PassThroughHasher{};
