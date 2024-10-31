@@ -1,4 +1,5 @@
 const std = @import("std");
+const formatStruct = @import("../bvm/io.zig").formatStruct;
 
 const HASH_SIZE = 32;
 const Hash = [HASH_SIZE]u8;
@@ -51,24 +52,36 @@ const MerkleTree = struct {
     }
 
     pub fn append(self: *MerkleTree, leaves: []Hash) !void {
-        try self.update(self.layers.items[0].size, leaves);
+        try self.update(&.{.{ .index = self.layers.items[0].size, .hashes = leaves }});
     }
 
-    pub fn update(self: *MerkleTree, at: usize, leaves: []Hash) !void {
-        var from_layer = &self.layers.items[0];
-        var start = at;
-        var end = start + leaves.len;
-        from_layer.update(leaves, start);
+    fn update(self: *MerkleTree, updates: []const MerkleUpdate) !void {
+        // TODO: Parallelise.
+        for (updates) |u| {
+            self.layers.items[0].update(u.hashes, u.index);
+        }
 
-        for (self.layers.items[1..]) |*l| {
-            const rehash_start = start - (start & 1);
-            const rehash_end = end + (end & 1);
-            const from = from_layer.data[rehash_start..rehash_end];
+        for (1..self.layers.items.len) |li| {
+            var to_layer = self.layers.items[li];
+            const from_layer = self.layers.items[li - 1];
+            for (updates) |u| {
+                const start = u.index;
+                const end = start + u.hashes.len;
+                const from_start = (start - (start & 1)) >> @truncate(li - 1);
+                const from_end = @max((end + (end & 1)) >> @truncate(li - 1), from_start + 2);
+                const to_start = from_start >> 1;
+                // const to_end = from_end >> 1;
+                const from = from_layer.data[from_start..from_end];
 
-            start = rehash_start / 2;
-            end = rehash_end / 2;
-            l.compressUpdate(from, start, end);
-            from_layer = l;
+                // printStruct(.{
+                //     .li = li,
+                //     .from_start = from_start,
+                //     .from_end = from_end,
+                //     .to_start = to_start,
+                //     .to_end = to_end,
+                // });
+                to_layer.compressUpdate(from, to_start);
+            }
         }
     }
 
@@ -76,6 +89,12 @@ const MerkleTree = struct {
         for (self.layers.items) |*l| try l.flush();
     }
 };
+
+fn printStruct(s: anytype) void {
+    const stderr = std.io.getStdErr().writer();
+    formatStruct(s, stderr) catch unreachable;
+    stderr.print("\n", .{}) catch unreachable;
+}
 
 const Layer = struct {
     allocator: std.mem.Allocator,
@@ -147,9 +166,9 @@ const Layer = struct {
         self.size = @max(at_end, self.size);
     }
 
-    pub fn compressUpdate(self: *Layer, from: []Hash, start: usize, end: usize) void {
+    pub fn compressUpdate(self: *Layer, from: []Hash, start: usize) void {
+        const end = start + (from.len / 2);
         const to = self.data[start..end];
-        std.debug.assert(to.len == from.len / 2);
 
         // std.debug.print("{}\n", .{.{
         //     .li = li,
@@ -178,7 +197,7 @@ const Layer = struct {
 
 const MerkleUpdate = struct {
     index: usize,
-    hash: Hash,
+    hashes: []Hash,
 };
 
 test "merkle tree" {
@@ -190,7 +209,8 @@ test "merkle tree" {
     // Detect and reapply any committed transactions on startup
     // try merkle_tree.recover();
 
-    var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, 1024 * 1024);
+    const num = 1024 * 1024;
+    var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, num);
     defer values.deinit();
     try values.resize(values.capacity);
     for (values.items, 1..) |*v, i| {
@@ -202,12 +222,14 @@ test "merkle tree" {
     try merkle_tree.append(values.items);
     try merkle_tree.flush();
     std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
-    // try merkle_tree.append(&values);
 
-    t.reset();
-    for (0..values.items.len) |i| {
-        try merkle_tree.update(i, values.items[666..667]);
+    var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
+    for (0..num) |i| {
+        try updates.append(.{ .index = i, .hashes = values.items[666..667] });
     }
+    t.reset();
+    try merkle_tree.update(updates.items);
+    try merkle_tree.flush();
     std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
     // Example usage: adding and updating leaves
