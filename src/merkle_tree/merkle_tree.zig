@@ -14,19 +14,27 @@ fn compress(lhs: *const Hash, rhs: *const Hash) Hash {
     return r;
 }
 
+var glob_pool: std.Thread.Pool = undefined;
+
 const MerkleTree = struct {
     allocator: std.mem.Allocator,
     db_path: []const u8,
     layers: std.ArrayList(Layer),
     depth: u6,
+    pool: ?*std.Thread.Pool,
 
-    pub fn init(allocator: std.mem.Allocator, db_path: []const u8, depth: u6, erase: bool) !MerkleTree {
+    pub fn init(allocator: std.mem.Allocator, db_path: []const u8, depth: u6, threads: u8, erase: bool) !MerkleTree {
         var tree = MerkleTree{
             .allocator = allocator,
             .db_path = db_path,
             .layers = try std.ArrayList(Layer).initCapacity(allocator, depth),
             .depth = depth,
+            .pool = if (threads > 0) &glob_pool else null,
         };
+
+        if (tree.pool) |p| {
+            try p.init(.{ .allocator = allocator, .n_jobs = threads });
+        }
 
         if (erase) {
             try std.fs.cwd().deleteTree(db_path);
@@ -49,14 +57,24 @@ const MerkleTree = struct {
             layer.deinit();
         }
         self.layers.deinit();
+        if (self.pool) |p| p.deinit();
     }
 
     pub fn append(self: *MerkleTree, leaves: []Hash) !void {
         try self.update(&.{.{ .index = self.layers.items[0].size, .hashes = leaves }});
     }
 
+    // 3:                            [ ]
+    //                        /              \
+    // 2:              [ ]                         [ ]
+    //              /       \                   /      \
+    // 1:       [ ]          [ ]           [ ]           [ ]
+    //        /     \       /   \        /     \        /   \
+    // 0:   [0]     [1]   [2]   [3]    [4]     [5]    [6]   [7]
     fn update(self: *MerkleTree, updates: []const MerkleUpdate) !void {
-        // TODO: Parallelise.
+        // TODO: Parallelise?
+        // Maybe not. If most of these are single entry updates, it would be more costly to marshal these
+        // out to threads, than just copying them into place.
         for (updates) |u| {
             self.layers.items[0].update(u.hashes, u.index);
         }
@@ -64,24 +82,75 @@ const MerkleTree = struct {
         for (1..self.layers.items.len) |li| {
             var to_layer = self.layers.items[li];
             const from_layer = self.layers.items[li - 1];
+
+            var wg = std.Thread.WaitGroup{};
+            wg.reset();
+
             for (updates) |u| {
-                const start = u.index;
-                const end = start + u.hashes.len;
-                const from_start = (start - (start & 1)) >> @truncate(li - 1);
-                const from_end = @max((end + (end & 1)) >> @truncate(li - 1), from_start + 2);
+                var l0_start = u.index;
+                var l0_end = l0_start + u.hashes.len;
+                l0_start -= l0_start & 1;
+                l0_end += l0_end & 1;
+                var from_start = l0_start >> @truncate(li - 1);
+                var from_end = l0_end >> @truncate(li - 1);
+                from_start -= from_start & 1;
+                from_end += from_end & 1;
+                from_end = @max(from_end, 2);
+
                 const to_start = from_start >> 1;
-                // const to_end = from_end >> 1;
+                const to_end = from_end >> 1;
                 const from = from_layer.data[from_start..from_end];
+
+                to_layer.size = @max(to_layer.size, to_end);
 
                 // printStruct(.{
                 //     .li = li,
+                //     .start = l0_start,
+                //     .end = l0_end,
                 //     .from_start = from_start,
                 //     .from_end = from_end,
                 //     .to_start = to_start,
                 //     .to_end = to_end,
                 // });
-                to_layer.compressUpdate(from, to_start);
+                // to_layer.compressUpdate(from, to_start, &wg);
+                const to = to_layer.data[to_start..to_end];
+
+                // std.debug.print("{}\n", .{.{
+                //     .li = li,
+                //     .from_len = from.len,
+                //     .to_len = to.len,
+                //     .cti = compress_to_idx,
+                //     .cn = compress_num,
+                //     .fls = self.layers.items[li - 1].size,
+                // }});
+
+                for (0..to.len) |i| {
+                    const lhs = &from[i * 2];
+                    const rhs_index = i * 2 + 1;
+                    const rhs = if (from.len == 1 or std.mem.eql(u8, &from[rhs_index], &EMPTY_HASH))
+                        &to_layer.empty_hash
+                    else
+                        &from[rhs_index];
+
+                    // printStruct(.{
+                    //     .i = i,
+                    //     .lhs = lhs,
+                    //     .rhs = rhs,
+                    //     .dst = dst,
+                    //     .pool = self.pool,
+                    // });
+
+                    if (self.pool) |p| {
+                        const dst = &to[i];
+                        p.spawnWg(&wg, compressTask, .{ lhs, rhs, dst });
+                    } else {
+                        to[i] = compress(lhs, rhs);
+                    }
+                }
             }
+
+            wg.wait();
+            // self.pool.waitAndWork(&wg);
         }
     }
 
@@ -101,6 +170,7 @@ const Layer = struct {
     data: []align(std.mem.page_size) Hash,
     size: usize,
     empty_hash: Hash,
+    // pool: *std.Thread.Pool,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -108,6 +178,7 @@ const Layer = struct {
         layer_index: usize,
         max_size: usize,
         empty_hash: Hash,
+        // pool: *std.Thread.Pool,
     ) !Layer {
         const layer_filename = try std.fmt.allocPrint(allocator, "{s}/layer_{d:0>2}.dat", .{ base_path, layer_index });
         defer allocator.free(layer_filename);
@@ -146,6 +217,7 @@ const Layer = struct {
             .data = data,
             .size = size,
             .empty_hash = empty_hash,
+            // .pool = pool,
         };
     }
 
@@ -166,34 +238,48 @@ const Layer = struct {
         self.size = @max(at_end, self.size);
     }
 
-    pub fn compressUpdate(self: *Layer, from: []Hash, start: usize) void {
-        const end = start + (from.len / 2);
-        const to = self.data[start..end];
+    // pub fn compressUpdate(self: *Layer, from: []Hash, start: usize, wg: *std.Thread.WaitGroup) void {
+    //     const end = start + (from.len / 2);
+    //     const to = self.data[start..end];
 
-        // std.debug.print("{}\n", .{.{
-        //     .li = li,
-        //     .from_len = from.len,
-        //     .to_len = to.len,
-        //     .cti = compress_to_idx,
-        //     .cn = compress_num,
-        //     .fls = self.layers.items[li - 1].size,
-        // }});
+    //     // std.debug.print("{}\n", .{.{
+    //     //     .li = li,
+    //     //     .from_len = from.len,
+    //     //     .to_len = to.len,
+    //     //     .cti = compress_to_idx,
+    //     //     .cn = compress_num,
+    //     //     .fls = self.layers.items[li - 1].size,
+    //     // }});
 
-        for (0..to.len) |i| {
-            const rhs_index = i * 2 + 1;
-            const rhs = if (from.len == 1 or std.mem.eql(u8, &from[rhs_index], &EMPTY_HASH))
-                &self.empty_hash
-            else
-                &from[rhs_index];
-            to[i] = compress(&from[i * 2], rhs);
-        }
-        self.size = @max(self.size, end);
-    }
+    //     for (0..to.len) |i| {
+    //         const lhs = &from[i * 2];
+    //         const rhs_index = i * 2 + 1;
+    //         const rhs = if (from.len == 1 or std.mem.eql(u8, &from[rhs_index], &EMPTY_HASH))
+    //             &self.empty_hash
+    //         else
+    //             &from[rhs_index];
+    //         // to[i] = compress(lhs, rhs);
+    //         const dst = &to[i];
+    //         // printStruct(.{
+    //         //     .i = i,
+    //         //     .lhs = lhs,
+    //         //     .rhs = rhs,
+    //         //     .dst = dst,
+    //         //     .pool = self.pool,
+    //         // });
+    //         self.pool.spawnWg(wg, compressTask, .{ lhs, rhs, dst });
+    //     }
+    //     // self.size = @max(self.size, end);
+    // }
 
     pub fn flush(self: *Layer) !void {
         try std.posix.msync(std.mem.asBytes(self.data.ptr), 4);
     }
 };
+
+fn compressTask(lhs: *Hash, rhs: *Hash, dst: *Hash) void {
+    dst.* = compress(lhs, rhs);
+}
 
 const MerkleUpdate = struct {
     index: usize,
@@ -203,7 +289,7 @@ const MerkleUpdate = struct {
 test "merkle tree" {
     const allocator = std.heap.page_allocator;
 
-    var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree", 40, true);
+    var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree_data", 40, 0, true);
     defer merkle_tree.deinit();
 
     // Detect and reapply any committed transactions on startup
@@ -219,9 +305,9 @@ test "merkle tree" {
     }
 
     var t = try std.time.Timer.start();
-    try merkle_tree.append(values.items);
-    try merkle_tree.flush();
-    std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
+    // try merkle_tree.append(values.items);
+    // try merkle_tree.flush();
+    // std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
     var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
     for (0..num) |i| {
