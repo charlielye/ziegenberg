@@ -87,7 +87,40 @@ const MerkleTree = struct {
         try self.update(&.{.{ .index = self.layers.items[0].size, .hashes = leaves }});
     }
 
-    fn update(self: *MerkleTree, updates: []const MerkleUpdate) !void {
+    fn chunkUpdates(self: *MerkleTree, updates: []const MerkleUpdate) ![]MerkleUpdate {
+        // std.debug.print("{any}\n", .{updates});
+        // Start by splitting large updates into chunks to leverage threading.
+        // TODO: Skip this if no threading.
+        const CHUNK_THRESHOLD = 1024;
+        var chunked_updates = try std.ArrayList(MerkleUpdate).initCapacity(self.allocator, updates.len);
+        defer chunked_updates.deinit();
+        for (updates) |u| {
+            if (u.hashes.len > CHUNK_THRESHOLD) {
+                const chunks = if (self.pool) |p| p.threads.len else 1;
+                const chunk_size = @max(u.hashes.len / chunks, CHUNK_THRESHOLD);
+                var start_idx: usize = 0;
+                while (start_idx < u.hashes.len) {
+                    const end_idx = @min(start_idx + chunk_size, u.hashes.len);
+                    try chunked_updates.append(.{
+                        .index = u.index + start_idx,
+                        .hashes = u.hashes[start_idx..end_idx],
+                    });
+                    start_idx = end_idx;
+                }
+            } else {
+                try chunked_updates.append(u);
+            }
+        }
+        // std.debug.print("{any}\n", .{chunked_updates.items});
+        return chunked_updates.toOwnedSlice();
+    }
+
+    fn update(self: *MerkleTree, updates_: []const MerkleUpdate) !void {
+        const updates = try self.chunkUpdates(updates_);
+        defer self.allocator.free(updates);
+
+        std.debug.print("Num updates: {} after chunking: {}\n", .{ updates_.len, updates.len });
+
         // TODO: Parallelise?
         // Maybe not. If most of these are single entry updates, it would be more costly to marshal these
         // out to threads, than just copying them into place.
@@ -96,68 +129,71 @@ const MerkleTree = struct {
         }
 
         for (1..self.layers.items.len) |li| {
-            var to_layer = self.layers.items[li];
-            const from_layer = self.layers.items[li - 1];
-
             var wg = std.Thread.WaitGroup{};
             wg.reset();
 
             for (updates) |u| {
-                var l0_start = u.index;
-                var l0_end = l0_start + u.hashes.len;
-                l0_start -= l0_start & 1;
-                l0_end += l0_end & 1;
-                var from_start = l0_start >> @truncate(li - 1);
-                var from_end = l0_end >> @truncate(li - 1);
-                from_start -= from_start & 1;
-                from_end += from_end & 1;
-                from_end = @max(from_end, 2);
-
-                const to_start = from_start >> 1;
-                const to_end = from_end >> 1;
-                const from = from_layer.data[from_start..from_end];
-
-                to_layer.size = @max(to_layer.size, to_end);
-
-                // printStruct(.{
-                //     .li = li,
-                //     .start = l0_start,
-                //     .end = l0_end,
-                //     .from_start = from_start,
-                //     .from_end = from_end,
-                //     .to_start = to_start,
-                //     .to_end = to_end,
-                // });
-                // to_layer.compressUpdate(from, to_start, &wg);
-                const to = to_layer.data[to_start..to_end];
-
-                for (0..to.len) |i| {
-                    const lhs = &from[i * 2];
-                    const rhs_index = i * 2 + 1;
-                    const rhs = if (from.len == 1 or from[rhs_index].is_zero())
-                        &to_layer.empty_hash
-                    else
-                        &from[rhs_index];
-                    const dst = &to[i];
-
-                    // printStruct(.{
-                    //     .i = i,
-                    //     .lhs = lhs,
-                    //     .rhs = rhs,
-                    //     .dst = dst,
-                    //     .pool = self.pool,
-                    // });
-
-                    if (self.pool) |p| {
-                        p.spawnWg(&wg, compressTask, .{ lhs, rhs, dst });
-                    } else {
-                        compressTask(lhs, rhs, dst);
-                    }
+                if (self.pool) |p| {
+                    p.spawnWg(&wg, applyUpdate, .{ self, u, li });
+                } else {
+                    self.applyUpdate(u, li);
                 }
             }
 
             wg.wait();
             // self.pool.waitAndWork(&wg);
+        }
+    }
+
+    fn applyUpdate(self: *MerkleTree, u: MerkleUpdate, li: usize) void {
+        const to_layer = &self.layers.items[li];
+        const from_layer = &self.layers.items[li - 1];
+        var l0_start = u.index;
+        var l0_end = l0_start + u.hashes.len;
+        l0_start -= l0_start & 1;
+        l0_end += l0_end & 1;
+        var from_start = l0_start >> @truncate(li - 1);
+        var from_end = l0_end >> @truncate(li - 1);
+        from_start -= from_start & 1;
+        from_end += from_end & 1;
+        from_end = @max(from_end, 2);
+
+        const to_start = from_start >> 1;
+        const to_end = from_end >> 1;
+        const from = from_layer.data[from_start..from_end];
+
+        to_layer.size = @max(to_layer.size, to_end);
+
+        // printStruct(.{
+        //     .li = li,
+        //     .start = l0_start,
+        //     .end = l0_end,
+        //     .from_start = from_start,
+        //     .from_end = from_end,
+        //     .to_start = to_start,
+        //     .to_end = to_end,
+        // });
+        // to_layer.compressUpdate(from, to_start, &wg);
+        const to = to_layer.data[to_start..to_end];
+
+        for (0..to.len) |i| {
+            const lhs = &from[i * 2];
+            const rhs_index = i * 2 + 1;
+            const rhs = if (from.len == 1 or from[rhs_index].is_zero())
+                &to_layer.empty_hash
+            else
+                &from[rhs_index];
+            const dst = &to[i];
+
+            // printStruct(.{
+            //     .i = i,
+            //     .lhs = lhs,
+            //     .rhs = rhs,
+            //     .dst = dst,
+            //     .pool = self.pool,
+            // });
+
+            compressTask(lhs, rhs, dst);
         }
     }
 
@@ -256,13 +292,13 @@ const MerkleUpdate = struct {
 test "merkle tree" {
     const allocator = std.heap.page_allocator;
 
-    var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree_data", 40, 0, true);
+    var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree_data", 40, 32, true);
     defer merkle_tree.deinit();
 
     // Detect and reapply any committed transactions on startup
     // try merkle_tree.recover();
 
-    const num = 1024 * 256;
+    const num = 1024 * 1024;
     var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, num);
     defer values.deinit();
     try values.resize(values.capacity);
