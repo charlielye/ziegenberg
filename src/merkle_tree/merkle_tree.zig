@@ -1,11 +1,15 @@
 const std = @import("std");
 const formatStruct = @import("../bvm/io.zig").formatStruct;
+const Fr = @import("../bn254/fr.zig").Fr;
+const G1 = @import("../grumpkin/g1.zig").G1;
+const pedersenHash = @import("../pedersen/pedersen.zig").hash;
+const poseidon2Hash = @import("../poseidon2/poseidon2.zig").hash;
 
 const HASH_SIZE = 32;
-const Hash = [HASH_SIZE]u8;
-const EMPTY_HASH = std.mem.zeroes(Hash);
+const Hash = Fr; //[HASH_SIZE]u8;
+// const EMPTY_HASH = std.mem.zeroes(Hash);
 
-fn compress(lhs: *const Hash, rhs: *const Hash) Hash {
+fn compressSh256(lhs: *const Hash, rhs: *const Hash) Hash {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     var r: Hash = undefined;
     hasher.update(lhs);
@@ -14,8 +18,27 @@ fn compress(lhs: *const Hash, rhs: *const Hash) Hash {
     return r;
 }
 
+fn compressTask(lhs: *Hash, rhs: *Hash, dst: *Hash) void {
+    // dst.* = compressSh256(lhs, rhs);
+
+    // const glhs = G1.Fr.from_int(lhs.to_int());
+    // const grhs = G1.Fr.from_int(rhs.to_int());
+    // dst.* = pedersenHash(G1, &[_]G1.Fr{ glhs, grhs }, 0);
+
+    dst.* = poseidon2Hash(&[_]Fr{ lhs.*, rhs.* });
+}
+
 var glob_pool: std.Thread.Pool = undefined;
 
+// You can stare at this for inspiration.
+//
+// 3:                               [ ]
+//                             /            \
+// 2:               [ ]                             [ ]
+//               /       \                       /       \
+// 1:       [ ]             [ ]             [ ]             [ ]
+//        /     \         /     \         /     \         /     \
+// 0:   [0]     [1]     [2]     [3]     [4]     [5]     [6]     [7]
 const MerkleTree = struct {
     allocator: std.mem.Allocator,
     db_path: []const u8,
@@ -42,11 +65,11 @@ const MerkleTree = struct {
 
         try std.fs.cwd().makePath(db_path);
 
-        var empty_hash = EMPTY_HASH;
+        var empty_hash = Hash.zero;
         for (0..depth) |layer_index| {
             const max_size = @as(usize, 1) << @truncate(depth - 1 - layer_index);
             try tree.layers.append(try Layer.init(allocator, db_path, layer_index, max_size, empty_hash));
-            empty_hash = compress(&empty_hash, &empty_hash);
+            compressTask(&empty_hash, &empty_hash, &empty_hash);
         }
 
         return tree;
@@ -64,13 +87,6 @@ const MerkleTree = struct {
         try self.update(&.{.{ .index = self.layers.items[0].size, .hashes = leaves }});
     }
 
-    // 3:                            [ ]
-    //                        /              \
-    // 2:              [ ]                         [ ]
-    //              /       \                   /      \
-    // 1:       [ ]          [ ]           [ ]           [ ]
-    //        /     \       /   \        /     \        /   \
-    // 0:   [0]     [1]   [2]   [3]    [4]     [5]    [6]   [7]
     fn update(self: *MerkleTree, updates: []const MerkleUpdate) !void {
         // TODO: Parallelise?
         // Maybe not. If most of these are single entry updates, it would be more costly to marshal these
@@ -115,22 +131,14 @@ const MerkleTree = struct {
                 // to_layer.compressUpdate(from, to_start, &wg);
                 const to = to_layer.data[to_start..to_end];
 
-                // std.debug.print("{}\n", .{.{
-                //     .li = li,
-                //     .from_len = from.len,
-                //     .to_len = to.len,
-                //     .cti = compress_to_idx,
-                //     .cn = compress_num,
-                //     .fls = self.layers.items[li - 1].size,
-                // }});
-
                 for (0..to.len) |i| {
                     const lhs = &from[i * 2];
                     const rhs_index = i * 2 + 1;
-                    const rhs = if (from.len == 1 or std.mem.eql(u8, &from[rhs_index], &EMPTY_HASH))
+                    const rhs = if (from.len == 1 or from[rhs_index].is_zero())
                         &to_layer.empty_hash
                     else
                         &from[rhs_index];
+                    const dst = &to[i];
 
                     // printStruct(.{
                     //     .i = i,
@@ -141,10 +149,9 @@ const MerkleTree = struct {
                     // });
 
                     if (self.pool) |p| {
-                        const dst = &to[i];
                         p.spawnWg(&wg, compressTask, .{ lhs, rhs, dst });
                     } else {
-                        to[i] = compress(lhs, rhs);
+                        compressTask(lhs, rhs, dst);
                     }
                 }
             }
@@ -170,7 +177,6 @@ const Layer = struct {
     data: []align(std.mem.page_size) Hash,
     size: usize,
     empty_hash: Hash,
-    // pool: *std.Thread.Pool,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -208,7 +214,7 @@ const Layer = struct {
         const data = std.mem.bytesAsSlice(Hash, data_bytes);
         var size: usize = @as(usize, @bitCast(eof)) / HASH_SIZE;
         if (size > 0) {
-            while (std.mem.eql(u8, &data[size - 1], &EMPTY_HASH)) size -= 1;
+            while (data[size - 1].is_zero()) size -= 1;
         }
         // std.debug.print("{s}: {d} {d}\n", .{ layer_filename, (try file.stat()).size, size });
 
@@ -217,7 +223,6 @@ const Layer = struct {
             .data = data,
             .size = size,
             .empty_hash = empty_hash,
-            // .pool = pool,
         };
     }
 
@@ -238,48 +243,10 @@ const Layer = struct {
         self.size = @max(at_end, self.size);
     }
 
-    // pub fn compressUpdate(self: *Layer, from: []Hash, start: usize, wg: *std.Thread.WaitGroup) void {
-    //     const end = start + (from.len / 2);
-    //     const to = self.data[start..end];
-
-    //     // std.debug.print("{}\n", .{.{
-    //     //     .li = li,
-    //     //     .from_len = from.len,
-    //     //     .to_len = to.len,
-    //     //     .cti = compress_to_idx,
-    //     //     .cn = compress_num,
-    //     //     .fls = self.layers.items[li - 1].size,
-    //     // }});
-
-    //     for (0..to.len) |i| {
-    //         const lhs = &from[i * 2];
-    //         const rhs_index = i * 2 + 1;
-    //         const rhs = if (from.len == 1 or std.mem.eql(u8, &from[rhs_index], &EMPTY_HASH))
-    //             &self.empty_hash
-    //         else
-    //             &from[rhs_index];
-    //         // to[i] = compress(lhs, rhs);
-    //         const dst = &to[i];
-    //         // printStruct(.{
-    //         //     .i = i,
-    //         //     .lhs = lhs,
-    //         //     .rhs = rhs,
-    //         //     .dst = dst,
-    //         //     .pool = self.pool,
-    //         // });
-    //         self.pool.spawnWg(wg, compressTask, .{ lhs, rhs, dst });
-    //     }
-    //     // self.size = @max(self.size, end);
-    // }
-
     pub fn flush(self: *Layer) !void {
         try std.posix.msync(std.mem.asBytes(self.data.ptr), 4);
     }
 };
-
-fn compressTask(lhs: *Hash, rhs: *Hash, dst: *Hash) void {
-    dst.* = compress(lhs, rhs);
-}
 
 const MerkleUpdate = struct {
     index: usize,
@@ -295,28 +262,29 @@ test "merkle tree" {
     // Detect and reapply any committed transactions on startup
     // try merkle_tree.recover();
 
-    const num = 1024 * 1024;
+    const num = 1024 * 256;
     var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, num);
     defer values.deinit();
     try values.resize(values.capacity);
     for (values.items, 1..) |*v, i| {
-        const p: *u256 = @ptrCast(v);
-        p.* = i;
+        v.* = Fr.from_int(i);
+        // const p: *u256 = @ptrCast(v);
+        // p.* = i;
     }
 
     var t = try std.time.Timer.start();
-    // try merkle_tree.append(values.items);
-    // try merkle_tree.flush();
-    // std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
-
-    var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
-    for (0..num) |i| {
-        try updates.append(.{ .index = i, .hashes = values.items[666..667] });
-    }
-    t.reset();
-    try merkle_tree.update(updates.items);
+    try merkle_tree.append(values.items);
     try merkle_tree.flush();
-    std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
+    std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
+
+    // var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
+    // for (0..num) |i| {
+    //     try updates.append(.{ .index = i, .hashes = values.items[666..667] });
+    // }
+    // t.reset();
+    // try merkle_tree.update(updates.items);
+    // try merkle_tree.flush();
+    // std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
     // Example usage: adding and updating leaves
     // var updates = [_]MerkleUpdate{
