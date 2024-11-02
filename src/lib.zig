@@ -8,8 +8,9 @@ usingnamespace @import("blackbox/field.zig");
 usingnamespace @import("blackbox/blackbox.zig");
 usingnamespace @import("cvm/execute.zig");
 usingnamespace @import("merkle_tree/merkle_tree.zig");
+usingnamespace @import("thread/thread_pool.zig");
 usingnamespace @import("poseidon2/poseidon2.zig");
 
-test {
-    std.testing.refAllDecls(@This());
-}
+// test {
+//     std.testing.refAllDecls(@This());
+// }

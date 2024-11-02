@@ -4,6 +4,7 @@ const Fr = @import("../bn254/fr.zig").Fr;
 const G1 = @import("../grumpkin/g1.zig").G1;
 const pedersenHash = @import("../pedersen/pedersen.zig").hash;
 const poseidon2Hash = @import("../poseidon2/poseidon2.zig").hash;
+const ThreadPool = @import("../thread/thread_pool.zig").ThreadPool;
 
 const HASH_SIZE = 32;
 const Hash = Fr; //[HASH_SIZE]u8;
@@ -83,6 +84,10 @@ const MerkleTree = struct {
         if (self.pool) |p| p.deinit();
     }
 
+    pub fn root(self: *MerkleTree) Hash {
+        return self.layers.getLast().data[0];
+    }
+
     /// Appends a contiguous set of leaves to the end of the tree.
     /// The threading strategy is to first break up the set of leaves into appropriately sized chunks for scheduling.
     pub fn append(self: *MerkleTree, leaves: []Hash) !void {
@@ -124,23 +129,28 @@ const MerkleTree = struct {
         // We want to sort before grouping.
         std.mem.sort(MerkleUpdate, updates, {}, MerkleUpdate.lengthComparator);
 
-        const CHUNK_THRESHOLD = 1024 * 2;
+        const CHUNK_THRESHOLD = 1024 * 4;
         var grouped_updates = std.ArrayList([]MerkleUpdate).init(self.allocator);
         defer grouped_updates.deinit();
 
         var start_idx: usize = 0;
         var group_size: usize = 0;
         for (updates, 0..) |u, i| {
+            // printStruct(.{
+            //     .start_idx = start_idx,
+            //     .group_size = group_size,
+            // });
             // If adding this update to the group would push us over the threshold, add the current range as a group.
-            if (group_size + u.hashes.len >= CHUNK_THRESHOLD and i > start_idx) {
-                try grouped_updates.append(updates[start_idx .. start_idx + i]);
+            if (group_size + u.hashes.len > CHUNK_THRESHOLD and i > start_idx) {
+                // std.debug.print("Adding group {}: {} .. {}\n", .{ grouped_updates.items.len, start_idx, i });
+                try grouped_updates.append(updates[start_idx..i]);
                 start_idx = i;
                 group_size = 0;
-                continue;
             }
             group_size += u.hashes.len;
         }
-        if (group_size > 0) {
+        if (start_idx != updates.len) {
+            // std.debug.print("Adding group {}: {} .. \n", .{ grouped_updates.items.len, start_idx });
             try grouped_updates.append(updates[start_idx..]);
         }
         // std.debug.print("{any}\n", .{chunked_updates.items});
@@ -166,6 +176,7 @@ const MerkleTree = struct {
         defer self.allocator.free(groupedUpdates);
 
         std.debug.print("Grouped updates: {}\n", .{groupedUpdates.len});
+        // std.debug.print("{any}\n", .{groupedUpdates});
 
         for (1..self.layers.items.len) |li| {
             var wg = std.Thread.WaitGroup{};
@@ -262,7 +273,6 @@ const Layer = struct {
         layer_index: usize,
         max_size: usize,
         empty_hash: Hash,
-        // pool: *std.Thread.Pool,
     ) !Layer {
         const layer_filename = try std.fmt.allocPrint(allocator, "{s}/layer_{d:0>2}.dat", .{ base_path, layer_index });
         defer allocator.free(layer_filename);
@@ -271,7 +281,9 @@ const Layer = struct {
         var file = try fs.createFile(layer_filename, .{ .read = true, .truncate = false });
         defer file.close();
 
-        const file_size = max_size * HASH_SIZE;
+        // TODO: Capping at 4GB file size to map in.
+        // There's work to do remap if data exceeds this limit.
+        const file_size = @min(max_size * HASH_SIZE, 1024 * 1024 * 1024 * 4);
 
         try std.posix.ftruncate(file.handle, file_size);
 
@@ -333,18 +345,23 @@ const MerkleUpdate = struct {
     fn lengthComparator(_: void, a: MerkleUpdate, b: MerkleUpdate) bool {
         return a.hashes.len < b.hashes.len;
     }
+
+    fn indexComparator(_: void, a: MerkleUpdate, b: MerkleUpdate) bool {
+        return a.index < b.index;
+    }
 };
 
 test "merkle tree" {
     const allocator = std.heap.page_allocator;
 
-    var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree_data", 40, 16, true);
+    var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree_data", 40, 128, true);
     defer merkle_tree.deinit();
 
     // Detect and reapply any committed transactions on startup
     // try merkle_tree.recover();
 
-    const num = 1024 * 16;
+    // Max we can test is 128m due to 4GB mapping.
+    const num = 1024 * 1024;
     var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, num);
     defer values.deinit();
     try values.resize(values.capacity);
@@ -361,18 +378,12 @@ test "merkle tree" {
 
     var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
     for (0..num) |i| {
-        try updates.append(.{ .index = i, .hashes = values.items[666..667] });
+        try updates.append(.{ .index = i, .hashes = values.items[i .. i + 1] });
     }
     t.reset();
     try merkle_tree.update(updates.items);
     try merkle_tree.flush();
     std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
-    // Example usage: adding and updating leaves
-    // var updates = [_]MerkleUpdate{
-    //     .{ .index = 0, .hash = [HASH_SIZE]u8{ /* ... */ } },
-    //     // Add more updates as needed
-    // };
-
-    // try merkle_tree.applyTransaction(&updates);
+    std.debug.print("Root: {x}\n", .{merkle_tree.root()});
 }
