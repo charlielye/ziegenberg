@@ -34,144 +34,157 @@ const CompressTask = struct {
 // 1:       [ ]             [ ]             [ ]             [ ]
 //        /     \         /     \         /     \         /     \
 // 0:   [0]     [1]     [2]     [3]     [4]     [5]     [6]     [7]
-const MerkleTree = struct {
-    allocator: std.mem.Allocator,
-    db_path: []const u8,
-    layers: std.ArrayList(Layer),
-    depth: u6,
-    pool: ?ThreadPool,
+pub fn MerkleTree(depth: u6) type {
+    return struct {
+        const Self = @This();
+        const Index = std.meta.Int(.unsigned, depth);
+        allocator: std.mem.Allocator,
+        db_path: []const u8,
+        layers: [depth]Layer,
+        pool: ?ThreadPool,
 
-    pub fn init(allocator: std.mem.Allocator, db_path: []const u8, depth: u6, threads: u8, erase: bool) !MerkleTree {
-        var tree = MerkleTree{
-            .allocator = allocator,
-            .db_path = db_path,
-            .layers = try std.ArrayList(Layer).initCapacity(allocator, depth),
-            .depth = depth,
-            .pool = if (threads > 0) ThreadPool.init(.{ .max_threads = threads }) else null,
-        };
+        pub fn init(allocator: std.mem.Allocator, db_path: []const u8, threads: u8, erase: bool) !Self {
+            var tree = Self{
+                .allocator = allocator,
+                .db_path = db_path,
+                .layers = undefined,
+                .pool = if (threads > 0) ThreadPool.init(.{ .max_threads = threads }) else null,
+            };
 
-        if (erase) {
-            try std.fs.cwd().deleteTree(db_path);
+            if (erase) {
+                try std.fs.cwd().deleteTree(db_path);
+            }
+
+            try std.fs.cwd().makePath(db_path);
+
+            var empty_hash = Hash.zero;
+            for (0..depth) |layer_index| {
+                const max_size = @as(usize, 1) << @truncate(depth - 1 - layer_index);
+                tree.layers[layer_index] = try Layer.init(allocator, db_path, layer_index, max_size, empty_hash);
+                compressTask(&empty_hash, &empty_hash, &empty_hash);
+            }
+
+            return tree;
         }
 
-        try std.fs.cwd().makePath(db_path);
-
-        var empty_hash = Hash.zero;
-        for (0..depth) |layer_index| {
-            const max_size = @as(usize, 1) << @truncate(depth - 1 - layer_index);
-            try tree.layers.append(try Layer.init(allocator, db_path, layer_index, max_size, empty_hash));
-            compressTask(&empty_hash, &empty_hash, &empty_hash);
-        }
-
-        return tree;
-    }
-
-    pub fn deinit(self: *MerkleTree) void {
-        if (self.pool) |*p| {
-            p.shutdown();
-            p.deinit();
-        }
-        for (self.layers.items) |*layer| {
-            layer.deinit();
-        }
-        self.layers.deinit();
-    }
-
-    pub fn root(self: *MerkleTree) Hash {
-        return self.layers.getLast().data[0];
-    }
-
-    /// Appends a contiguous set of leaves to the end of the tree.
-    pub fn append(self: *MerkleTree, leaves: []Hash) !void {
-        try self.update(&.{.{ .index = self.layers.items[0].size, .hashes = leaves }});
-    }
-
-    pub fn update(self: *MerkleTree, updates: []const MerkleUpdate) !void {
-        // TODO: Parallelise?
-        // var t = try std.time.Timer.start();
-        var num_to_compress: u64 = 0;
-        for (updates) |u| {
-            var l0_start = u.index;
-            var l0_end = l0_start + u.hashes.len;
-            l0_start -= l0_start & 1;
-            l0_end += l0_end & 1;
-            num_to_compress += (l0_end - l0_start) / 2;
-            self.layers.items[0].update(u.hashes, u.index);
-        }
-        var tasks = try std.ArrayList(CompressTask).initCapacity(self.allocator, num_to_compress);
-        defer tasks.deinit();
-        // std.debug.print("Update prep took: {}us\n", .{t.read() / 1000});
-
-        for (1..self.layers.items.len) |li| {
-            self.applyUpdates(updates, li, &tasks);
-        }
-    }
-
-    /// Perform rehashing for a set of updates at a given layer index.
-    /// Assumes that the layer below has already been updated.
-    fn applyUpdates(self: *MerkleTree, updates: []const MerkleUpdate, li: usize, tasks: *std.ArrayList(CompressTask)) void {
-        var counter = std.atomic.Value(u64).init(0);
-        tasks.clearRetainingCapacity();
-        var batch = ThreadPool.Batch{};
-
-        for (updates) |u| {
-            const to_layer = &self.layers.items[li];
-            const from_layer = &self.layers.items[li - 1];
-            var l0_start = u.index;
-            var l0_end = l0_start + u.hashes.len;
-            l0_start -= l0_start & 1;
-            l0_end += l0_end & 1;
-            var from_start = l0_start >> @truncate(li - 1);
-            var from_end = l0_end >> @truncate(li - 1);
-            from_start -= from_start & 1;
-            from_end += from_end & 1;
-            from_end = @max(from_end, 2);
-
-            const to_start = from_start >> 1;
-            const to_end = from_end >> 1;
-            const from = from_layer.data[from_start..from_end];
-
-            to_layer.size = @max(to_layer.size, to_end);
-
-            const to = to_layer.data[to_start..to_end];
-
-            for (0..to.len) |i| {
-                const lhs = &from[i * 2];
-                const rhs_index = i * 2 + 1;
-                const rhs = if (from.len == 1 or from[rhs_index].is_zero())
-                    &to_layer.empty_hash
-                else
-                    &from[rhs_index];
-                const dst = &to[i];
-
-                _ = counter.fetchAdd(1, .acquire);
-                const t = CompressTask{
-                    .cnt = &counter,
-                    .lhs = lhs,
-                    .rhs = rhs,
-                    .dst = dst,
-                    .task = ThreadPool.Task{ .callback = CompressTask.onSchedule },
-                };
-                tasks.append(t) catch unreachable;
-                batch.push(ThreadPool.Batch.from(&tasks.items[tasks.items.len - 1].task));
+        pub fn deinit(self: *Self) void {
+            if (self.pool) |*p| {
+                p.shutdown();
+                p.deinit();
+            }
+            for (self.layers[0..]) |*layer| {
+                layer.deinit();
             }
         }
 
-        if (self.pool) |*p| {
-            p.schedule(batch);
-        } else {
-            for (tasks.items) |*t| CompressTask.onSchedule(&t.task);
+        pub fn root(self: *Self) Hash {
+            return self.layers[depth - 1].data[0];
         }
 
-        // Spin waiting for all jobs to complete.
-        // TODO: Replace with signal raised after fetchSub returns 0?
-        while (counter.load(.acquire) > 0) {}
-    }
+        pub fn getSiblingPath(self: *Self, index: Index) [depth - 1]Hash {
+            var result: [depth - 1]Hash = undefined;
+            var i = index;
+            for (0..depth - 1) |li| {
+                const sibling_index = if (i & 0x1 == 0) i + 1 else i - 1;
+                result[li] = self.layers[li].data[sibling_index];
+                if (result[li].is_zero()) result[li] = self.layers[li].empty_hash;
+                i = sibling_index >> 1;
+            }
+            return result;
+        }
 
-    fn flush(self: *MerkleTree) !void {
-        for (self.layers.items) |*l| try l.flush();
-    }
-};
+        /// Appends a contiguous set of leaves to the end of the tree.
+        pub fn append(self: *Self, leaves: []Hash) !void {
+            try self.update(&.{.{ .index = self.layers[0].size, .hashes = leaves }});
+        }
+
+        pub fn update(self: *Self, updates: []const MerkleUpdate) !void {
+            // TODO: Parallelise?
+            // var t = try std.time.Timer.start();
+            var num_to_compress: u64 = 0;
+            for (updates) |u| {
+                var l0_start = u.index;
+                var l0_end = l0_start + u.hashes.len;
+                l0_start -= l0_start & 1;
+                l0_end += l0_end & 1;
+                num_to_compress += (l0_end - l0_start) / 2;
+                self.layers[0].update(u.hashes, u.index);
+            }
+            var tasks = try std.ArrayList(CompressTask).initCapacity(self.allocator, num_to_compress);
+            defer tasks.deinit();
+            // std.debug.print("Update prep took: {}us\n", .{t.read() / 1000});
+
+            for (1..self.layers.len) |li| {
+                self.applyUpdates(updates, li, &tasks);
+            }
+        }
+
+        /// Perform rehashing for a set of updates at a given layer index.
+        /// Assumes that the layer below has already been updated.
+        fn applyUpdates(self: *Self, updates: []const MerkleUpdate, li: usize, tasks: *std.ArrayList(CompressTask)) void {
+            var counter = std.atomic.Value(u64).init(0);
+            tasks.clearRetainingCapacity();
+            var batch = ThreadPool.Batch{};
+
+            for (updates) |u| {
+                const to_layer = &self.layers[li];
+                const from_layer = &self.layers[li - 1];
+                var l0_start = u.index;
+                var l0_end = l0_start + u.hashes.len;
+                l0_start -= l0_start & 1;
+                l0_end += l0_end & 1;
+                var from_start = l0_start >> @truncate(li - 1);
+                var from_end = l0_end >> @truncate(li - 1);
+                from_start -= from_start & 1;
+                from_end += from_end & 1;
+                from_end = @max(from_end, 2);
+
+                const to_start = from_start >> 1;
+                const to_end = from_end >> 1;
+                const from = from_layer.data[from_start..from_end];
+
+                to_layer.size = @max(to_layer.size, to_end);
+
+                const to = to_layer.data[to_start..to_end];
+
+                for (0..to.len) |i| {
+                    const lhs = &from[i * 2];
+                    const rhs_index = i * 2 + 1;
+                    const rhs = if (from.len == 1 or from[rhs_index].is_zero())
+                        &to_layer.empty_hash
+                    else
+                        &from[rhs_index];
+                    const dst = &to[i];
+
+                    _ = counter.fetchAdd(1, .acquire);
+                    const t = CompressTask{
+                        .cnt = &counter,
+                        .lhs = lhs,
+                        .rhs = rhs,
+                        .dst = dst,
+                        .task = ThreadPool.Task{ .callback = CompressTask.onSchedule },
+                    };
+                    tasks.append(t) catch unreachable;
+                    batch.push(ThreadPool.Batch.from(&tasks.items[tasks.items.len - 1].task));
+                }
+            }
+
+            if (self.pool) |*p| {
+                p.schedule(batch);
+            } else {
+                for (tasks.items) |*t| CompressTask.onSchedule(&t.task);
+            }
+
+            // Spin waiting for all jobs to complete.
+            // TODO: Replace with signal raised after fetchSub returns 0?
+            while (counter.load(.acquire) > 0) {}
+        }
+
+        fn flush(self: *Self) !void {
+            for (self.layers[0..]) |*l| try l.flush();
+        }
+    };
+}
 
 fn printStruct(s: anytype) void {
     const stderr = std.io.getStdErr().writer();
@@ -265,11 +278,11 @@ const MerkleUpdate = struct {
 test "merkle tree bench" {
     const allocator = std.heap.page_allocator;
 
-    const num = 1024 * 1024;
+    const num = 1024 * 64;
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_data";
 
-    var merkle_tree = try MerkleTree.init(allocator, data_dir, 40, threads, true);
+    var merkle_tree = try MerkleTree(40).init(allocator, data_dir, threads, true);
     defer merkle_tree.deinit();
 
     std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
@@ -296,6 +309,12 @@ test "merkle tree bench" {
     std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
     std.debug.print("Root: {x}\n", .{merkle_tree.root()});
+    std.debug.print("Sib Path 0: {x}\n", .{merkle_tree.getSiblingPath(0)});
+
+    if (num == 65536) {
+        const expected = Fr.from_int(0x236d44b93067a534eb8454da8989ccf14140f6c10395733e28be85c4ec143f1f);
+        try std.testing.expect(merkle_tree.root().eql(expected));
+    }
 }
 
 // Inserted 134217728 entries in 33558ms
