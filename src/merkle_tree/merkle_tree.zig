@@ -1,35 +1,29 @@
 const std = @import("std");
 const formatStruct = @import("../bvm/io.zig").formatStruct;
 const Fr = @import("../bn254/fr.zig").Fr;
-const G1 = @import("../grumpkin/g1.zig").G1;
-const pedersenHash = @import("../pedersen/pedersen.zig").hash;
 const poseidon2Hash = @import("../poseidon2/poseidon2.zig").hash;
 const ThreadPool = @import("../thread/thread_pool.zig").ThreadPool;
 
 const HASH_SIZE = 32;
-const Hash = Fr; //[HASH_SIZE]u8;
-// const EMPTY_HASH = std.mem.zeroes(Hash);
+const Hash = Fr;
 
-fn compressSh256(lhs: *const Hash, rhs: *const Hash) Hash {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    var r: Hash = undefined;
-    hasher.update(lhs);
-    hasher.update(rhs);
-    hasher.final(&r);
-    return r;
-}
-
-fn compressTask(lhs: *Hash, rhs: *Hash, dst: *Hash) void {
-    // dst.* = compressSh256(lhs, rhs);
-
-    // const glhs = G1.Fr.from_int(lhs.to_int());
-    // const grhs = G1.Fr.from_int(rhs.to_int());
-    // dst.* = pedersenHash(G1, &[_]G1.Fr{ glhs, grhs }, 0);
-
+inline fn compressTask(lhs: *Hash, rhs: *Hash, dst: *Hash) void {
     dst.* = poseidon2Hash(&[_]Fr{ lhs.*, rhs.* });
 }
 
-var glob_pool: std.Thread.Pool = undefined;
+const CompressTask = struct {
+    task: ThreadPool.Task,
+    lhs: *Hash,
+    rhs: *Hash,
+    dst: *Hash,
+    cnt: *std.atomic.Value(u64),
+
+    pub fn onSchedule(task: *ThreadPool.Task) void {
+        const self: *CompressTask = @fieldParentPtr("task", task);
+        compressTask(self.lhs, self.rhs, self.dst);
+        _ = self.cnt.fetchSub(1, .release);
+    }
+};
 
 // You can stare at this for inspiration.
 //
@@ -45,7 +39,7 @@ const MerkleTree = struct {
     db_path: []const u8,
     layers: std.ArrayList(Layer),
     depth: u6,
-    pool: ?*std.Thread.Pool,
+    pool: ?ThreadPool,
 
     pub fn init(allocator: std.mem.Allocator, db_path: []const u8, depth: u6, threads: u8, erase: bool) !MerkleTree {
         var tree = MerkleTree{
@@ -53,12 +47,8 @@ const MerkleTree = struct {
             .db_path = db_path,
             .layers = try std.ArrayList(Layer).initCapacity(allocator, depth),
             .depth = depth,
-            .pool = if (threads > 0) &glob_pool else null,
+            .pool = if (threads > 0) ThreadPool.init(.{ .max_threads = threads }) else null,
         };
-
-        if (tree.pool) |p| {
-            try p.init(.{ .allocator = allocator, .n_jobs = threads });
-        }
 
         if (erase) {
             try std.fs.cwd().deleteTree(db_path);
@@ -77,11 +67,14 @@ const MerkleTree = struct {
     }
 
     pub fn deinit(self: *MerkleTree) void {
+        if (self.pool) |*p| {
+            p.shutdown();
+            p.deinit();
+        }
         for (self.layers.items) |*layer| {
             layer.deinit();
         }
         self.layers.deinit();
-        if (self.pool) |p| p.deinit();
     }
 
     pub fn root(self: *MerkleTree) Hash {
@@ -94,109 +87,32 @@ const MerkleTree = struct {
         try self.update(&.{.{ .index = self.layers.items[0].size, .hashes = leaves }});
     }
 
-    /// Given a set of updates, splits up updates that are larger than a given threshold.
-    /// The threshold should represent a size at which splitting will give a net gain.
-    /// The actual chunk sizes produced will depend on the number of threads in the worker pool.
-    fn chunkUpdates(self: *MerkleTree, updates: []const MerkleUpdate) ![]MerkleUpdate {
-        // std.debug.print("{any}\n", .{updates});
-        // Start by splitting large updates into chunks to leverage threading.
-        // TODO: Skip this if no threading.
-        const CHUNK_THRESHOLD = 1024;
-        var chunked_updates = try std.ArrayList(MerkleUpdate).initCapacity(self.allocator, updates.len);
-        defer chunked_updates.deinit();
-        for (updates) |u| {
-            if (u.hashes.len > CHUNK_THRESHOLD) {
-                const chunks = if (self.pool) |p| p.threads.len else 1;
-                const chunk_size = @max(u.hashes.len / chunks, CHUNK_THRESHOLD);
-                var start_idx: usize = 0;
-                while (start_idx < u.hashes.len) {
-                    const end_idx = @min(start_idx + chunk_size, u.hashes.len);
-                    try chunked_updates.append(.{
-                        .index = u.index + start_idx,
-                        .hashes = u.hashes[start_idx..end_idx],
-                    });
-                    start_idx = end_idx;
-                }
-            } else {
-                try chunked_updates.append(u);
-            }
-        }
-        // std.debug.print("{any}\n", .{chunked_updates.items});
-        return chunked_updates.toOwnedSlice();
-    }
-
-    fn groupUpdates(self: *MerkleTree, updates: []MerkleUpdate) ![][]MerkleUpdate {
-        // We want to sort before grouping.
-        std.mem.sort(MerkleUpdate, updates, {}, MerkleUpdate.lengthComparator);
-
-        const CHUNK_THRESHOLD = 1024 * 4;
-        var grouped_updates = std.ArrayList([]MerkleUpdate).init(self.allocator);
-        defer grouped_updates.deinit();
-
-        var start_idx: usize = 0;
-        var group_size: usize = 0;
-        for (updates, 0..) |u, i| {
-            // printStruct(.{
-            //     .start_idx = start_idx,
-            //     .group_size = group_size,
-            // });
-            // If adding this update to the group would push us over the threshold, add the current range as a group.
-            if (group_size + u.hashes.len > CHUNK_THRESHOLD and i > start_idx) {
-                // std.debug.print("Adding group {}: {} .. {}\n", .{ grouped_updates.items.len, start_idx, i });
-                try grouped_updates.append(updates[start_idx..i]);
-                start_idx = i;
-                group_size = 0;
-            }
-            group_size += u.hashes.len;
-        }
-        if (start_idx != updates.len) {
-            // std.debug.print("Adding group {}: {} .. \n", .{ grouped_updates.items.len, start_idx });
-            try grouped_updates.append(updates[start_idx..]);
-        }
-        // std.debug.print("{any}\n", .{chunked_updates.items});
-        return grouped_updates.toOwnedSlice();
-    }
-
-    fn update(self: *MerkleTree, updates_: []const MerkleUpdate) !void {
-        // TODO: Merge contiguous updates.
-
-        const updates = try self.chunkUpdates(updates_);
-        defer self.allocator.free(updates);
-
-        std.debug.print("Num updates: {} after chunking: {}\n", .{ updates_.len, updates.len });
-
+    pub fn update(self: *MerkleTree, updates: []const MerkleUpdate) !void {
         // TODO: Parallelise?
-        // Maybe not. If most of these are single entry updates, it would be more costly to marshal these
-        // out to threads, than just copying them into place.
+        var num_to_compress: u64 = 0;
         for (updates) |u| {
+            var l0_start = u.index;
+            var l0_end = l0_start + u.hashes.len;
+            l0_start -= l0_start & 1;
+            l0_end += l0_end & 1;
+            num_to_compress += (l0_end - l0_start) / 2;
             self.layers.items[0].update(u.hashes, u.index);
         }
-
-        const groupedUpdates = try self.groupUpdates(updates);
-        defer self.allocator.free(groupedUpdates);
-
-        std.debug.print("Grouped updates: {}\n", .{groupedUpdates.len});
-        // std.debug.print("{any}\n", .{groupedUpdates});
+        var tasks = try std.ArrayList(CompressTask).initCapacity(self.allocator, num_to_compress);
+        defer tasks.deinit();
 
         for (1..self.layers.items.len) |li| {
-            var wg = std.Thread.WaitGroup{};
-            wg.reset();
-
-            for (groupedUpdates) |gu| {
-                if (self.pool) |p| {
-                    p.spawnWg(&wg, applyUpdates, .{ self, gu, li });
-                } else {
-                    self.applyUpdates(gu, li);
-                }
-            }
-
-            wg.wait();
+            self.applyUpdates(updates, li, &tasks);
         }
     }
 
     /// Perform rehashing for a set of updates at a given layer index.
     /// Assumes that the layer below has already been updated.
-    fn applyUpdates(self: *MerkleTree, updates: []MerkleUpdate, li: usize) void {
+    fn applyUpdates(self: *MerkleTree, updates: []const MerkleUpdate, li: usize, tasks: *std.ArrayList(CompressTask)) void {
+        var counter = std.atomic.Value(u64).init(0);
+        tasks.clearRetainingCapacity();
+        var batch = ThreadPool.Batch{};
+
         for (updates) |u| {
             const to_layer = &self.layers.items[li];
             const from_layer = &self.layers.items[li - 1];
@@ -225,7 +141,6 @@ const MerkleTree = struct {
             //     .to_start = to_start,
             //     .to_end = to_end,
             // });
-            // to_layer.compressUpdate(from, to_start, &wg);
             const to = to_layer.data[to_start..to_end];
 
             for (0..to.len) |i| {
@@ -245,9 +160,28 @@ const MerkleTree = struct {
                 //     .pool = self.pool,
                 // });
 
-                compressTask(lhs, rhs, dst);
+                _ = counter.fetchAdd(1, .acquire);
+                const t = CompressTask{
+                    .cnt = &counter,
+                    .lhs = lhs,
+                    .rhs = rhs,
+                    .dst = dst,
+                    .task = ThreadPool.Task{ .callback = CompressTask.onSchedule },
+                };
+                tasks.append(t) catch unreachable;
+                batch.push(ThreadPool.Batch.from(&tasks.items[tasks.items.len - 1].task));
             }
         }
+
+        if (self.pool) |*p| {
+            p.schedule(batch);
+        } else {
+            for (tasks.items) |*t| CompressTask.onSchedule(&t.task);
+        }
+
+        // Spin waiting for all jobs to complete.
+        // TODO: Replace with signal raised after fetchSub returns 0?
+        while (counter.load(.acquire) > 0) {}
     }
 
     fn flush(self: *MerkleTree) !void {
@@ -341,14 +275,6 @@ const Layer = struct {
 const MerkleUpdate = struct {
     index: usize,
     hashes: []Hash,
-
-    fn lengthComparator(_: void, a: MerkleUpdate, b: MerkleUpdate) bool {
-        return a.hashes.len < b.hashes.len;
-    }
-
-    fn indexComparator(_: void, a: MerkleUpdate, b: MerkleUpdate) bool {
-        return a.index < b.index;
-    }
 };
 
 test "merkle tree" {
@@ -357,9 +283,6 @@ test "merkle tree" {
     var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree_data", 40, 128, true);
     defer merkle_tree.deinit();
 
-    // Detect and reapply any committed transactions on startup
-    // try merkle_tree.recover();
-
     // Max we can test is 128m due to 4GB mapping.
     const num = 1024 * 1024;
     var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, num);
@@ -367,8 +290,6 @@ test "merkle tree" {
     try values.resize(values.capacity);
     for (values.items, 1..) |*v, i| {
         v.* = Fr.from_int(i);
-        // const p: *u256 = @ptrCast(v);
-        // p.* = i;
     }
 
     var t = try std.time.Timer.start();
