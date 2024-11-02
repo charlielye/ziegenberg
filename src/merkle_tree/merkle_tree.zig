@@ -82,13 +82,13 @@ const MerkleTree = struct {
     }
 
     /// Appends a contiguous set of leaves to the end of the tree.
-    /// The threading strategy is to first break up the set of leaves into appropriately sized chunks for scheduling.
     pub fn append(self: *MerkleTree, leaves: []Hash) !void {
         try self.update(&.{.{ .index = self.layers.items[0].size, .hashes = leaves }});
     }
 
     pub fn update(self: *MerkleTree, updates: []const MerkleUpdate) !void {
         // TODO: Parallelise?
+        // var t = try std.time.Timer.start();
         var num_to_compress: u64 = 0;
         for (updates) |u| {
             var l0_start = u.index;
@@ -100,6 +100,7 @@ const MerkleTree = struct {
         }
         var tasks = try std.ArrayList(CompressTask).initCapacity(self.allocator, num_to_compress);
         defer tasks.deinit();
+        // std.debug.print("Update prep took: {}us\n", .{t.read() / 1000});
 
         for (1..self.layers.items.len) |li| {
             self.applyUpdates(updates, li, &tasks);
@@ -132,15 +133,6 @@ const MerkleTree = struct {
 
             to_layer.size = @max(to_layer.size, to_end);
 
-            // printStruct(.{
-            //     .li = li,
-            //     .start = l0_start,
-            //     .end = l0_end,
-            //     .from_start = from_start,
-            //     .from_end = from_end,
-            //     .to_start = to_start,
-            //     .to_end = to_end,
-            // });
             const to = to_layer.data[to_start..to_end];
 
             for (0..to.len) |i| {
@@ -151,14 +143,6 @@ const MerkleTree = struct {
                 else
                     &from[rhs_index];
                 const dst = &to[i];
-
-                // printStruct(.{
-                //     .i = i,
-                //     .lhs = lhs,
-                //     .rhs = rhs,
-                //     .dst = dst,
-                //     .pool = self.pool,
-                // });
 
                 _ = counter.fetchAdd(1, .acquire);
                 const t = CompressTask{
@@ -215,9 +199,10 @@ const Layer = struct {
         var file = try fs.createFile(layer_filename, .{ .read = true, .truncate = false });
         defer file.close();
 
-        // TODO: Capping at 4GB file size to map in.
+        // TODO: Capping at 16TB file size (minus one block) to map in (ext4 file size limit).
+        // Note xfs doesn't have this limit.
         // There's work to do remap if data exceeds this limit.
-        const file_size = @min(max_size * HASH_SIZE, 1024 * 1024 * 1024 * 4);
+        const file_size = @min(max_size * HASH_SIZE, 1024 * 1024 * 1024 * 1024 * 16 - 4096);
 
         try std.posix.ftruncate(file.handle, file_size);
 
@@ -277,14 +262,18 @@ const MerkleUpdate = struct {
     hashes: []Hash,
 };
 
-test "merkle tree" {
+test "merkle tree bench" {
     const allocator = std.heap.page_allocator;
 
-    var merkle_tree = try MerkleTree.init(allocator, "./merkle_tree_data", 40, 128, true);
+    const num = 1024 * 1024;
+    const threads = @min(try std.Thread.getCpuCount(), 64);
+    const data_dir = "./merkle_tree_data";
+
+    var merkle_tree = try MerkleTree.init(allocator, data_dir, 40, threads, true);
     defer merkle_tree.deinit();
 
-    // Max we can test is 128m due to 4GB mapping.
-    const num = 1024 * 1024;
+    std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
+
     var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, num);
     defer values.deinit();
     try values.resize(values.capacity);
@@ -293,9 +282,9 @@ test "merkle tree" {
     }
 
     var t = try std.time.Timer.start();
-    // try merkle_tree.append(values.items);
-    // try merkle_tree.flush();
-    // std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
+    try merkle_tree.append(values.items);
+    try merkle_tree.flush();
+    std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
     var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
     for (0..num) |i| {
@@ -308,3 +297,37 @@ test "merkle tree" {
 
     std.debug.print("Root: {x}\n", .{merkle_tree.root()});
 }
+
+// Inserted 134217728 entries in 33558ms
+// Root: 0x0500253d2d312f39b8126d9d580290977379927f9321ba9a7fd2dd90ca29db01
+// OK
+// All 1 tests passed.
+
+// Benching: size: 1048576, threads: 32
+// Update prep took: 19733us
+// Inserted 1048576 entries in 516ms
+// Update prep took: 6051us
+// Updated 1048576 entries in 14551ms
+// Root: 0x1d8a34206c45ce784581f0d8b0dab54102cd2906217149c6e3562da8d6e63d0b
+// OK
+// All 1 tests passed.
+
+// 1/1 merkle_tree.merkle_tree.test.merkle tree...
+// Benching: size: 1048576, threads: 64
+// Update prep took: 19960us
+// Inserted 1048576 entries in 317ms
+// Update prep took: 6013us
+// Updated 1048576 entries in 7965ms
+// Root: 0x1d8a34206c45ce784581f0d8b0dab54102cd2906217149c6e3562da8d6e63d0b
+// OK
+// All 1 tests passed.
+
+// 1/1 merkle_tree.merkle_tree.test.merkle tree...
+// Benching: size: 1048576, threads: 128
+// Update prep took: 19904us
+// Inserted 1048576 entries in 323ms
+// Update prep took: 5878us
+// Updated 1048576 entries in 7333ms
+// Root: 0x1d8a34206c45ce784581f0d8b0dab54102cd2906217149c6e3562da8d6e63d0b
+// OK
+// All 1 tests passed.
