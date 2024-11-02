@@ -278,11 +278,12 @@ const MerkleUpdate = struct {
 test "merkle tree bench" {
     const allocator = std.heap.page_allocator;
 
+    const depth = 40;
     const num = 1024 * 64;
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_data";
 
-    var merkle_tree = try MerkleTree(40).init(allocator, data_dir, threads, true);
+    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, threads, true);
     defer merkle_tree.deinit();
 
     std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
@@ -308,13 +309,19 @@ test "merkle tree bench" {
     try merkle_tree.flush();
     std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
-    std.debug.print("Root: {x}\n", .{merkle_tree.root()});
-    std.debug.print("Sib Path 0: {x}\n", .{merkle_tree.getSiblingPath(0)});
+    const root = merkle_tree.root();
+    std.debug.print("Root: {x}\n", .{root});
 
     if (num == 65536) {
         const expected = Fr.from_int(0x236d44b93067a534eb8454da8989ccf14140f6c10395733e28be85c4ec143f1f);
-        try std.testing.expect(merkle_tree.root().eql(expected));
+        try std.testing.expect(root.eql(expected));
     }
+
+    const sib_0 = merkle_tree.getSiblingPath(0);
+    const sib_7 = merkle_tree.getSiblingPath(7);
+
+    try std.testing.expect(!sib_0[2].eql(sib_7[2]));
+    try std.testing.expect(sib_0[3].eql(sib_7[3]));
 }
 
 // Inserted 134217728 entries in 33558ms
