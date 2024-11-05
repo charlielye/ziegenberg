@@ -53,7 +53,10 @@ pub fn init(config: Config) ThreadPool {
 
 /// Wait for a thread to call shutdown() on the thread pool and kill the worker threads.
 pub fn deinit(self: *ThreadPool) void {
-    self.join();
+    const sync: Sync = @bitCast(self.sync.load(.monotonic));
+    if (sync.spawned > 0) {
+        self.join();
+    }
     self.* = undefined;
 }
 

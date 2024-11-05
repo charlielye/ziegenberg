@@ -42,6 +42,11 @@ pub fn Field(comptime Params: type) type {
             return @bitCast(@byteSwap(a));
         }
 
+        /// Returns the raw byte slice still in montgomery form.
+        pub fn to_raw_buf(self: Fe) []const u8 {
+            return std.mem.sliceAsBytes(&self.limbs);
+        }
+
         pub fn to_montgomery(self: *Fe) void {
             self.limbs = field_arith.to_montgomery_form(Params, self.limbs);
         }

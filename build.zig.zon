@@ -27,6 +27,10 @@
             .url = "git+https://github.com/prajwalch/yazap#e9293645250e2bc172f100bb0467aea55b1d4f3e",
             .hash = "12204e5a58b533fabc5ba5617552dd1d9b6f50d0807952806ac1e4360f1be55024eb",
         },
+        .lmdb = .{
+            .url = "https://github.com/canvasxyz/zig-lmdb/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "1220d5ca02660a791ea022d60a032ae56b629002d3930117d8047ecf615f012044f7",
+        },
     },
     .paths = .{
         "build.zig",

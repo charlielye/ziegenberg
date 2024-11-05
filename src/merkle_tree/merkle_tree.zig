@@ -5,7 +5,7 @@ const poseidon2Hash = @import("../poseidon2/poseidon2.zig").hash;
 const ThreadPool = @import("../thread/thread_pool.zig").ThreadPool;
 
 const HASH_SIZE = 32;
-const Hash = Fr;
+pub const Hash = Fr;
 
 inline fn compressTask(lhs: *Hash, rhs: *Hash, dst: *Hash) void {
     dst.* = poseidon2Hash(&[_]Fr{ lhs.*, rhs.* });
@@ -81,8 +81,12 @@ pub fn MerkleTree(depth: u6) type {
             return self.layers[depth - 1].data[0];
         }
 
-        pub fn getSiblingPath(self: *Self, index: Index) [depth - 1]Hash {
-            var result: [depth - 1]Hash = undefined;
+        pub fn size(self: *Self) usize {
+            return self.layers[0].size;
+        }
+
+        pub fn getSiblingPath(self: *Self, index: Index) SiblingPath {
+            var result: SiblingPath = undefined;
             var i = index;
             for (0..depth - 1) |li| {
                 const sibling_index = if (i & 0x1 == 0) i + 1 else i - 1;
@@ -94,7 +98,7 @@ pub fn MerkleTree(depth: u6) type {
         }
 
         /// Appends a contiguous set of leaves to the end of the tree.
-        pub fn append(self: *Self, leaves: []Hash) !void {
+        pub fn append(self: *Self, leaves: []const Hash) !void {
             try self.update(&.{.{ .index = self.layers[0].size, .hashes = leaves }});
         }
 
@@ -142,10 +146,9 @@ pub fn MerkleTree(depth: u6) type {
                 const to_start = from_start >> 1;
                 const to_end = from_end >> 1;
                 const from = from_layer.data[from_start..from_end];
+                const to = to_layer.data[to_start..to_end];
 
                 to_layer.size = @max(to_layer.size, to_end);
-
-                const to = to_layer.data[to_start..to_end];
 
                 for (0..to.len) |i| {
                     const lhs = &from[i * 2];
@@ -258,7 +261,7 @@ const Layer = struct {
     }
 
     /// Copy src hash slice to at.
-    pub fn update(self: *Layer, src: []Hash, at: usize) void {
+    pub fn update(self: *Layer, src: []const Hash, at: usize) void {
         const at_end = at + src.len;
         const to = self.data[at..at_end];
         std.mem.copyForwards(Hash, to, src);
@@ -270,14 +273,23 @@ const Layer = struct {
     }
 };
 
-const MerkleUpdate = struct {
+pub const MerkleUpdate = struct {
     index: usize,
-    hashes: []Hash,
+    hashes: []const Hash,
 };
+
+test "merkle tree init deinit" {
+    const allocator = std.heap.page_allocator;
+    const depth = 40;
+    const threads = 1;
+    const data_dir = "./merkle_tree_data";
+
+    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, threads, true);
+    defer merkle_tree.deinit();
+}
 
 test "merkle tree bench" {
     const allocator = std.heap.page_allocator;
-
     const depth = 40;
     const num = 1024 * 64;
     const threads = @min(try std.Thread.getCpuCount(), 64);
