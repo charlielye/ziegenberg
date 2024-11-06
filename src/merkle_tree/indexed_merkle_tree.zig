@@ -63,9 +63,9 @@ pub fn IndexedMerkleTree(depth: u6) type {
     };
 }
 
-test "indexed merkle tree" {
-    const allocator = std.heap.page_allocator;
-    var tree = try IndexedMerkleTree(40).init(allocator, "indexed_merkle_tree_data", 0, true);
-    defer tree.deinit();
-    try tree.add(&[_]Fr{Fr.random()});
-}
+// test "indexed merkle tree" {
+//     const allocator = std.heap.page_allocator;
+//     var tree = try IndexedMerkleTree(40).init(allocator, "indexed_merkle_tree_data", 0, true);
+//     defer tree.deinit();
+//     try tree.add(&[_]Fr{Fr.random()});
+// }

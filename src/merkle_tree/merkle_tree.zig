@@ -7,10 +7,14 @@ const ThreadPool = @import("../thread/thread_pool.zig").ThreadPool;
 const HASH_SIZE = 32;
 pub const Hash = Fr;
 
-inline fn compressTask(lhs: *Hash, rhs: *Hash, dst: *Hash) void {
+/// Our basic hash compression function. We use poseidon2.
+inline fn compressTask(lhs: *const Hash, rhs: *const Hash, dst: *Hash) void {
     dst.* = poseidon2Hash(&[_]Fr{ lhs.*, rhs.* });
 }
 
+/// A task object for scheduling onto the thread pool that performs a hash compression.
+/// This is used for the simple case of updating a collection of leaves, where no intermediate state is needed.
+/// We can layer by layer, schedule the compressions for that layer, wait for completion, and advance up a layer.
 const CompressTask = struct {
     task: ThreadPool.Task,
     lhs: *Hash,
@@ -23,6 +27,16 @@ const CompressTask = struct {
         compressTask(self.lhs, self.rhs, self.dst);
         _ = self.cnt.fetchSub(1, .release);
     }
+};
+
+pub const MerkleUpdate = struct {
+    index: usize,
+    hashes: []const Hash,
+};
+
+pub const IndividualUpdate = struct {
+    index: usize,
+    value: Hash,
 };
 
 // You can stare at this for inspiration.
@@ -38,10 +52,109 @@ pub fn MerkleTree(depth: u6) type {
     return struct {
         const Self = @This();
         const Index = std.meta.Int(.unsigned, depth);
+        const HashPath = [depth - 1]Hash;
+        const IndividualUpdateResult = struct {
+            index: usize,
+            before_path: HashPath,
+            after_path: HashPath,
+            sibling_path: HashPath,
+            root_before: Hash,
+            root_after: Hash,
+        };
         allocator: std.mem.Allocator,
         db_path: []const u8,
         layers: [depth]Layer,
         pool: ?ThreadPool,
+
+        /// A task object for scheduling individual updates that return witness data needed for proving.
+        /// We need each intermediate hash path to reflect the state between each update.
+        /// In this situation only one task at a time can be updating a given layer to ensure we do not overlap.
+        /// The task list is double linked.
+        /// This allows a task to wait until its predecessor has advanced to a layer above before starting.
+        /// It also allows a task to schedule it's successor once it has been scheduled (to avoid deadlock).
+        const IndividualUpdateTask = struct {
+            task: ThreadPool.Task,
+            index: usize,
+            value: *const Hash,
+            level: std.atomic.Value(u64),
+            next: ?*IndividualUpdateTask,
+            prev: ?*IndividualUpdateTask,
+            layers: []Layer,
+            result: *IndividualUpdateResult,
+            pool: ?*ThreadPool,
+
+            pub fn onSchedule(task: *ThreadPool.Task) void {
+                const self: *IndividualUpdateTask = @fieldParentPtr("task", task);
+
+                // If have a dependent, we can schedule now that we've been scheduled.
+                if (self.next) |t| {
+                    self.pool.?.schedule(ThreadPool.Batch.from(&t.task));
+                }
+
+                self.result.index = self.index;
+
+                for (0..depth) |li| {
+                    // Announce our new level.
+                    std.debug.print("index {} setting level to {}\n", .{ self.index, li });
+                    self.level.store(li, .release);
+
+                    // Ensure the update before us has advanced to a higher level.
+                    if (self.prev) |prev| {
+                        while (prev.level.load(.acquire) == self.level.load(.monotonic)) {
+                            std.atomic.spinLoopHint();
+                        }
+                    }
+                    std.debug.print("index {} level proceeding {}\n", .{ self.index, li });
+
+                    if (li == 0) {
+                        const sib_idx = if (self.index & 1 == 1) self.index - 1 else self.index + 1;
+                        self.result.before_path[0] = self.layers[0].data[self.index];
+                        self.result.after_path[0] = self.value.*;
+                        self.result.sibling_path[0] = self.layers[0].data[sib_idx];
+                        self.layers[0].update(&[_]Hash{self.value.*}, self.index);
+                        continue;
+                    }
+
+                    // const prev = self.prev.?;
+
+                    const to_layer = &self.layers[li];
+                    const from_layer = &self.layers[li - 1];
+                    const from_idx = self.index >> @truncate(li - 1);
+                    const is_right = from_idx & 1;
+                    const from_idx_lhs = from_idx - is_right;
+                    const from_idx_rhs = if (is_right == 1) from_idx else from_idx + 1;
+                    const to_idx = from_idx >> 1;
+
+                    to_layer.size = @max(to_layer.size, to_idx);
+
+                    const lhs = &from_layer.data[from_idx_lhs];
+                    const rhs = from_layer.get_ptr(from_idx_rhs);
+                    const dst = &to_layer.data[to_idx];
+
+                    if (li < depth - 1) {
+                        self.result.before_path[li] = to_layer.get(to_idx);
+                    } else {
+                        self.result.root_before = to_layer.get(to_idx);
+                    }
+
+                    compressTask(lhs, rhs, dst);
+
+                    // printStruct(.{ .li = li, .lhs = lhs.*, .rhs = rhs.*, .dst = dst.* });
+
+                    if (li < depth - 1) {
+                        const sib_idx = if (to_idx & 1 == 1) to_idx - 1 else to_idx + 1;
+                        self.result.after_path[li] = dst.*;
+                        self.result.sibling_path[li] = to_layer.get(sib_idx);
+                    } else {
+                        printStruct(.{ .li = li, .lhs = lhs.*, .rhs = rhs.*, .dst = dst.* });
+                        self.result.root_after = to_layer.get(to_idx);
+                    }
+                }
+
+                std.debug.print("index {} setting level {}\n", .{ self.index, depth });
+                self.level.store(depth, .release);
+            }
+        };
 
         pub fn init(allocator: std.mem.Allocator, db_path: []const u8, threads: u8, erase: bool) !Self {
             var tree = Self{
@@ -85,13 +198,12 @@ pub fn MerkleTree(depth: u6) type {
             return self.layers[0].size;
         }
 
-        pub fn getSiblingPath(self: *Self, index: Index) SiblingPath {
-            var result: SiblingPath = undefined;
+        pub fn getSiblingPath(self: *Self, index: Index) HashPath {
+            var result: HashPath = undefined;
             var i = index;
             for (0..depth - 1) |li| {
                 const sibling_index = if (i & 0x1 == 0) i + 1 else i - 1;
-                result[li] = self.layers[li].data[sibling_index];
-                if (result[li].is_zero()) result[li] = self.layers[li].empty_hash;
+                result[li] = self.layers[li].get(sibling_index);
                 i = sibling_index >> 1;
             }
             return result;
@@ -154,7 +266,7 @@ pub fn MerkleTree(depth: u6) type {
                     const lhs = &from[i * 2];
                     const rhs_index = i * 2 + 1;
                     const rhs = if (from.len == 1 or from[rhs_index].is_zero())
-                        &to_layer.empty_hash
+                        &from_layer.empty_hash
                     else
                         &from[rhs_index];
                     const dst = &to[i];
@@ -179,12 +291,51 @@ pub fn MerkleTree(depth: u6) type {
             }
 
             // Spin waiting for all jobs to complete.
-            // TODO: Replace with signal raised after fetchSub returns 0?
-            while (counter.load(.acquire) > 0) {}
+            while (counter.load(.acquire) > 0) {
+                std.atomic.spinLoopHint();
+            }
         }
 
         fn flush(self: *Self) !void {
             for (self.layers[0..]) |*l| try l.flush();
+        }
+
+        pub fn updateAndGetWitness(self: *Self, updates: []const IndividualUpdate) ![]IndividualUpdateResult {
+            var tasks = try std.ArrayList(IndividualUpdateTask).initCapacity(self.allocator, updates.len);
+            try tasks.resize(tasks.capacity);
+            defer tasks.deinit();
+
+            var result = try std.ArrayList(IndividualUpdateResult).initCapacity(self.allocator, updates.len);
+            try result.resize(result.capacity);
+            defer result.deinit();
+
+            for (updates, 0..) |*u, i| {
+                tasks.items[i] = IndividualUpdateTask{
+                    .prev = if (i > 0) &tasks.items[i - 1] else null,
+                    .next = if (i < updates.len - 1) &tasks.items[i + 1] else null,
+                    .index = u.index,
+                    .layers = &self.layers,
+                    .level = std.atomic.Value(u64).init(0),
+                    .result = &result.items[i],
+                    .task = ThreadPool.Task{ .callback = IndividualUpdateTask.onSchedule },
+                    .value = &u.value,
+                    .pool = if (self.pool) |*p| p else null,
+                };
+            }
+
+            if (self.pool) |*p| {
+                // Schedule the first update. Each update schedules the next.
+                p.schedule(ThreadPool.Batch.from(&tasks.items[0].task));
+            } else {
+                for (tasks.items) |*t| IndividualUpdateTask.onSchedule(&t.task);
+            }
+
+            // Spin waiting for all jobs to complete.
+            while (tasks.items[tasks.items.len - 1].level.load(.acquire) < depth) {
+                std.atomic.spinLoopHint();
+            }
+
+            return result.toOwnedSlice();
         }
     };
 }
@@ -255,6 +406,14 @@ const Layer = struct {
         defer std.posix.munmap(std.mem.sliceAsBytes(self.data));
     }
 
+    pub inline fn get(self: *Layer, at: usize) Hash {
+        return if (self.data[at].is_zero()) self.empty_hash else self.data[at];
+    }
+
+    pub inline fn get_ptr(self: *Layer, at: usize) *const Hash {
+        return if (self.data[at].is_zero()) &self.empty_hash else &self.data[at];
+    }
+
     /// Appends src to the layer, and returns a slice of elements that must be re-hashed up the tree.
     pub fn append(self: *Layer, src: []Hash) void {
         self.update(src, self.size);
@@ -273,11 +432,6 @@ const Layer = struct {
     }
 };
 
-pub const MerkleUpdate = struct {
-    index: usize,
-    hashes: []const Hash,
-};
-
 test "merkle tree init deinit" {
     const allocator = std.heap.page_allocator;
     const depth = 40;
@@ -291,7 +445,7 @@ test "merkle tree init deinit" {
 test "merkle tree bench" {
     const allocator = std.heap.page_allocator;
     const depth = 40;
-    const num = 1024 * 64;
+    const num = 16;
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_data";
 
@@ -311,6 +465,7 @@ test "merkle tree bench" {
     try merkle_tree.append(values.items);
     try merkle_tree.flush();
     std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
+    std.debug.print("Root: {x}\n", .{merkle_tree.root()});
 
     var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
     for (0..num) |i| {
@@ -321,12 +476,11 @@ test "merkle tree bench" {
     try merkle_tree.flush();
     std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
-    const root = merkle_tree.root();
-    std.debug.print("Root: {x}\n", .{root});
+    std.debug.print("Root: {x}\n", .{merkle_tree.root()});
 
     if (num == 65536) {
-        const expected = Fr.from_int(0x236d44b93067a534eb8454da8989ccf14140f6c10395733e28be85c4ec143f1f);
-        try std.testing.expect(root.eql(expected));
+        const expected = Fr.from_int(0x13352cbc749b6262990ed07a2b145229ed5aefecac08070d462b651c7fae28ad);
+        try std.testing.expect(merkle_tree.root().eql(expected));
     }
 
     const sib_0 = merkle_tree.getSiblingPath(0);
@@ -369,3 +523,45 @@ test "merkle tree bench" {
 // Root: 0x1d8a34206c45ce784581f0d8b0dab54102cd2906217149c6e3562da8d6e63d0b
 // OK
 // All 1 tests passed.
+
+test "merkle tree individual update bench" {
+    const allocator = std.heap.page_allocator;
+    const depth = 40;
+    const num = 16;
+    const threads = @min(try std.Thread.getCpuCount(), 64);
+    const data_dir = "./merkle_tree_indiv_data";
+
+    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, threads, true);
+    defer merkle_tree.deinit();
+
+    std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
+
+    var updates = try std.ArrayList(IndividualUpdate).initCapacity(allocator, num);
+    defer updates.deinit();
+    try updates.resize(updates.capacity);
+    for (updates.items, 0..) |*v, i| {
+        v.index = i;
+        v.value = Fr.from_int(i + 1);
+    }
+
+    var t = try std.time.Timer.start();
+    const r = try merkle_tree.updateAndGetWitness(updates.items);
+    defer allocator.free(r);
+    try merkle_tree.flush();
+    std.debug.print("Update with witness {} entries in {}ms\n", .{ updates.items.len, t.read() / 1_000_000 });
+
+    std.debug.print("Root: {x}\n", .{merkle_tree.root()});
+
+    for (r) |result| {
+        std.debug.print("{x} -> {x}\n", .{
+            result.root_before,
+            result.root_after,
+        });
+        //     std.debug.print("-------\nidx: {}\nbefore: {x}\nafter: {x}\nsib: {x}\n", .{
+        //         result.index,
+        //         result.before_path,
+        //         result.after_path,
+        //         result.sibling_path,
+        //     });
+    }
+}
