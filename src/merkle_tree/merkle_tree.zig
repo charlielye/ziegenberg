@@ -120,7 +120,7 @@ pub fn MerkleTree(depth: u6) type {
                             rhs = self.value.*;
                             self.result.sibling_path[0] = lhs;
                         }
-                        self.result.before_path[0] = self.layers[0].data[self.index];
+                        self.result.before_path[0] = self.layers[0].get(self.index);
                         self.result.after_path[0] = self.value.*;
                         self.layers[0].update(&[_]Hash{self.value.*}, self.index);
                         continue;
@@ -147,11 +147,11 @@ pub fn MerkleTree(depth: u6) type {
                         if (!is_right) {
                             lhs = dst.*;
                             rhs = to_layer.get(to_idx + 1);
-                            self.result.sibling_path[0] = rhs;
+                            self.result.sibling_path[li] = rhs;
                         } else {
                             lhs = to_layer.get(to_idx - 1);
                             rhs = dst.*;
-                            self.result.sibling_path[0] = lhs;
+                            self.result.sibling_path[li] = lhs;
                         }
                         self.result.after_path[li] = dst.*;
                     } else {
@@ -200,7 +200,7 @@ pub fn MerkleTree(depth: u6) type {
         }
 
         pub fn root(self: *Self) Hash {
-            return self.layers[depth - 1].data[0];
+            return self.layers[depth - 1].get(0);
         }
 
         pub fn size(self: *Self) usize {
@@ -546,16 +546,30 @@ test "merkle tree individual update bench" {
 
     std.debug.print("Root: {x}\n", .{merkle_tree.root()});
 
-    // for (r) |result| {
-    //     std.debug.print("{x} -> {x}\n", .{
-    //         result.root_before,
-    //         result.root_after,
-    //     });
-    //     //     std.debug.print("-------\nidx: {}\nbefore: {x}\nafter: {x}\nsib: {x}\n", .{
-    //     //         result.index,
-    //     //         result.before_path,
-    //     //         result.after_path,
-    //     //         result.sibling_path,
-    //     //     });
-    // }
+    // Sanity check the witness results. Only the first 32, we don't have all day.
+    for (r[0..32]) |result| {
+        var h = result.before_path[0];
+        for (&result.before_path, &result.sibling_path, 0..) |*bh, *sh, li| {
+            try std.testing.expect(h.eql(bh.*));
+
+            if ((result.index >> @truncate(li)) & 1 == 0) {
+                compressTask(&h, sh, &h);
+            } else {
+                compressTask(sh, &h, &h);
+            }
+        }
+        try std.testing.expect(h.eql(result.root_before));
+
+        h = result.after_path[0];
+        for (&result.after_path, &result.sibling_path, 0..) |*bh, *sh, li| {
+            try std.testing.expect(h.eql(bh.*));
+
+            if ((result.index >> @truncate(li)) & 1 == 0) {
+                compressTask(&h, sh, &h);
+            } else {
+                compressTask(sh, &h, &h);
+            }
+        }
+        try std.testing.expect(h.eql(result.root_after));
+    }
 }
