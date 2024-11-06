@@ -70,7 +70,7 @@ pub fn MerkleTree(depth: u6) type {
         /// We need each intermediate hash path to reflect the state between each update.
         /// In this situation only one task at a time can be updating a given layer to ensure we do not overlap.
         /// The task list is double linked.
-        /// This allows a task to wait until its predecessor has advanced to a layer above before starting.
+        /// This allows a task to wait until its predecessor has advanced to a layer above before updating the layer.
         /// It also allows a task to schedule it's successor once it has been scheduled (to avoid deadlock).
         const IndividualUpdateTask = struct {
             task: ThreadPool.Task,
@@ -88,48 +88,49 @@ pub fn MerkleTree(depth: u6) type {
 
                 // If have a dependent, we can schedule now that we've been scheduled.
                 if (self.next) |t| {
-                    self.pool.?.schedule(ThreadPool.Batch.from(&t.task));
+                    if (self.pool) |p| {
+                        p.schedule(ThreadPool.Batch.from(&t.task));
+                    }
                 }
 
                 self.result.index = self.index;
 
+                var lhs: Hash = undefined;
+                var rhs: Hash = undefined;
+
                 for (0..depth) |li| {
-                    // Announce our new level.
-                    std.debug.print("index {} setting level to {}\n", .{ self.index, li });
+                    // Announce our new level. Permits our successor to exit the loop below.
                     self.level.store(li, .release);
 
-                    // Ensure the update before us has advanced to a higher level.
+                    // Loop, waiting for the update before us to advanced to a higher level.
                     if (self.prev) |prev| {
                         while (prev.level.load(.acquire) == self.level.load(.monotonic)) {
                             std.atomic.spinLoopHint();
                         }
                     }
-                    std.debug.print("index {} level proceeding {}\n", .{ self.index, li });
 
                     if (li == 0) {
-                        const sib_idx = if (self.index & 1 == 1) self.index - 1 else self.index + 1;
+                        const is_right = self.index & 1 == 1;
+                        if (!is_right) {
+                            lhs = self.value.*;
+                            rhs = self.layers[0].get(self.index + 1);
+                            self.result.sibling_path[0] = rhs;
+                        } else {
+                            lhs = self.layers[0].get(self.index - 1);
+                            rhs = self.value.*;
+                            self.result.sibling_path[0] = lhs;
+                        }
                         self.result.before_path[0] = self.layers[0].data[self.index];
                         self.result.after_path[0] = self.value.*;
-                        self.result.sibling_path[0] = self.layers[0].data[sib_idx];
                         self.layers[0].update(&[_]Hash{self.value.*}, self.index);
                         continue;
                     }
 
-                    // const prev = self.prev.?;
-
                     const to_layer = &self.layers[li];
-                    const from_layer = &self.layers[li - 1];
-                    const from_idx = self.index >> @truncate(li - 1);
-                    const is_right = from_idx & 1;
-                    const from_idx_lhs = from_idx - is_right;
-                    const from_idx_rhs = if (is_right == 1) from_idx else from_idx + 1;
-                    const to_idx = from_idx >> 1;
+                    const to_idx = self.index >> @truncate(li);
+                    const dst = &to_layer.data[to_idx];
 
                     to_layer.size = @max(to_layer.size, to_idx);
-
-                    const lhs = &from_layer.data[from_idx_lhs];
-                    const rhs = from_layer.get_ptr(from_idx_rhs);
-                    const dst = &to_layer.data[to_idx];
 
                     if (li < depth - 1) {
                         self.result.before_path[li] = to_layer.get(to_idx);
@@ -137,21 +138,29 @@ pub fn MerkleTree(depth: u6) type {
                         self.result.root_before = to_layer.get(to_idx);
                     }
 
-                    compressTask(lhs, rhs, dst);
+                    compressTask(&lhs, &rhs, dst);
 
                     // printStruct(.{ .li = li, .lhs = lhs.*, .rhs = rhs.*, .dst = dst.* });
 
                     if (li < depth - 1) {
-                        const sib_idx = if (to_idx & 1 == 1) to_idx - 1 else to_idx + 1;
+                        const is_right = to_idx & 1 == 1;
+                        if (!is_right) {
+                            lhs = dst.*;
+                            rhs = to_layer.get(to_idx + 1);
+                            self.result.sibling_path[0] = rhs;
+                        } else {
+                            lhs = to_layer.get(to_idx - 1);
+                            rhs = dst.*;
+                            self.result.sibling_path[0] = lhs;
+                        }
                         self.result.after_path[li] = dst.*;
-                        self.result.sibling_path[li] = to_layer.get(sib_idx);
                     } else {
-                        printStruct(.{ .li = li, .lhs = lhs.*, .rhs = rhs.*, .dst = dst.* });
+                        // printStruct(.{ .li = li, .lhs = lhs.*, .rhs = rhs.*, .dst = dst.* });
                         self.result.root_after = to_layer.get(to_idx);
                     }
                 }
 
-                std.debug.print("index {} setting level {}\n", .{ self.index, depth });
+                // std.debug.print("index {} setting level {}\n", .{ self.index, depth });
                 self.level.store(depth, .release);
             }
         };
@@ -445,7 +454,7 @@ test "merkle tree init deinit" {
 test "merkle tree bench" {
     const allocator = std.heap.page_allocator;
     const depth = 40;
-    const num = 16;
+    const num = 1024 * 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_data";
 
@@ -462,21 +471,35 @@ test "merkle tree bench" {
     }
 
     var t = try std.time.Timer.start();
-    try merkle_tree.append(values.items);
-    try merkle_tree.flush();
-    std.debug.print("Inserted {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
-    std.debug.print("Root: {x}\n", .{merkle_tree.root()});
 
-    var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
-    for (0..num) |i| {
-        try updates.append(.{ .index = i, .hashes = values.items[i .. i + 1] });
+    {
+        try merkle_tree.append(values.items);
+        try merkle_tree.flush();
+        const took = t.read();
+        std.debug.print("Inserted {} entries in {}ms {d:.0}/s\n", .{
+            values.items.len,
+            t.read() / 1_000_000,
+            @as(f64, @floatFromInt(values.items.len)) / (@as(f64, @floatFromInt(took)) / 1_000_000_000),
+        });
+        std.debug.print("Root: {x}\n", .{merkle_tree.root()});
     }
-    t.reset();
-    try merkle_tree.update(updates.items);
-    try merkle_tree.flush();
-    std.debug.print("Updated {} entries in {}ms\n", .{ values.items.len, t.read() / 1_000_000 });
 
-    std.debug.print("Root: {x}\n", .{merkle_tree.root()});
+    {
+        var updates = try std.ArrayList(MerkleUpdate).initCapacity(allocator, num);
+        for (0..num) |i| {
+            try updates.append(.{ .index = i, .hashes = values.items[i .. i + 1] });
+        }
+        t.reset();
+        try merkle_tree.update(updates.items);
+        try merkle_tree.flush();
+        const took = t.read();
+        std.debug.print("Updated {} entries in {}ms {d:.0}/s\n", .{
+            updates.items.len,
+            took / 1_000_000,
+            @as(f64, @floatFromInt(updates.items.len)) / (@as(f64, @floatFromInt(took)) / 1_000_000_000),
+        });
+        std.debug.print("Root: {x}\n", .{merkle_tree.root()});
+    }
 
     if (num == 65536) {
         const expected = Fr.from_int(0x13352cbc749b6262990ed07a2b145229ed5aefecac08070d462b651c7fae28ad);
@@ -490,44 +513,10 @@ test "merkle tree bench" {
     try std.testing.expect(sib_0[3].eql(sib_7[3]));
 }
 
-// Inserted 134217728 entries in 33558ms
-// Root: 0x0500253d2d312f39b8126d9d580290977379927f9321ba9a7fd2dd90ca29db01
-// OK
-// All 1 tests passed.
-
-// Benching: size: 1048576, threads: 32
-// Update prep took: 19733us
-// Inserted 1048576 entries in 516ms
-// Update prep took: 6051us
-// Updated 1048576 entries in 14551ms
-// Root: 0x1d8a34206c45ce784581f0d8b0dab54102cd2906217149c6e3562da8d6e63d0b
-// OK
-// All 1 tests passed.
-
-// 1/1 merkle_tree.merkle_tree.test.merkle tree...
-// Benching: size: 1048576, threads: 64
-// Update prep took: 19960us
-// Inserted 1048576 entries in 317ms
-// Update prep took: 6013us
-// Updated 1048576 entries in 7965ms
-// Root: 0x1d8a34206c45ce784581f0d8b0dab54102cd2906217149c6e3562da8d6e63d0b
-// OK
-// All 1 tests passed.
-
-// 1/1 merkle_tree.merkle_tree.test.merkle tree...
-// Benching: size: 1048576, threads: 128
-// Update prep took: 19904us
-// Inserted 1048576 entries in 323ms
-// Update prep took: 5878us
-// Updated 1048576 entries in 7333ms
-// Root: 0x1d8a34206c45ce784581f0d8b0dab54102cd2906217149c6e3562da8d6e63d0b
-// OK
-// All 1 tests passed.
-
 test "merkle tree individual update bench" {
     const allocator = std.heap.page_allocator;
     const depth = 40;
-    const num = 16;
+    const num = 1024 * 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_indiv_data";
 
@@ -548,20 +537,25 @@ test "merkle tree individual update bench" {
     const r = try merkle_tree.updateAndGetWitness(updates.items);
     defer allocator.free(r);
     try merkle_tree.flush();
-    std.debug.print("Update with witness {} entries in {}ms\n", .{ updates.items.len, t.read() / 1_000_000 });
+    const took = t.read();
+    std.debug.print("Update with witness {} entries in {}ms {d:.0}/s\n", .{
+        updates.items.len,
+        took / 1_000_000,
+        @as(f64, @floatFromInt(updates.items.len)) / (@as(f64, @floatFromInt(took)) / 1_000_000_000),
+    });
 
     std.debug.print("Root: {x}\n", .{merkle_tree.root()});
 
-    for (r) |result| {
-        std.debug.print("{x} -> {x}\n", .{
-            result.root_before,
-            result.root_after,
-        });
-        //     std.debug.print("-------\nidx: {}\nbefore: {x}\nafter: {x}\nsib: {x}\n", .{
-        //         result.index,
-        //         result.before_path,
-        //         result.after_path,
-        //         result.sibling_path,
-        //     });
-    }
+    // for (r) |result| {
+    //     std.debug.print("{x} -> {x}\n", .{
+    //         result.root_before,
+    //         result.root_after,
+    //     });
+    //     //     std.debug.print("-------\nidx: {}\nbefore: {x}\nafter: {x}\nsib: {x}\n", .{
+    //     //         result.index,
+    //     //         result.before_path,
+    //     //         result.after_path,
+    //     //         result.sibling_path,
+    //     //     });
+    // }
 }
