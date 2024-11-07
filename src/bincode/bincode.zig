@@ -95,7 +95,7 @@ fn deserializeBufferInt(comptime T: type, source_ptr: *[]const u8) T {
     const source = source_ptr.*;
     if (bytesRequired <= source.len) {
         var tmp: [bytesRequired]u8 = undefined;
-        std.mem.copy(u8, &tmp, source[0..bytesRequired]);
+        std.mem.copyForwards(u8, &tmp, source[0..bytesRequired]);
         source_ptr.* = source[bytesRequired..];
         return std.mem.readInt(T, &tmp, std.builtin.Endian.little);
     } else {

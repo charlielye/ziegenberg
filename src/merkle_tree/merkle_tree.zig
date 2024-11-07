@@ -1,3 +1,15 @@
+/// A super fast merkle tree implementation using memory mapped io and optimal threading strategies.
+///
+/// t % zig build test-exe install -Doptimize=ReleaseFast -Dtest-filter='merkle tree' && ./zig-out/bin/tests                                                      8s ~/ziegenberg master+ charlie-box
+/// Benching: size: 1048576, threads: 64
+/// Inserted 1048576 entries in 385ms 2722472/s
+/// Root: 0x221e028d9ae9ac247e2d93c8cdcddffc7d7f17f88c000fb6555f0a262a64c1b9
+/// Updated 1048576 entries in 8452ms 124050/s
+/// Root: 0x221e028d9ae9ac247e2d93c8cdcddffc7d7f17f88c000fb6555f0a262a64c1b9
+/// Benching: size: 1048576, threads: 64
+/// Update with witness 1048576 entries in 16481ms 63620/s
+/// Root: 0x221e028d9ae9ac247e2d93c8cdcddffc7d7f17f88c000fb6555f0a262a64c1b9
+/// All 3 tests passed.
 const std = @import("std");
 const formatStruct = @import("../bvm/io.zig").formatStruct;
 const Fr = @import("../bn254/fr.zig").Fr;
@@ -51,7 +63,7 @@ pub const IndividualUpdate = struct {
 pub fn MerkleTree(depth: u6) type {
     return struct {
         const Self = @This();
-        const Index = std.meta.Int(.unsigned, depth);
+        pub const Index = std.meta.Int(.unsigned, depth);
         const HashPath = [depth - 1]Hash;
         const IndividualUpdateResult = struct {
             index: usize,
@@ -223,6 +235,10 @@ pub fn MerkleTree(depth: u6) type {
             try self.update(&.{.{ .index = self.layers[0].size, .hashes = leaves }});
         }
 
+        /// Batch updates a set of leaves in the tree.
+        /// Each update could be a single value, or a range of values (subtree insertion).
+        /// This is the fastest algorithm when intermediate witness data is not required.
+        /// Individual compressions are scheduled on the thread pool, and we proceed layer by layer.
         pub fn update(self: *Self, updates: []const MerkleUpdate) !void {
             // TODO: Parallelise?
             // var t = try std.time.Timer.start();
@@ -240,13 +256,13 @@ pub fn MerkleTree(depth: u6) type {
             // std.debug.print("Update prep took: {}us\n", .{t.read() / 1000});
 
             for (1..self.layers.len) |li| {
-                self.applyUpdates(updates, li, &tasks);
+                try self.applyUpdates(updates, li, &tasks);
             }
         }
 
         /// Perform rehashing for a set of updates at a given layer index.
         /// Assumes that the layer below has already been updated.
-        fn applyUpdates(self: *Self, updates: []const MerkleUpdate, li: usize, tasks: *std.ArrayList(CompressTask)) void {
+        fn applyUpdates(self: *Self, updates: []const MerkleUpdate, li: usize, tasks: *std.ArrayList(CompressTask)) !void {
             var counter = std.atomic.Value(u64).init(0);
             tasks.clearRetainingCapacity();
             var batch = ThreadPool.Batch{};
@@ -288,7 +304,7 @@ pub fn MerkleTree(depth: u6) type {
                         .dst = dst,
                         .task = ThreadPool.Task{ .callback = CompressTask.onSchedule },
                     };
-                    tasks.append(t) catch unreachable;
+                    try tasks.append(t);
                     batch.push(ThreadPool.Batch.from(&tasks.items[tasks.items.len - 1].task));
                 }
             }
@@ -303,8 +319,11 @@ pub fn MerkleTree(depth: u6) type {
             while (counter.load(.acquire) > 0) {
                 std.atomic.spinLoopHint();
             }
+
+            try self.flush();
         }
 
+        /// Ensures all mapped memory is flushed back to disk.
         fn flush(self: *Self) !void {
             for (self.layers[0..]) |*l| try l.flush();
         }
@@ -344,6 +363,7 @@ pub fn MerkleTree(depth: u6) type {
                 std.atomic.spinLoopHint();
             }
 
+            try self.flush();
             return result.toOwnedSlice();
         }
     };
@@ -474,7 +494,6 @@ test "merkle tree bench" {
 
     {
         try merkle_tree.append(values.items);
-        try merkle_tree.flush();
         const took = t.read();
         std.debug.print("Inserted {} entries in {}ms {d:.0}/s\n", .{
             values.items.len,
@@ -491,7 +510,6 @@ test "merkle tree bench" {
         }
         t.reset();
         try merkle_tree.update(updates.items);
-        try merkle_tree.flush();
         const took = t.read();
         std.debug.print("Updated {} entries in {}ms {d:.0}/s\n", .{
             updates.items.len,
@@ -536,7 +554,6 @@ test "merkle tree individual update bench" {
     var t = try std.time.Timer.start();
     const r = try merkle_tree.updateAndGetWitness(updates.items);
     defer allocator.free(r);
-    try merkle_tree.flush();
     const took = t.read();
     std.debug.print("Update with witness {} entries in {}ms {d:.0}/s\n", .{
         updates.items.len,
