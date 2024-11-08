@@ -89,7 +89,11 @@ pub fn IndexedMerkleTree(depth: u6) type {
             self.lmdb_env.deinit();
         }
 
-        pub fn add(self: *Self, values: []const Hash) !void {
+        pub fn add(self: *Self, value: Hash) !void {
+            try self.batchAdd(&[_]Hash{value});
+        }
+
+        pub fn batchAdd(self: *Self, values: []const Hash) !void {
             const txn = try lmdb.Transaction.init(self.lmdb_env, .{ .mode = .ReadWrite });
             errdefer txn.abort();
             var c = try txn.cursor();
@@ -102,7 +106,7 @@ pub fn IndexedMerkleTree(depth: u6) type {
             defer append_tasks.deinit();
             var task_counter = std.atomic.Value(u64).init(values.len * 2);
 
-            var timer = try std.time.Timer.start();
+            // var timer = try std.time.Timer.start();
 
             for (values, self.tree.size()..) |v, idx| {
                 const key = &v.to_buf();
@@ -168,11 +172,11 @@ pub fn IndexedMerkleTree(depth: u6) type {
                     EntryTask.onSchedule(&append_tasks.items[append_tasks.items.len - 1].task);
                 }
             }
-            std.debug.print("prep data: {}us\n", .{timer.read() / 1000});
+            // std.debug.print("prep data: {}us\n", .{timer.read() / 1000});
 
-            timer.reset();
+            // timer.reset();
             try txn.commit();
-            std.debug.print("tx commit: {}us\n", .{timer.read() / 1000});
+            // std.debug.print("tx commit: {}us\n", .{timer.read() / 1000});
 
             // Spin waiting for all leaf computation jobs to complete.
             while (task_counter.load(.acquire) > 0) {
@@ -192,18 +196,28 @@ pub fn IndexedMerkleTree(depth: u6) type {
             try tree_updates.append(.{ .index = self.tree.size(), .hashes = append_leaves });
 
             // Update tree.
-            timer.reset();
+            // timer.reset();
             try self.tree.update(tree_updates.items);
-            std.debug.print("tree update: {}us\n", .{timer.read() / 1000});
+            // std.debug.print("tree update: {}us\n", .{timer.read() / 1000});
         }
 
         pub fn exists(self: *Self, value: Hash) !bool {
+            const r = try self.batchExists(&[_]Hash{value});
+            return r[0];
+        }
+
+        pub fn batchExists(self: *Self, values: []const Hash) ![]bool {
             const txn = try lmdb.Transaction.init(self.lmdb_env, .{ .mode = .ReadOnly });
-            errdefer txn.abort();
+            defer txn.abort();
             var c = try txn.cursor();
-            const key = &value.to_buf();
-            c.goToKey(key) catch return false;
-            return true;
+            var r = try self.allocator.alloc(bool, values.len);
+            @memset(r, false);
+            for (values, 0..) |*value, i| {
+                const key = &value.to_buf();
+                c.goToKey(key) catch continue;
+                r[i] = true;
+            }
+            return r;
         }
     };
 }
@@ -239,7 +253,18 @@ pub fn IndexedMerkleTree(depth: u6) type {
 //     });
 // }
 
-test "indexed merkle tree bench" {
+test "exists" {
+    var tree = try IndexedMerkleTree(2).init(std.heap.page_allocator, "indexed_merkle_tree_data", null, true);
+    defer tree.deinit();
+
+    const e = Fr.random();
+    try std.testing.expect(try tree.exists(Fr.random()) == false);
+
+    try tree.add(e);
+    try std.testing.expect(try tree.exists(e));
+}
+
+test "bench" {
     const allocator = std.heap.page_allocator;
     const depth = 40;
     const num = 1024 * 1024;
@@ -259,7 +284,7 @@ test "indexed merkle tree bench" {
     }
 
     var t = try std.time.Timer.start();
-    try tree.add(values.items);
+    try tree.batchAdd(values.items);
     const took = t.read();
     std.debug.print("Inserted {} entries in {}ms {d:.0}/s\n", .{
         values.items.len,
@@ -271,5 +296,10 @@ test "indexed merkle tree bench" {
     if (num == 1024 * 1024) {
         const expected = Fr.from_int(0x135c92b3c43dabe4aabffc13043e3bc23206a3c7c3bfb79b78212c427bf18182);
         try std.testing.expect(tree.tree.root().eql(expected));
+    }
+
+    const exists = try tree.batchExists(values.items);
+    for (exists) |e| {
+        try std.testing.expect(e);
     }
 }
