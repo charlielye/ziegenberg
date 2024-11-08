@@ -76,7 +76,7 @@ pub fn MerkleTree(depth: u6) type {
         allocator: std.mem.Allocator,
         db_path: []const u8,
         layers: [depth]Layer,
-        pool: ?ThreadPool,
+        pool: ?*ThreadPool,
 
         /// A task object for scheduling individual updates that return witness data needed for proving.
         /// We need each intermediate hash path to reflect the state between each update.
@@ -177,12 +177,12 @@ pub fn MerkleTree(depth: u6) type {
             }
         };
 
-        pub fn init(allocator: std.mem.Allocator, db_path: []const u8, threads: u8, erase: bool) !Self {
+        pub fn init(allocator: std.mem.Allocator, db_path: []const u8, pool: ?*ThreadPool, erase: bool) !Self {
             var tree = Self{
                 .allocator = allocator,
                 .db_path = db_path,
                 .layers = undefined,
-                .pool = if (threads > 0) ThreadPool.init(.{ .max_threads = threads }) else null,
+                .pool = pool,
             };
 
             if (erase) {
@@ -202,7 +202,7 @@ pub fn MerkleTree(depth: u6) type {
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.pool) |*p| {
+            if (self.pool) |p| {
                 p.shutdown();
                 p.deinit();
             }
@@ -309,7 +309,7 @@ pub fn MerkleTree(depth: u6) type {
                 }
             }
 
-            if (self.pool) |*p| {
+            if (self.pool) |p| {
                 p.schedule(batch);
             } else {
                 for (tasks.items) |*t| CompressTask.onSchedule(&t.task);
@@ -347,11 +347,11 @@ pub fn MerkleTree(depth: u6) type {
                     .result = &result.items[i],
                     .task = ThreadPool.Task{ .callback = IndividualUpdateTask.onSchedule },
                     .value = &u.value,
-                    .pool = if (self.pool) |*p| p else null,
+                    .pool = if (self.pool) |p| p else null,
                 };
             }
 
-            if (self.pool) |*p| {
+            if (self.pool) |p| {
                 // Schedule the first update. Each update schedules the next.
                 p.schedule(ThreadPool.Batch.from(&tasks.items[0].task));
             } else {
@@ -467,7 +467,10 @@ test "merkle tree init deinit" {
     const threads = 1;
     const data_dir = "./merkle_tree_data";
 
-    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, threads, true);
+    var pool = ThreadPool.init(.{ .max_threads = threads });
+    defer pool.deinit();
+
+    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, &pool, true);
     defer merkle_tree.deinit();
 }
 
@@ -478,7 +481,10 @@ test "merkle tree bench" {
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_data";
 
-    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, threads, true);
+    var pool = ThreadPool.init(.{ .max_threads = threads });
+    defer pool.deinit();
+
+    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, &pool, true);
     defer merkle_tree.deinit();
 
     std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
@@ -538,7 +544,10 @@ test "merkle tree individual update bench" {
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_indiv_data";
 
-    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, threads, true);
+    var pool = ThreadPool.init(.{ .max_threads = threads });
+    defer pool.deinit();
+
+    var merkle_tree = try MerkleTree(depth).init(allocator, data_dir, &pool, true);
     defer merkle_tree.deinit();
 
     std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
