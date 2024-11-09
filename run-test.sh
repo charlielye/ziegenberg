@@ -95,7 +95,7 @@ if { [[ $result -ne 0 && "$should" == "pass" ]]; } || \
    echo "$output" | grep -qi "segmentation fault"
 then
   case $result in
-    3)  echo -e "$test_name: ${RED}UNIMPLEMENTED${NC}";;
+    3)  echo -e "$test_name: ${YELLOW}UNIMPLEMENTED${NC}";;
     4)  echo -e "$test_name: ${YELLOW}TRANSPILE FAILED${NC}";;
     *)  echo -e "$test_name: ${RED}FAILED${NC}"
         [ "$VERBOSE_FAIL" -eq 1 ] && run_cmd $VERBOSE_FAIL 1

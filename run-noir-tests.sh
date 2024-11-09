@@ -19,7 +19,7 @@ if [ "$NARGO" -eq 1 ]; then
   parallel "(cd {} && $nargo dump)" ::: $NOIR_REPO/test_programs/execution_*/!(regression_4709|is_unconstrained|brillig_oracle|bigint|workspace_fail)
 fi
 
-./run-dir-tests.sh $NOIR_REPO/test_programs/execution_success $FILTER
+EXCLUDE='*.fail.*' ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_success $FILTER
 [ "$?" -ne 0 ] && [ "$FAIL_FAST" -eq 1 ] && exit 1
 
 # if [ "${VM:-}" != "cvm" ]; then
