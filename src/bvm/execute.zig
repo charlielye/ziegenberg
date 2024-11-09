@@ -375,22 +375,6 @@ pub const BrilligVm = struct {
                     @truncate(self.getSlot(op.message.size)),
                 );
             },
-            // .PedersenCommitment => |op| {
-            //     blackbox.blackbox_pedersen_commit(
-            //         @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
-            //         @truncate(self.getSlot(op.inputs.size)),
-            //         @truncate(self.getSlot(op.domain_separator)),
-            //         @ptrCast(self.getIndirectSlotAddr(op.output.pointer)),
-            //     );
-            // },
-            // .PedersenHash => |op| {
-            //     blackbox.blackbox_pedersen_hash(
-            //         @ptrCast(self.getIndirectSlotAddr(op.inputs.pointer)),
-            //         @truncate(self.getSlot(op.inputs.size)),
-            //         @truncate(self.getSlot(op.domain_separator)),
-            //         @ptrCast(self.getSlotAddr(op.output)),
-            //     );
-            // },
             .ToRadix => |op| {
                 blackbox.blackbox_to_radix(
                     @ptrCast(self.getSlotAddr(op.input)),

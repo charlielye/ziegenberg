@@ -92,7 +92,7 @@ pub const Expression = struct {
 
     // To avoid having to create intermediate variables pre-optimization
     // We collect all of the multiplication terms in the assert-zero opcode
-    // A multiplication term if of the form q_M * wL * wR
+    // A multiplication term is of the form q_M * wL * wR
     // Hence this vector represents the following sum: q_M1 * wL1 * wR1 + q_M2 * wL2 * wR2 + .. +
     mul_terms: []MulTerm,
 
@@ -101,11 +101,72 @@ pub const Expression = struct {
     // Constant term.
     q_c: Fr,
 
-    pub fn isConst(self: Expression) bool {
+    pub fn fromConst(value: Fr) Expression {
+        return .{ .q_c = value, .linear_combinations = &.{}, .mul_terms = &.{} };
+    }
+
+    pub fn fromWitness(allocator: std.mem.Allocator, witness: Witness) Expression {
+        const lc = allocator.alloc(LinearCombination, 1) catch unreachable;
+        lc[0] = .{ .q_l = Fr.one, .w_l = witness };
+        return .{ .q_c = Fr.zero, .linear_combinations = lc, .mul_terms = &.{} };
+    }
+
+    pub fn toWitness(self: *const Expression) ?Witness {
+        if (self.isDegreeOneUnivariate()) {
+            const term = self.linear_combinations[0];
+            if (term.q_l.eql(Fr.one) and self.q_c.is_zero()) {
+                return term.w_l;
+            }
+        }
+        return null;
+    }
+
+    pub fn isConst(self: *const Expression) bool {
         return self.mul_terms.len == 0 and self.linear_combinations.len == 0;
     }
 
-    pub fn format(self: Expression, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn toConst(self: *const Expression) ?Fr {
+        return if (self.isConst()) self.q_c else null;
+    }
+
+    /// Returns `true` if highest degree term in the expression is one or less.
+    ///
+    /// - `mul_term` in an expression contains degree-2 terms
+    /// - `linear_combinations` contains degree-1 terms
+    /// Hence, it is sufficient to check that there are no `mul_terms`
+    ///
+    /// Examples:
+    /// -  f(x,y) = x + y would return true
+    /// -  f(x,y) = xy would return false, the degree here is 2
+    /// -  f(x,y) = 0 would return true, the degree is 0
+    pub fn isLinear(self: *const Expression) bool {
+        return self.mul_terms.len == 0;
+    }
+
+    /// Returns `true` if the expression can be seen as a degree-1 univariate polynomial
+    ///
+    /// - `mul_terms` in an expression can be univariate, however unless the coefficient
+    /// is zero, it is always degree-2.
+    /// - `linear_combinations` contains the sum of degree-1 terms, these terms do not
+    /// need to contain the same variable and so it can be multivariate. However, we
+    /// have thus far only checked if `linear_combinations` contains one term, so this
+    /// method will return false, if the `Expression` has not been simplified.
+    ///
+    /// Hence, we check in the simplest case if an expression is a degree-1 univariate,
+    /// by checking if it contains no `mul_terms` and it contains one `linear_combination` term.
+    ///
+    /// Examples:
+    /// - f(x,y) = x would return true
+    /// - f(x,y) = x + 6 would return true
+    /// - f(x,y) = 2*y + 6 would return true
+    /// - f(x,y) = x + y would return false
+    /// - f(x,y) = x + x should return true, but we return false *** (we do not simplify)
+    /// - f(x,y) = 5 would return false
+    pub fn isDegreeOneUnivariate(self: *const Expression) bool {
+        return self.isLinear() and self.linear_combinations.len == 1;
+    }
+
+    pub fn format(self: *const Expression, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         // try formatStruct(self, writer);
         try writer.print("{{", .{});
         if (self.mul_terms.len > 0) {
@@ -126,7 +187,7 @@ const ExpressionWidth = union(enum) {
     Bounded: u64,
 };
 
-const MemOp = struct {
+pub const MemOp = struct {
     /// A constant expression that can be 0 (read) or 1 (write)
     operation: Expression,
     /// array index, it must be less than the array length
@@ -134,6 +195,21 @@ const MemOp = struct {
     /// the value we are reading, when operation is 0, or the value we write at
     /// the specified index, when operation is 1
     value: Expression,
+    pub fn readAtMemIndex(allocator: std.mem.Allocator, index: Fr, witness: Witness) MemOp {
+        return MemOp{
+            .operation = Expression.fromConst(Fr.zero),
+            .index = Expression.fromConst(index),
+            .value = Expression.fromWitness(allocator, witness),
+        };
+    }
+
+    pub fn writeToMemIndex(index: Fr, value: Expression) MemOp {
+        return MemOp{
+            .operation = Expression.fromConst(Fr.one),
+            .index = Expression.fromConst(index),
+            .value = value,
+        };
+    }
 };
 
 const OpcodeLocation = union(enum) {
@@ -433,30 +509,20 @@ const BlackBoxOp = union(enum) {
         input: u32,
         outputs: []Witness,
     },
-    /// Applies the Poseidon2 permutation function to the given state,
-    /// outputting the permuted state.
     Poseidon2Permutation: struct {
         /// Input state for the permutation of Poseidon2
         inputs: []FunctionInput,
         /// Permuted state
         outputs: []Witness,
-        /// State length (in number of field elements)
-        /// It is the length of inputs and outputs vectors
+        /// State length (length of input/output slices).
         len: u32,
     },
-    /// Applies the SHA-256 compression function to the input message
-    ///
-    /// # Arguments
-    ///
-    /// * `inputs` - input message block
-    /// * `hash_values` - state from the previous compression
-    /// * `outputs` - result of the input compressed into 256 bits
     Sha256Compression: struct {
-        /// 512 bits of the input message, represented by 16 u32s
+        /// 512 bits of the input message, represented by 16 u32s.
         inputs: [16]FunctionInput,
-        /// Vector of 8 u32s used to compress the input
+        /// Vector of 8 u32s used to compress the input.
         hash_values: [8]FunctionInput,
-        /// Output of the compression, represented by 8 u32s
+        /// Output of the compression, represented by 8 u32s.
         outputs: [8]Witness,
     },
 

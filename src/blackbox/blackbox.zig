@@ -57,37 +57,37 @@ pub export fn blackbox_blake3(input: [*]const u256, length: usize, result: [*]u2
     }
 }
 
-pub export fn blackbox_pedersen_hash(input: [*]Bn254Fr, size: usize, hash_index: u32, output: *Bn254Fr) void {
-    // TODO: Use some global memory to move allocs off VM path.
-    var frs = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, size) catch unreachable;
-    defer frs.deinit();
-    for (0..size) |i| {
-        // GrumpkinFr field > Bn254Fr field.
-        // Thus we can convert a Bn254Fr value safely to a GrumpkinFr.
-        frs.append(GrumpkinFr.from_int(decode_fr(&input[i]).to_int())) catch unreachable;
-    }
+// pub export fn blackbox_pedersen_hash(input: [*]Bn254Fr, size: usize, hash_index: u32, output: *Bn254Fr) void {
+//     // TODO: Use some global memory to move allocs off VM path.
+//     var frs = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, size) catch unreachable;
+//     defer frs.deinit();
+//     for (0..size) |i| {
+//         // GrumpkinFr field > Bn254Fr field.
+//         // Thus we can convert a Bn254Fr value safely to a GrumpkinFr.
+//         frs.append(GrumpkinFr.from_int(decode_fr(&input[i]).to_int())) catch unreachable;
+//     }
 
-    output.* = pedersen.hash(G1, frs.items, hash_index);
-    encode_fr(&output.*);
-}
+//     output.* = pedersen.hash(G1, frs.items, hash_index);
+//     encode_fr(&output.*);
+// }
 
-pub export fn blackbox_pedersen_commit(input: [*]Bn254Fr, size: usize, hash_index: u32, output: *struct { Bn254Fr, Bn254Fr }) void {
-    // TODO: Use some global memory to move allocs off VM path.
-    var frs = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, size) catch unreachable;
-    defer frs.deinit();
-    for (0..size) |i| {
-        // GrumpkinFr field > Bn254Fr field.
-        // Thus we can convert a Bn254Fr value safely to a GrumpkinFr.
-        frs.append(GrumpkinFr.from_int(decode_fr(&input[i]).to_int())) catch unreachable;
-    }
+// pub export fn blackbox_pedersen_commit(input: [*]Bn254Fr, size: usize, hash_index: u32, output: *struct { Bn254Fr, Bn254Fr }) void {
+//     // TODO: Use some global memory to move allocs off VM path.
+//     var frs = std.ArrayList(GrumpkinFr).initCapacity(std.heap.page_allocator, size) catch unreachable;
+//     defer frs.deinit();
+//     for (0..size) |i| {
+//         // GrumpkinFr field > Bn254Fr field.
+//         // Thus we can convert a Bn254Fr value safely to a GrumpkinFr.
+//         frs.append(GrumpkinFr.from_int(decode_fr(&input[i]).to_int())) catch unreachable;
+//     }
 
-    const acc = pedersen.commit(G1, frs.items, hash_index);
+//     const acc = pedersen.commit(G1, frs.items, hash_index);
 
-    output.*.@"0" = acc.x;
-    output.*.@"1" = acc.y;
-    encode_fr(&output.*.@"0");
-    encode_fr(&output.*.@"1");
-}
+//     output.*.@"0" = acc.x;
+//     output.*.@"1" = acc.y;
+//     encode_fr(&output.*.@"0");
+//     encode_fr(&output.*.@"1");
+// }
 
 pub export fn blackbox_poseidon2_permutation(input: [*]Bn254Fr, result: [*]Bn254Fr, _: usize) void {
     var frs: [4]Bn254Fr = undefined;
@@ -256,73 +256,7 @@ pub export fn blackbox_to_radix(input: *Bn254Fr, output: [*]u256, size: usize, r
         // const remainder = in % radix;
         // Might be faster? Optimiser might do the right thing.
         const remainder = in - (quotient * radix);
-        // bb has a divmod function (ported below). Seems way less performant?
-        // const quotient: u256, const remainder: u256 = divmod(in, radix_);
         output[i] = remainder;
         in = quotient;
     }
 }
-
-// const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
-
-// inline fn divmod(a: u256, b: u256) struct { u256, u256 } {
-//     if ((a == 0) or (b == 0)) return .{ 0, 0 };
-//     if (b == 1) return .{ a, 0 };
-//     if (a == b) return .{ 1, 0 };
-//     if (b > a) return .{ 0, a };
-
-//     var quotient: u256 = 0;
-//     var remainder = a;
-//     const bit_difference = get_msb(@bitCast(a)) - get_msb(@bitCast(b));
-
-//     var divisor = b << bit_difference;
-//     var accumulator = @as(u256, 1) << bit_difference;
-
-//     if (divisor > remainder) {
-//         divisor >>= 1;
-//         accumulator >>= 1;
-//     }
-
-//     while (remainder >= b) {
-//         if (remainder >= divisor) {
-//             remainder -= divisor;
-//             quotient |= accumulator;
-//         }
-//         divisor >>= 1;
-//         accumulator >>= 1;
-//     }
-
-//     return .{ quotient, remainder };
-// }
-
-// inline fn divmod_native(a: u256, b: u256) struct { u256, u256 } {
-//     const quotient = a / b;
-//     // const remainder = a - (quotient * b);
-//     const remainder = a % b;
-
-//     return .{ quotient, remainder };
-// }
-
-// test "bench divmod" {
-//     const input = std.crypto.random.int(u256);
-//     const radix: u256 = 2;
-
-//     const num: usize = 1 << 20;
-//     var t = try std.time.Timer.start();
-//     const cycles = rdtsc();
-//     var q: u256 = 0;
-//     var r: u256 = 0;
-
-//     for (0..num) |i| {
-//         // divmod(input, radix);
-//         // const quotient: u256, const remainder: u256 = divmod(input, radix);
-//         // _ = divmod(input, radix);
-//         const q1, const r1 = divmod(input + i, radix);
-//         q += q1;
-//         r += r1;
-//     }
-
-//     std.debug.print("{} {}\n", .{ q, r });
-//     std.debug.print("time taken: {}ns\n", .{t.read()});
-//     std.debug.print("cycles per divmod: {}\n", .{(rdtsc() - cycles) / num});
-// }

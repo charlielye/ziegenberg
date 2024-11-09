@@ -50,7 +50,12 @@ function run_cmd() {
       return ${statuses[3]}
       ;;
     "cvm-zb")
-      cmp <(./zig-out/bin/zb cvm run $BYTECODE_PATH -c $calldata_path -b) <(cat $witness_path | gunzip) > /dev/null
+      zb_output=$(./zig-out/bin/zb cvm run $BYTECODE_PATH -c $calldata_path -b | base64)
+      zb_status=$?
+      if [ $zb_status -ne 0 ]; then
+        return $zb_status
+      fi
+      cmp <(echo "$zb_output" | base64 -d) <(cat $witness_path | gunzip) > /dev/null
       return $?
       ;;
     "bvm-nargo")
@@ -61,7 +66,7 @@ function run_cmd() {
       ;;
     "cvm-nargo")
       cd $(dirname $BYTECODE_PATH)
-      rm $json_path $witness_path
+      rm -rf $json_path $witness_path
       # nargo prints to stdout, redirect to stderr.
       ~/aztec-repos/aztec-packages/noir/noir-repo/target/release/nargo execute --silence-warnings | tr -d '\0' 1>&2
       ;;

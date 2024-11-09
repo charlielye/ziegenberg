@@ -6,6 +6,7 @@ const evaluate = @import("./expression_solver.zig").evaluate;
 const BrilligVm = @import("../bvm/execute.zig").BrilligVm;
 const sha256_compress = @import("../blackbox/sha256_compress.zig").round;
 const WitnessMap = @import("./witness_map.zig").WitnessMap;
+const MemoryOpSolver = @import("./memory_op_solver.zig").MemoryOpSolver;
 // const root = @import("../blackbox/field.zig");
 // const blackbox = @import("../blackbox/blackbox.zig");
 
@@ -60,13 +61,19 @@ const CircuitVm = struct {
     allocator: std.mem.Allocator,
     program: *const io.Program,
     witnesses: WitnessMap,
+    memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
 
     pub fn init(allocator: std.mem.Allocator, program: *const io.Program, calldata: []Fr) !CircuitVm {
         var witnesses = WitnessMap.init(allocator);
         for (calldata, 0..) |e, i| {
             try witnesses.put(@truncate(i), e);
         }
-        return CircuitVm{ .allocator = allocator, .program = program, .witnesses = witnesses };
+        return CircuitVm{
+            .allocator = allocator,
+            .program = program,
+            .witnesses = witnesses,
+            .memory_solvers = std.AutoHashMap(u32, MemoryOpSolver).init(allocator),
+        };
     }
 
     pub fn deinit(self: *CircuitVm) void {
@@ -87,10 +94,16 @@ const CircuitVm = struct {
             switch (opcode) {
                 .AssertZero => |op| try solve(self.allocator, &self.witnesses, &op),
                 .BrilligCall => |op| {
+                    // TODO: Make Fr?
                     var calldata = std.ArrayList(u256).init(self.allocator);
                     for (op.inputs) |input| {
                         if (input == .MemoryArray) {
-                            unreachable;
+                            const block_id = input.MemoryArray;
+                            const block = self.memory_solvers.get(block_id) orelse return error.MemBlockNotFound;
+                            for (0..block.block_len) |mem_idx| {
+                                const value = block.block_value.get(@intCast(mem_idx)) orelse return error.UninitializedMemory;
+                                try calldata.append(value.to_int());
+                            }
                         } else {
                             const elems = switch (input) {
                                 .Single => &[_]io.Expression{input.Single},
@@ -130,16 +143,41 @@ const CircuitVm = struct {
                             sha256_compress(&input, &hash_values);
                             for (sha_op.outputs, 0..) |w, wi| try self.witnesses.put(w, Fr.from_int(hash_values[wi]));
                         },
-                        else => unreachable,
+                        else => return error.Unimplemented,
                     }
                 },
-                // else => std.debug.print("Skipping {}\n", .{opcode}),
-                else => {},
+                .Directive => |op| {
+                    switch (op) {
+                        .ToLeRadix => |tle_op| {
+                            const e = evaluate(self.allocator, &tle_op.a, &self.witnesses);
+                            if (!e.isConst()) return error.OpcodeNotSolvable;
+                            var in = e.q_c.to_int();
+                            for (tle_op.b) |w| {
+                                const quotient = in / tle_op.radix;
+                                const remainder = in - (quotient * tle_op.radix);
+                                try self.witnesses.put(w, Fr.from_int(remainder));
+                                in = quotient;
+                            }
+                        },
+                    }
+                },
+                .MemoryInit => |op| {
+                    const r = try self.memory_solvers.getOrPut(op.block_id);
+                    if (!r.found_existing) {
+                        r.value_ptr.* = MemoryOpSolver.init(self.allocator);
+                    }
+                    try r.value_ptr.initMemory(op.init, &self.witnesses);
+                },
+                .MemoryOp => |op| {
+                    const block = self.memory_solvers.getPtr(op.block_id) orelse return error.MemBlockNotFound;
+                    try block.solveMemoryOp(&op.op, &self.witnesses, if (op.predicate) |p| &p else null);
+                },
+                else => return error.Unimplemented,
             }
         }
     }
 
-    pub fn resolveFunctionInput(self: *CircuitVm, comptime T: type, fi: io.FunctionInput) T {
+    fn resolveFunctionInput(self: *CircuitVm, comptime T: type, fi: io.FunctionInput) T {
         return switch (fi.input) {
             .Constant => |v| @truncate(v.to_int()),
             .Witness => |w| @truncate((self.witnesses.get(w) orelse unreachable).to_int()),

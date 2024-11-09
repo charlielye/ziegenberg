@@ -55,17 +55,6 @@ const OpcodeResolutionError = error{
     UnsatisfiedConstraint,
 };
 
-// fn insert_value(witness: Witness, value: F, witness_assignments: *WitnessMap) !void {
-//     const r = try witness_assignments.getOrPut(witness);
-//     if (r.found_existing) {
-//         if (!r.value_ptr.eql(value)) {
-//             return OpcodeResolutionError.UnsatisfiedConstraint;
-//         }
-//     } else {
-//         r.value_ptr.* = value;
-//     }
-// }
-
 pub fn solve(allocator: std.mem.Allocator, initial_witness: *WitnessMap, opcode: *const io.Expression) !void {
     var evaluated_opcode = evaluate(allocator, opcode, initial_witness);
 

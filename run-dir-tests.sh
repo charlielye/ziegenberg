@@ -3,8 +3,9 @@ set -u
 shopt -s extglob
 
 BYTECODES=$1
+FILTER=${2:-}
 RELEASE=${RELEASE:-1}
-PARALLEL=${PARALLEL:-1}
+JOBS=${JOBS:-0}
 FAIL_FAST=${FAIL_FAST:-0}
 TIMEOUT=${TIMEOUT:-10}
 VM=${VM:-bvm}
@@ -15,9 +16,10 @@ zig build $zig_args || exit 1
 
 SECONDS=0
 parallel_args=""
-[ "$FAIL_FAST" -eq 1 ] && parallel_args+=" --halt now,fail=1 -j 1" && export VERBOSE_FAIL=1
+[ "$FAIL_FAST" -eq 1 ] && parallel_args+=" --halt now,fail=1" && export VERBOSE_FAIL=1
 [ "$TIMEOUT" -ne 0 ] && parallel_args+=" --timeout $TIMEOUT"
-find $BYTECODES -name "*.${VM}_bytecode" | sort | parallel $parallel_args -k --joblog parallel.log ./run-test.sh {}
+[ "$JOBS" -gt 0 ] && parallel_args+=" -j$JOBS"
+find $BYTECODES -name "*.${VM}_bytecode" | grep "$FILTER" | sort | parallel $parallel_args -k --joblog parallel.log ./run-test.sh {}
 code=$?
 
 RED='\033[0;31m'

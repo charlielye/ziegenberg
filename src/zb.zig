@@ -146,11 +146,10 @@ fn handleBvm(matches: ArgMatches) !void {
         }) catch |err| {
             std.debug.print("{}\n", .{err});
             // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
-            if (err == error.Trapped) {
-                std.posix.exit(2);
-            } else {
-                std.posix.exit(1);
-            }
+            std.posix.exit(switch (err) {
+                error.Trapped => 2,
+                else => 1,
+            });
         };
         return;
     }
@@ -177,11 +176,11 @@ fn handleCvm(matches: ArgMatches) !void {
         }) catch |err| {
             std.debug.print("{}\n", .{err});
             // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
-            if (err == error.Trapped) {
-                std.posix.exit(2);
-            } else {
-                std.posix.exit(1);
-            }
+            std.posix.exit(switch (err) {
+                error.Unimplemented => 3,
+                error.Trapped => 2,
+                else => 1,
+            });
         };
         return;
     }
