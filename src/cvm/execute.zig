@@ -87,13 +87,28 @@ const CircuitVm = struct {
 
         for (self.program.functions[function_index].opcodes, 0..) |opcode, i| {
             if (show_trace) {
-                const stdout = std.io.getStdErr().writer();
+                const stdout = std.io.getStdOut().writer();
                 try stdout.print("{:0>4}: {any}\n", .{ i, opcode });
             }
 
             switch (opcode) {
                 .AssertZero => |op| try solve(self.allocator, &self.witnesses, &op),
                 .BrilligCall => |op| {
+                    if (op.predicate) |*p| {
+                        const e = evaluate(self.allocator, p, &self.witnesses).toConst() orelse return error.OpcodeNotSolvable;
+                        if (e.is_zero()) {
+                            for (op.outputs) |o| {
+                                const witnesses = switch (o) {
+                                    .Simple => &[_]io.Witness{o.Simple},
+                                    .Array => o.Array,
+                                };
+                                for (witnesses) |w| {
+                                    try self.witnesses.put(w, Fr.zero);
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     // TODO: Make Fr?
                     var calldata = std.ArrayList(u256).init(self.allocator);
                     for (op.inputs) |input| {
@@ -113,6 +128,7 @@ const CircuitVm = struct {
                             for (elems) |expr| {
                                 const e = evaluate(self.allocator, &expr, &self.witnesses);
                                 if (!e.isConst()) return error.OpcodeNotSolvable;
+                                // std.debug.print("input calldata {} eq {}\n", .{ calldata.items.len, e.q_c.to_int() });
                                 try calldata.append(e.q_c.to_int());
                             }
                         }
@@ -127,6 +143,7 @@ const CircuitVm = struct {
                             .Array => o.Array,
                         };
                         for (witnesses) |w| {
+                            // std.debug.print("copying brillig result {} to witness {}\n", .{ brillig_vm.return_data[return_data_idx], w });
                             try self.witnesses.put(w, Fr.from_int(brillig_vm.return_data[return_data_idx]));
                             return_data_idx += 1;
                         }
@@ -179,7 +196,7 @@ const CircuitVm = struct {
 
     fn resolveFunctionInput(self: *CircuitVm, comptime T: type, fi: io.FunctionInput) T {
         return switch (fi.input) {
-            .Constant => |v| @truncate(v.to_int()),
+            .Constant => |c| @truncate(c.value.to_int()),
             .Witness => |w| @truncate((self.witnesses.get(w) orelse unreachable).to_int()),
         };
     }

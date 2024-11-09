@@ -393,7 +393,7 @@ fn deserializeUnionAlloc(stream: anytype, comptime info: std.builtin.Type.Union,
 
         inline for (info.fields) |field| {
             if (tag == @field(Tag, field.name)) {
-                // std.debug.print("Tag {s}: ", .{field.name});
+                // std.debug.print("Tag {s}: \n", .{field.name});
                 const inner = try deserializeAlloc(stream, allocator, field.type);
                 const r = @unionInit(T, field.name, inner);
                 // std.debug.print("{}\n", .{r});

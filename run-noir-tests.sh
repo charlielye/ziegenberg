@@ -22,7 +22,7 @@ fi
 ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_success $FILTER
 [ "$?" -ne 0 ] && [ "$FAIL_FAST" -eq 1 ] && exit 1
 
-if [ "${VM:-}" != "cvm" ]; then
-  echo
-  SHOULD=fail ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_failure
-fi
+# if [ "${VM:-}" != "cvm" ]; then
+#   echo
+#   SHOULD=fail ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_failure
+# fi

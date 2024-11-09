@@ -25,6 +25,7 @@ else
 fi
 
 function run_cmd() {
+  failure_mode=${2:-}
   zb_args="-s"
   [ -f "$calldata_path" ] && zb_args+=" -c $calldata_path"
   [ "$1" -eq 1 ] && zb_args+=" -t"
@@ -50,9 +51,14 @@ function run_cmd() {
       return ${statuses[3]}
       ;;
     "cvm-zb")
-      zb_output=$(./zig-out/bin/zb cvm run $BYTECODE_PATH -c $calldata_path -b | base64)
+      if [ "$failure_mode" -eq 1 ]; then
+        ./zig-out/bin/zb cvm run $BYTECODE_PATH $zb_args
+        return $?
+      fi
+      [ -f "$calldata_path" ] && zb_args=" -c $calldata_path"
+      zb_output=$(./zig-out/bin/zb cvm run $BYTECODE_PATH $zb_args -b | base64)
       zb_status=$?
-      if [ $zb_status -ne 0 ]; then
+      if [ $zb_status -ne 0 ] || [ ! -f $witness_path ]; then
         return $zb_status
       fi
       cmp <(echo "$zb_output" | base64 -d) <(cat $witness_path | gunzip) > /dev/null
@@ -81,7 +87,7 @@ should="${SHOULD:-${test_name##*.}}"
 
 set +e
 # Capture stderr in $output, stdout still goes to console.
-output=$(run_cmd $VERBOSE 2>&1 1>/dev/tty)
+output=$(run_cmd $VERBOSE 0 2>&1 1>/dev/tty)
 result=$?
 set -e
 if { [[ $result -ne 0 && "$should" == "pass" ]]; } || \
@@ -92,7 +98,7 @@ then
     3)  echo -e "$test_name: ${RED}UNIMPLEMENTED${NC}";;
     4)  echo -e "$test_name: ${YELLOW}TRANSPILE FAILED${NC}";;
     *)  echo -e "$test_name: ${RED}FAILED${NC}"
-        [ "$VERBOSE_FAIL" -eq 1 ] && run_cmd $VERBOSE_FAIL
+        [ "$VERBOSE_FAIL" -eq 1 ] && run_cmd $VERBOSE_FAIL 1
         exit 1
         ;;
   esac

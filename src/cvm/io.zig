@@ -380,16 +380,20 @@ const Directive = union(enum) {
     }
 };
 
-const ConstantOrWitnessEnum = union(enum) {
+const Constant = struct {
     pub const meta = [_]bincode.Meta{
-        .{ .field = "Constant", .src_type = []const u8 },
+        .{ .field = "value", .src_type = []const u8 },
     };
-    Constant: Fr,
+    value: Fr,
+};
+
+const ConstantOrWitnessEnum = union(enum) {
+    Constant: Constant,
     Witness: Witness,
 
     pub fn format(self: ConstantOrWitnessEnum, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self) {
-            .Constant => |i| try writer.print("{s}", .{i}),
+            .Constant => |i| try writer.print("{s}", .{i.value}),
             .Witness => |w| try writer.print("{}>", .{w}),
         }
     }
@@ -539,7 +543,7 @@ const BlackBoxOp = union(enum) {
 pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Program {
     var reader = std.io.fixedBufferStream(bytes);
     return bincode.deserializeAlloc(&reader.reader(), allocator, Program) catch |err| {
-        std.debug.print("Error deserializing: {}\n", .{err});
+        std.debug.print("Error deserializing at: 0x{x}\n", .{try reader.getPos()});
         return err;
     };
 }
