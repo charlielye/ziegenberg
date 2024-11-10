@@ -7,11 +7,7 @@ pub const MemoryAddress = struct {
     value: u64,
 
     pub fn format(self: MemoryAddress, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        if (self.relative == 1) {
-            try writer.print("+{}", .{self.value});
-        } else {
-            try writer.print("{}", .{self.value});
-        }
+        try writer.print("{s}{}", .{ if (self.relative == 1) "+" else "", self.value });
     }
 
     pub inline fn resolve(self: MemoryAddress, mem: []u256) usize {
@@ -113,12 +109,20 @@ const HeapValueType = union(enum) {
     Vector: struct {
         value_types: []HeapValueType,
     },
+
+    pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatUnionBody(self, fmt, options, writer);
+    }
 };
 
 const ValueOrArray = union(enum) {
     MemoryAddress: MemoryAddress,
     HeapArray: HeapArray,
     HeapVector: HeapVector,
+
+    pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        try formatUnionBody(self, fmt, options, writer);
+    }
 };
 
 pub const BlackBoxOp = union(enum) {
@@ -361,11 +365,18 @@ pub fn formatUnionBody(self: anytype, comptime _: []const u8, _: std.fmt.FormatO
     }
 }
 
+fn every(comptime T: type, input: []const T, comptime f: fn (T) bool) bool {
+    for (input) |e| if (!f(e)) return false;
+    return true;
+}
+
 pub fn formatStruct(ptr: anytype, writer: anytype) !void {
     try writer.print("{{", .{});
     inline for (@typeInfo(@TypeOf(ptr)).Struct.fields) |field| {
         if (field.type == Fr) {
             try writer.print(" .{s} = {short}", .{ field.name, @field(ptr, field.name) });
+        } else if (field.type == []const u8 and every(u8, @field(ptr, field.name), std.ascii.isPrint)) {
+            try writer.print(" .{s} = '{s}'", .{ field.name, @field(ptr, field.name) });
         } else {
             try writer.print(" .{s} = {any}", .{ field.name, @field(ptr, field.name) });
         }
