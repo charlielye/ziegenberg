@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+[ "${BASH_DEBUG:-0}" -eq 1 ] && set -x
 
 RED='\033[0;31m'
 YELLOW='\033[0;33m'

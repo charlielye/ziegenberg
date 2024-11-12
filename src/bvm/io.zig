@@ -100,7 +100,7 @@ pub const BitSize = union(enum) {
 
 const Label = u64;
 
-const HeapValueType = union(enum) {
+pub const HeapValueType = union(enum) {
     Simple: BitSize,
     Array: struct {
         value_types: []HeapValueType,
@@ -115,7 +115,7 @@ const HeapValueType = union(enum) {
     }
 };
 
-const ValueOrArray = union(enum) {
+pub const ValueOrArray = union(enum) {
     MemoryAddress: MemoryAddress,
     HeapArray: HeapArray,
     HeapVector: HeapVector,

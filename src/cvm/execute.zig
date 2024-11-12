@@ -134,7 +134,7 @@ const CircuitVm = struct {
                         }
                     }
                     var brillig_vm = try BrilligVm.init(self.allocator, calldata.items);
-                    defer brillig_vm.deinit(self.allocator);
+                    defer brillig_vm.deinit();
                     try brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0);
                     var return_data_idx: u32 = 0;
                     for (op.outputs) |o| {
