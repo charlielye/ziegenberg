@@ -322,11 +322,10 @@ pub const BrilligOpcode = union(enum) {
     },
     BlackBox: BlackBoxOp,
     Trap: struct {
-        revert_data: HeapArray,
+        revert_data: HeapVector,
     },
     Stop: struct {
-        return_data_offset: u64,
-        return_data_size: u64,
+        return_data: HeapVector,
     },
 
     pub fn format(self: BrilligOpcode, comptime str: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {

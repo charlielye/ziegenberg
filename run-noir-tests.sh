@@ -16,7 +16,7 @@ if [ "$NARGO" -eq 1 ]; then
   export RAYON_NUM_THREADS=4
   echo "Compiling..."
   nargo=$NOIR_REPO/target/release/nargo
-  parallel "(cd {} && $nargo dump)" ::: $NOIR_REPO/test_programs/execution_*/!(regression_4709|is_unconstrained|brillig_oracle|bigint|workspace_fail)
+  parallel "(cd {} && rm -rf target && $nargo dump)" ::: $NOIR_REPO/test_programs/execution_*/!(regression_4709|is_unconstrained|brillig_oracle|bigint|workspace_fail|bench_2_to_17|fold_2_to_17)
 fi
 
 EXCLUDE='*.fail.*' ./run-dir-tests.sh $NOIR_REPO/test_programs/execution_success $FILTER

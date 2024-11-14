@@ -4,9 +4,12 @@ const Fr = @import("../bn254/fr.zig").Fr;
 const solve = @import("./expression_solver.zig").solve;
 const evaluate = @import("./expression_solver.zig").evaluate;
 const BrilligVm = @import("../bvm/execute.zig").BrilligVm;
-const sha256_compress = @import("../blackbox/sha256_compress.zig").round;
+const sha256 = @import("../blackbox/sha256_compress.zig");
+const aes = @import("../aes/encrypt_cbc.zig");
 const WitnessMap = @import("./witness_map.zig").WitnessMap;
 const MemoryOpSolver = @import("./memory_op_solver.zig").MemoryOpSolver;
+const G1 = @import("../grumpkin/g1.zig").G1;
+const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
 // const root = @import("../blackbox/field.zig");
 // const blackbox = @import("../blackbox/blackbox.zig");
 
@@ -149,16 +152,41 @@ const CircuitVm = struct {
                         }
                     }
                 },
-                .BlackBoxOp => |op| {
-                    switch (op) {
+                .BlackBoxOp => |blackbox_op| {
+                    switch (blackbox_op) {
                         .RANGE => {},
-                        .Sha256Compression => |sha_op| {
-                            var input: [16]u32 = undefined;
-                            var hash_values: [8]u32 = undefined;
-                            for (sha_op.inputs, 0..) |fi, j| input[j] = self.resolveFunctionInput(u32, fi);
-                            for (sha_op.hash_values, 0..) |fi, j| hash_values[j] = self.resolveFunctionInput(u32, fi);
-                            sha256_compress(&input, &hash_values);
-                            for (sha_op.outputs, 0..) |w, wi| try self.witnesses.put(w, Fr.from_int(hash_values[wi]));
+                        .Sha256Compression => |op| {
+                            const input = self.resolveFunctionInputs(u32, 16, &op.inputs);
+                            var hash_values = self.resolveFunctionInputs(u32, 8, &op.hash_values);
+                            sha256.round(&input, &hash_values);
+                            for (op.outputs, 0..) |w, wi| try self.witnesses.put(w, Fr.from_int(hash_values[wi]));
+                        },
+                        .AES128Encrypt => |op| {
+                            var inout = try std.ArrayList(u8).initCapacity(self.allocator, op.inputs.len);
+                            const key = self.resolveFunctionInputs(u8, 16, &op.key);
+                            const iv = self.resolveFunctionInputs(u8, 16, &op.iv);
+                            try aes.padAndEncryptCbc(&inout, &key, &iv);
+                            for (op.outputs, inout.items) |w, v| try self.witnesses.put(w, Fr.from_int(v));
+                        },
+                        .EmbeddedCurveAdd => |op| {
+                            const x1 = self.resolveFunctionInput(Fr, op.input1[0]);
+                            const y1 = self.resolveFunctionInput(Fr, op.input1[1]);
+                            const inf1 = self.resolveFunctionInput(u8, op.input1[2]);
+                            const x2 = self.resolveFunctionInput(Fr, op.input2[0]);
+                            const y2 = self.resolveFunctionInput(Fr, op.input2[1]);
+                            const inf2 = self.resolveFunctionInput(u8, op.input2[2]);
+                            const input1 = if (inf1 == 1) G1.Element.infinity else G1.Element.from_xy(x1, y1);
+                            const input2 = if (inf2 == 1) G1.Element.infinity else G1.Element.from_xy(x2, y2);
+                            const r = input1.add(input2).normalize();
+                            try self.witnesses.put(op.outputs.x, r.x);
+                            try self.witnesses.put(op.outputs.y, r.y);
+                            try self.witnesses.put(op.outputs.i, if (r.is_infinity()) Fr.one else Fr.zero);
+                        },
+                        // .MultiScalarMul => {},
+                        .Poseidon2Permutation => |op| {
+                            const frs = self.resolveFunctionInputs(Fr, 4, op.inputs);
+                            const r = Poseidon2.permutation(frs);
+                            for (op.outputs, r) |w, v| try self.witnesses.put(w, v);
                         },
                         else => return error.Unimplemented,
                     }
@@ -194,10 +222,22 @@ const CircuitVm = struct {
         }
     }
 
-    fn resolveFunctionInput(self: *CircuitVm, comptime T: type, fi: io.FunctionInput) T {
-        return switch (fi.input) {
-            .Constant => |c| @truncate(c.value.to_int()),
-            .Witness => |w| @truncate((self.witnesses.get(w) orelse unreachable).to_int()),
+    inline fn resolveFunctionInputs(
+        self: *CircuitVm,
+        comptime T: type,
+        comptime len: usize,
+        src: []const io.FunctionInput,
+    ) [len]T {
+        var dst: [len]T = undefined;
+        for (src, 0..) |fi, j| dst[j] = self.resolveFunctionInput(T, fi);
+        return dst;
+    }
+
+    inline fn resolveFunctionInput(self: *CircuitVm, comptime T: type, fi: io.FunctionInput) T {
+        const f = switch (fi.input) {
+            .Constant => |c| c.value,
+            .Witness => |w| self.witnesses.get(w) orelse unreachable,
         };
+        return if (T == Fr) f else @intCast(f.to_int());
     }
 };

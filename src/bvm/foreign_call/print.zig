@@ -42,5 +42,5 @@ pub fn handlePrint(allocator: std.mem.Allocator, mem: *Memory, params: []Foreign
     if (params[0].Single == 1) {
         try writer.print("\n", .{});
     }
-    try std.io.getStdOut().writer().print("{s}", .{buf.items});
+    try std.io.getStdErr().writer().print("{s}", .{buf.items});
 }

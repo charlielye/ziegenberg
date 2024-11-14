@@ -462,7 +462,9 @@ pub const BrilligVm = struct {
     fn processStop(self: *BrilligVm, opcode: *BrilligOpcode) !void {
         const op = &opcode.Stop;
         self.halted = true;
-        self.return_data = self.mem.memory[op.return_data_offset .. op.return_data_offset + op.return_data_size];
+        const slot = self.mem.resolveSlot(op.return_data.pointer);
+        const size = self.mem.resolveSlot(op.return_data.size);
+        self.return_data = self.mem.memory[slot .. slot + size];
         for (self.return_data) |*v| fieldOps.bn254_fr_normalize(@ptrCast(v));
     }
 
@@ -470,7 +472,8 @@ pub const BrilligVm = struct {
         const op = &opcode.Trap;
         self.trap();
         const slot = self.mem.resolveSlot(op.revert_data.pointer);
-        self.return_data = self.mem.memory[slot .. slot + op.revert_data.size];
+        const size = self.mem.resolveSlot(op.revert_data.size);
+        self.return_data = self.mem.memory[slot .. slot + size];
         std.debug.print("Trap!\n", .{});
     }
 

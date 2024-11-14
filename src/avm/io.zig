@@ -134,7 +134,7 @@ fn AvmOpcodes(slot_type: type) type {
             dst_slot: slot_type,
             size_slot: slot_type,
         },
-        TORADIXLE: struct {
+        TORADIXBE: struct {
             indirect: u8,
             src_slot: slot_type,
             dst_slot: slot_type,
@@ -259,7 +259,7 @@ const AvmWireOpcode = union(enum) {
     KECCAKF1600: getUnionFieldType(AvmOpcode16, "KECCAKF1600"),
     ECADD: getUnionFieldType(AvmOpcode16, "ECADD"),
     MSM: getUnionFieldType(AvmOpcode16, "MSM"),
-    TORADIXLE: getUnionFieldType(AvmOpcode16, "TORADIXLE"),
+    TORADIXBE: getUnionFieldType(AvmOpcode16, "TORADIXBE"),
     NOOP: getUnionFieldType(AvmOpcode16, "NOOP"),
 
     pub fn format(self: AvmWireOpcode, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {

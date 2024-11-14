@@ -158,7 +158,7 @@ const AztecVm = struct {
                     // TODO.
                     self.memory[op.dst_slot] = 0;
                 },
-                .TORADIXLE => |o| {
+                .TORADIXBE => |o| {
                     const op = self.derefOpcodeSlots(@TypeOf(o), o);
                     blackbox.blackbox_to_radix(
                         @ptrCast(&self.memory[op.src_slot]),

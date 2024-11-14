@@ -5,7 +5,7 @@ const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const GrumpkinFr = @import("../grumpkin/fr.zig").Fr;
 const GrumpkinFq = @import("../grumpkin/fq.zig").Fq;
 const get_msb = @import("../bitop/get_msb.zig").get_msb;
-const encrypt_cbc = @import("../aes/encrypt_cbc.zig").encrypt_cbc;
+const aes = @import("../aes/encrypt_cbc.zig");
 const verify_signature = @import("ecdsa.zig").verify_signature;
 const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
 const G1 = @import("../grumpkin/g1.zig").G1;
@@ -115,27 +115,31 @@ pub export fn blackbox_keccak1600(input: [*]const u256, _: usize, result: [*]u25
     }
 }
 
-pub export fn blackbox_aes_encrypt(in: [*]const u256, iv: [*]const u256, key: [*]const u256, length: usize, result: [*]u256, r_size: *u256) void {
-    const padded_length = (length + 15) & ~@as(usize, 15);
-    const padding_length = padded_length - length;
-    var input = std.ArrayList(u8).initCapacity(std.heap.page_allocator, padded_length) catch unreachable;
+pub export fn blackbox_aes_encrypt(
+    in: [*]const u256,
+    iv: [*]const u256,
+    key: [*]const u256,
+    length: usize,
+    result: [*]u256,
+    r_size: *u256,
+) void {
+    var input = std.ArrayList(u8).initCapacity(std.heap.page_allocator, length) catch unreachable;
     for (0..length) |i| {
-        input.append(@truncate(in[i])) catch unreachable;
+        input.append(@intCast(in[i])) catch unreachable;
     }
-    input.appendNTimes(@truncate(padding_length), padding_length) catch unreachable;
     var iv_arr: [16]u8 = undefined;
     var key_arr: [16]u8 = undefined;
     for (0..16) |i| {
-        iv_arr[i] = @truncate(iv[i]);
-        key_arr[i] = @truncate(key[i]);
+        iv_arr[i] = @intCast(iv[i]);
+        key_arr[i] = @intCast(key[i]);
     }
 
-    encrypt_cbc(input.items, &key_arr, &iv_arr);
+    aes.padAndEncryptCbc(&input, &key_arr, &iv_arr) catch unreachable;
 
-    for (0..padded_length) |i| {
+    for (0..input.items.len) |i| {
         result[i] = input.items[i];
     }
-    r_size.* = padded_length;
+    r_size.* = input.items.len;
 }
 
 pub export fn blackbox_secp256k1_verify_signature(
@@ -248,15 +252,15 @@ pub export fn blackbox_to_radix(input: *Bn254Fr, output: [*]u256, size: usize, r
 
     // std.io.getStdOut().writer().print("{} {} {}\n", .{ in, radix, size }) catch unreachable;
     for (0..size) |i| {
-        if (in == 0) {
-            @memset(output[i..size], 0);
-            return;
-        }
+        // if (in == 0) {
+        //     @memset(output[i..size], 0);
+        //     return;
+        // }
         const quotient = in / radix;
         // const remainder = in % radix;
         // Might be faster? Optimiser might do the right thing.
         const remainder = in - (quotient * radix);
-        output[i] = remainder;
+        output[size - 1 - i] = remainder;
         in = quotient;
     }
 }

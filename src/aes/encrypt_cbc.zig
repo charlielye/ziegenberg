@@ -29,3 +29,10 @@ pub fn encrypt_cbc(src: []u8, key: *const [16]u8, iv: *const [16]u8) void {
         i += BlockSize;
     }
 }
+
+pub fn padAndEncryptCbc(inout: *std.ArrayList(u8), key: *const [16]u8, iv: *const [16]u8) !void {
+    const padded_length = (inout.items.len + 15) & ~@as(usize, 15);
+    const padding_length = padded_length - inout.items.len;
+    try inout.appendNTimes(@intCast(padding_length), padding_length);
+    encrypt_cbc(inout.items, key, iv);
+}

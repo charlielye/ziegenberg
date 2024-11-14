@@ -37,11 +37,6 @@ pub const Circuit = struct {
     // c++ code at the moment when it is, due to OpcodeLocation needing a comparison
     // implementation which is never generated.
     assert_messages: []struct { loc: OpcodeLocation, payload: AssertionPayload },
-
-    /// States whether the backend should use a SNARK recursion friendly prover.
-    /// If implemented by a backend, this means that proofs generated with this circuit
-    /// will be friendly for recursively verifying inside of another SNARK.
-    recursive: bool,
 };
 
 pub const Witness = u32;
@@ -224,9 +219,9 @@ const ExpressionOrMemory = union(enum) {
     Memory: BlockId,
 };
 
-const AssertionPayload = union(enum) {
-    StaticString: []u8,
-    Dynamic: struct { error_selector: u64, x: []ExpressionOrMemory },
+const AssertionPayload = struct {
+    error_selector: u64,
+    payload: []ExpressionOrMemory,
 };
 
 const BrilligInputs = union(enum) {

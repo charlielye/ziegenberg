@@ -106,4 +106,4 @@ then
   exit $result
 fi
 
-echo -e "$test_name: ${GREEN}PASSED${NC} ($(echo "$output" | grep -i 'time taken' | sed 's/time taken: //i'))"
+echo -e "$test_name: ${GREEN}PASSED${NC} ($(echo "$output" | grep -i 'time taken' | sed 's/.*time taken: //i'))"
