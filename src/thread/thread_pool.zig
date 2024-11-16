@@ -51,3 +51,13 @@ test "thread pool bench" {
 
     pool.shutdown();
 }
+
+test "init deinit 0 threads" {
+    var pool = ThreadPool.init(.{ .max_threads = 0 });
+    defer pool.deinit();
+}
+
+test "init deinit 1 threads" {
+    var pool = ThreadPool.init(.{ .max_threads = 1 });
+    defer pool.deinit();
+}
