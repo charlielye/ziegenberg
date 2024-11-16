@@ -7,13 +7,13 @@ fn every(comptime T: type, input: []const T, comptime f: fn (T) bool) bool {
     return true;
 }
 
-fn printable(c: u256) bool {
-    return c <= std.math.maxInt(u8) and std.ascii.isPrint(@intCast(c));
+fn printable(c: ForeignCallParam) bool {
+    return c == .Single and c.Single <= std.math.maxInt(u8) and std.ascii.isPrint(@intCast(c.Single));
 }
 
-fn convertSlice(comptime T: type, allocator: std.mem.Allocator, in: []u256) []T {
+fn convertSlice(comptime T: type, allocator: std.mem.Allocator, in: []ForeignCallParam) []T {
     const out = allocator.alloc(T, in.len) catch unreachable;
-    for (in, out) |c, *o| o.* = @intCast(c);
+    for (in, out) |c, *o| o.* = @intCast(c.Single);
     return out;
 }
 
@@ -26,7 +26,7 @@ pub fn handlePrint(allocator: std.mem.Allocator, mem: *Memory, params: []Foreign
     for (to_print, 0..) |p, i| {
         switch (p) {
             .Array => |arr| {
-                if (every(u256, arr, printable)) {
+                if (every(ForeignCallParam, arr, printable)) {
                     try writer.print("{s}", .{convertSlice(u8, mem.allocator, arr)});
                 } else {
                     try writer.print("{any}", .{arr});

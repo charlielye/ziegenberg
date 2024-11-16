@@ -10,8 +10,6 @@ const WitnessMap = @import("./witness_map.zig").WitnessMap;
 const MemoryOpSolver = @import("./memory_op_solver.zig").MemoryOpSolver;
 const G1 = @import("../grumpkin/g1.zig").G1;
 const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
-// const root = @import("../blackbox/field.zig");
-// const blackbox = @import("../blackbox/blackbox.zig");
 
 pub const ExecuteOptions = struct {
     file_path: ?[]const u8 = null,
@@ -98,7 +96,8 @@ const CircuitVm = struct {
                 .AssertZero => |op| try solve(self.allocator, &self.witnesses, &op),
                 .BrilligCall => |op| {
                     if (op.predicate) |*p| {
-                        const e = evaluate(self.allocator, p, &self.witnesses).toConst() orelse return error.OpcodeNotSolvable;
+                        const e = evaluate(self.allocator, p, &self.witnesses).toConst() orelse
+                            return error.OpcodeNotSolvable;
                         if (e.is_zero()) {
                             for (op.outputs) |o| {
                                 const witnesses = switch (o) {
@@ -119,7 +118,8 @@ const CircuitVm = struct {
                             const block_id = input.MemoryArray;
                             const block = self.memory_solvers.get(block_id) orelse return error.MemBlockNotFound;
                             for (0..block.block_len) |mem_idx| {
-                                const value = block.block_value.get(@intCast(mem_idx)) orelse return error.UninitializedMemory;
+                                const value = block.block_value.get(@intCast(mem_idx)) orelse
+                                    return error.UninitializedMemory;
                                 try calldata.append(value.to_int());
                             }
                         } else {

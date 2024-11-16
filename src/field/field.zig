@@ -9,6 +9,7 @@ pub fn Field(comptime Params: type) type {
         pub const params = Params;
         pub const one = Fe.from_int(1);
         pub const zero = Fe.from_int(0);
+        pub const max = Fe.from_int(params.max_u256);
         limbs: [4]u64 align(32),
 
         pub fn from_limbs(limbs: [4]u64) Fe {

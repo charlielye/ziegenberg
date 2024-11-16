@@ -235,6 +235,14 @@ pub const BlackBoxOp = union(enum) {
     }
 };
 
+pub const ForeignCall = struct {
+    function: []const u8,
+    destinations: []ValueOrArray,
+    destination_value_types: []HeapValueType,
+    inputs: []ValueOrArray,
+    input_value_types: []HeapValueType,
+};
+
 pub const BrilligOpcode = union(enum) {
     BinaryFieldOp: struct {
         destination: MemoryAddress,
@@ -295,13 +303,7 @@ pub const BrilligOpcode = union(enum) {
         value: u256,
     },
     Return: void,
-    ForeignCall: struct {
-        function: []const u8,
-        destinations: []ValueOrArray,
-        destination_value_types: []HeapValueType,
-        inputs: []ValueOrArray,
-        input_value_types: []HeapValueType,
-    },
+    ForeignCall: ForeignCall,
     Mov: struct {
         destination: MemoryAddress,
         source: MemoryAddress,

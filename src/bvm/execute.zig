@@ -7,8 +7,9 @@ const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const fieldOps = @import("../blackbox/field.zig");
 const blackbox = @import("../blackbox/blackbox.zig");
 const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
-const handleForeignCall = @import("./foreign_call/foreign_call.zig").handleForeignCall;
+// const handleForeignCall = @import("./foreign_call/foreign_call.zig").handleForeignCall;
 const Memory = @import("./memory.zig").Memory;
+const Txe = @import("./foreign_call/txe.zig").Txe;
 
 pub const ExecuteOptions = struct {
     file_path: ?[]const u8 = null,
@@ -89,6 +90,8 @@ pub const BrilligVm = struct {
     opcode_counters: [@typeInfo(io.BrilligOpcode).Union.fields.len]u64,
     opcode_time: [@typeInfo(io.BrilligOpcode).Union.fields.len]u64,
     time_taken: u64 = 0,
+    // TODO: Hardcoded in for now. But this needs to be passed into each brillig vm instance.
+    txe: Txe,
 
     pub fn init(allocator: std.mem.Allocator, calldata: []u256) !BrilligVm {
         const vm = BrilligVm{
@@ -100,6 +103,7 @@ pub const BrilligVm = struct {
             .opcode_counters = std.mem.zeroes([@typeInfo(io.BrilligOpcode).Union.fields.len]u64),
             .opcode_time = std.mem.zeroes([@typeInfo(io.BrilligOpcode).Union.fields.len]u64),
             .return_data = &.{},
+            .txe = Txe.init(allocator),
         };
 
         // Lock the allocated memory in RAM using mlock.
@@ -455,7 +459,7 @@ pub const BrilligVm = struct {
 
     fn processForeignCall(self: *BrilligVm, opcode: *BrilligOpcode) !void {
         const fc = &opcode.ForeignCall;
-        try handleForeignCall(self.allocator, &self.mem, fc);
+        try self.txe.handleForeignCall(&self.mem, fc);
         self.pc += 1;
     }
 
