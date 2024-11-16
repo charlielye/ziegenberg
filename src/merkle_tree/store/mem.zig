@@ -81,9 +81,11 @@ const MemLayer = struct {
     }
 
     /// Ensures we can write to self.data[capacity-1].
+    /// Capacity is rounded up to be even, so the sibling of the highest value can be read.
     /// Doesn't actually update the size, which represents the highest written element.
     pub fn ensureCapacity(self: *MemLayer, capacity: usize) !void {
-        try self.data_arr.resize(capacity);
+        try self.data_arr.resize(capacity + (capacity & 0x1));
+        @memset(self.data_arr.items[self.size..], Hash.zero);
         self.data = self.data_arr.items;
     }
 

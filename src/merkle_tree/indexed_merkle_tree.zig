@@ -17,7 +17,7 @@ const ThreadPool = @import("../thread/thread_pool.zig").ThreadPool;
 pub fn IndexedMerkleTree(depth: u6) type {
     return struct {
         const Self = @This();
-        const MerkleTree = mt.MerkleTree(depth);
+        const MerkleTree = mt.MerkleTree(depth, mt.MmapStore(depth));
         const Hash = mt.Hash;
         /// Represents an entry in the linked list we write to lmdb.
         const Entry = struct {
@@ -63,7 +63,7 @@ pub fn IndexedMerkleTree(depth: u6) type {
             try std.fs.cwd().makePath(db_path);
 
             const lmdb_env = try lmdb.Environment.init(@ptrCast(db_path.ptr), .{ .map_size = 1024 * 1024 * 1024 });
-            var tree = try MerkleTree.init(allocator, db_path, pool, false);
+            var tree = try mt.MerkleTreeDb.init(depth, allocator, db_path, pool, false, false);
 
             const stat = try lmdb_env.stat();
             if (stat.entries == 0) {

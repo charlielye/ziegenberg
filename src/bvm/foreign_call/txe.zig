@@ -29,14 +29,6 @@ const CompleteAddress = struct {
     public_keys: PublicKeys,
 };
 
-const DeployResponse = struct {
-    salt: F,
-    deployer: F,
-    contract_class_id: F,
-    initialization_hash: F,
-    public_keys: PublicKeys,
-};
-
 pub const Txe = struct {
     allocator: std.mem.Allocator,
     version: F = F.one,
@@ -124,6 +116,14 @@ pub const Txe = struct {
         self.contract_address = address;
         std.debug.print("setContractAddress: {x}\n", .{self.contract_address});
     }
+
+    const DeployResponse = struct {
+        salt: F,
+        deployer: F,
+        contract_class_id: F,
+        initialization_hash: F,
+        public_keys: PublicKeys,
+    };
 
     pub fn deploy(
         self: *Txe,

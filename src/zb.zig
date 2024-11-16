@@ -5,6 +5,9 @@ const bvmExecute = @import("./bvm/execute.zig").execute;
 const bvmDisassemble = @import("./bvm/disassemble.zig").disassemble;
 const cvmExecute = @import("./cvm/execute.zig").execute;
 const cvmDisassemble = @import("./cvm/disassemble.zig").disassemble;
+const merkle_tree = @import("./merkle_tree/merkle_tree.zig");
+const ThreadPool = @import("./thread/thread_pool.zig").ThreadPool;
+const F = @import("./bn254/fr.zig").Fr;
 const App = @import("yazap").App;
 const Arg = @import("yazap").Arg;
 const ArgMatches = @import("yazap").ArgMatches;
@@ -30,8 +33,7 @@ pub fn main() !void {
         var dis_cmd = app.createCommand("dis", "Disassemble the given bytecode.");
         try dis_cmd.addArg(Arg.positional("bytecode_path", null, null));
 
-        try avm_cmd.addSubcommand(run_cmd);
-        try avm_cmd.addSubcommand(dis_cmd);
+        try avm_cmd.addSubcommands(&.{ run_cmd, dis_cmd });
         try root.addSubcommand(avm_cmd);
     }
 
@@ -49,8 +51,7 @@ pub fn main() !void {
         try dis_cmd.addArg(Arg.positional("bytecode_path", null, null));
         try dis_cmd.addArg(Arg.booleanOption("binary", 'b', "Output the pure brillig as binary."));
 
-        try bvm_cmd.addSubcommand(run_cmd);
-        try bvm_cmd.addSubcommand(dis_cmd);
+        try bvm_cmd.addSubcommands(&.{ run_cmd, dis_cmd });
         try root.addSubcommand(bvm_cmd);
     }
 
@@ -68,9 +69,18 @@ pub fn main() !void {
         var dis_cmd = app.createCommand("dis", "Disassemble the given bytecode.");
         try dis_cmd.addArg(Arg.positional("bytecode_path", null, null));
 
-        try cvm_cmd.addSubcommand(run_cmd);
-        try cvm_cmd.addSubcommand(dis_cmd);
+        try cvm_cmd.addSubcommands(&.{ run_cmd, dis_cmd });
         try root.addSubcommand(cvm_cmd);
+    }
+
+    {
+        var mt_cmd = app.createCommand("mt", "Merkle tree commands.");
+        const root_cmd = app.createCommand("root", "Compute and print the root from stdin leaves.");
+        // try root_cmd.addArg(Arg.positional("depth", null, null));
+        // var append_cmd = app.createCommand("append", "Append leaves on stdin to the tree.");
+
+        try mt_cmd.addSubcommands(&.{root_cmd});
+        try root.addSubcommand(mt_cmd);
     }
 
     const matches = try app.parseProcess();
@@ -99,6 +109,15 @@ pub fn main() !void {
             return;
         }
         try handleCvm(cvm_matches);
+        return;
+    }
+
+    if (matches.subcommandMatches("mt")) |mt_matches| {
+        if (!mt_matches.containsArgs()) {
+            try app.displaySubcommandHelp();
+            return;
+        }
+        try handleMt(mt_matches);
         return;
     }
 
@@ -159,8 +178,6 @@ fn handleBvm(matches: ArgMatches) !void {
         try bvmDisassemble(bytecode_path, cmd_matches.containsArg("binary"));
         return;
     }
-
-    // try matches.displayHelp();
 }
 
 fn handleCvm(matches: ArgMatches) !void {
@@ -190,6 +207,22 @@ fn handleCvm(matches: ArgMatches) !void {
         try cvmDisassemble(bytecode_path);
         return;
     }
+}
 
-    // try matches.displayHelp();
+fn handleMt(matches: ArgMatches) !void {
+    if (matches.subcommandMatches("root")) |_| {
+        const threads = @min(try std.Thread.getCpuCount(), 64);
+        var pool = ThreadPool.init(.{ .max_threads = threads });
+        defer {
+            pool.shutdown();
+            pool.deinit();
+        }
+        var tree = try merkle_tree.MerkleTreeMem.init(40, std.heap.page_allocator, &pool);
+        const stdin = std.io.getStdIn();
+        const bytes = try stdin.readToEndAllocOptions(std.heap.page_allocator, std.math.maxInt(usize), null, 32, null);
+        const leaves = std.mem.bytesAsSlice(F, bytes);
+        for (leaves) |*leaf| leaf.to_montgomery();
+        try tree.append(leaves);
+        try std.io.getStdOut().writer().print("{x}\n", .{tree.root()});
+    }
 }

@@ -16,8 +16,8 @@ const Fr = @import("../bn254/fr.zig").Fr;
 const poseidon2Hash = @import("../poseidon2/poseidon2.zig").hash;
 const ThreadPool = @import("../thread/thread_pool.zig").ThreadPool;
 const hash = @import("./hash.zig");
-const MmapStore = @import("./store/mmap.zig").MmapStore;
-const MemStore = @import("./store/mem.zig").MemStore;
+pub const MmapStore = @import("./store/mmap.zig").MmapStore;
+pub const MemStore = @import("./store/mem.zig").MemStore;
 
 pub const Hash = hash.Hash;
 
@@ -388,7 +388,7 @@ pub const MerkleTreeDb = struct {
 
 test "merkle tree db/mem consistency" {
     const allocator = std.heap.page_allocator;
-    const depth = 11;
+    const depth = 40;
     const num = 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
     const data_dir = "./merkle_tree_data";
