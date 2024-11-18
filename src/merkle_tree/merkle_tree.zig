@@ -19,24 +19,7 @@ const hash = @import("./hash.zig");
 pub const MmapStore = @import("./store/mmap.zig").MmapStore;
 pub const MemStore = @import("./store/mem.zig").MemStore;
 
-pub const Hash = hash.Hash;
-
-/// A task object for scheduling onto the thread pool that performs a hash compression.
-/// This is used for the simple case of updating a collection of leaves, where no intermediate state is needed.
-/// We can layer by layer, schedule the compressions for that layer, wait for completion, and advance up a layer.
-const CompressTask = struct {
-    task: ThreadPool.Task,
-    lhs: *Hash,
-    rhs: *Hash,
-    dst: *Hash,
-    cnt: *std.atomic.Value(u64),
-
-    pub fn onSchedule(task: *ThreadPool.Task) void {
-        const self: *CompressTask = @fieldParentPtr("task", task);
-        hash.compressTask(self.lhs, self.rhs, self.dst);
-        _ = self.cnt.fetchSub(1, .release);
-    }
-};
+const Hash = hash.Hash;
 
 pub const MerkleUpdate = struct {
     index: usize,
@@ -57,7 +40,7 @@ pub const IndividualUpdate = struct {
 // 1:       [ ]             [ ]             [ ]             [ ]
 //        /     \         /     \         /     \         /     \
 // 0:   [0]     [1]     [2]     [3]     [4]     [5]     [6]     [7]
-pub fn MerkleTree(depth: u6, comptime Store: type) type {
+pub fn MerkleTree(depth: u6, comptime Store: type, comptime compressFn: hash.HashFunc) type {
     return struct {
         const Self = @This();
         pub const Index = std.meta.Int(.unsigned, depth);
@@ -73,6 +56,23 @@ pub fn MerkleTree(depth: u6, comptime Store: type) type {
         allocator: std.mem.Allocator,
         store: Store,
         pool: ?*ThreadPool,
+
+        /// A task object for scheduling onto the thread pool that performs a hash compression.
+        /// This is used for the simple case of updating a collection of leaves, where no intermediate state is needed.
+        /// We layer by layer, schedule the compressions for that layer, wait for completion, and advance up a layer.
+        const CompressTask = struct {
+            task: ThreadPool.Task,
+            lhs: *Hash,
+            rhs: *Hash,
+            dst: *Hash,
+            cnt: *std.atomic.Value(u64),
+
+            pub fn onSchedule(task: *ThreadPool.Task) void {
+                const self: *CompressTask = @fieldParentPtr("task", task);
+                compressFn(self.lhs, self.rhs, self.dst);
+                _ = self.cnt.fetchSub(1, .release);
+            }
+        };
 
         /// A task object for scheduling individual updates that return witness data needed for proving.
         /// We need each intermediate hash path to reflect the state between each update.
@@ -148,7 +148,7 @@ pub fn MerkleTree(depth: u6, comptime Store: type) type {
                         self.result.root_before = to_layer.get(to_idx);
                     }
 
-                    hash.compressTask(&lhs, &rhs, dst);
+                    compressFn(&lhs, &rhs, dst);
 
                     // printStruct(.{ .li = li, .lhs = lhs.*, .rhs = rhs.*, .dst = dst.* });
 
@@ -349,36 +349,40 @@ pub fn MerkleTree(depth: u6, comptime Store: type) type {
     };
 }
 
-pub const MerkleTreeMem = struct {
-    pub fn init(
-        comptime depth: u6,
-        allocator: std.mem.Allocator,
-        pool: ?*ThreadPool,
-    ) !MerkleTree(depth, MemStore(depth)) {
-        return MerkleTree(depth, MemStore(depth)).init(
-            allocator,
-            try MemStore(depth).init(allocator),
-            pool,
-        );
-    }
-};
+pub fn MerkleTreeMem(depth: usize, compressFn: hash.HashFunc) type {
+    return struct {
+        const Tree = MerkleTree(depth, MemStore(depth, compressFn), compressFn);
+        pub fn init(
+            allocator: std.mem.Allocator,
+            pool: ?*ThreadPool,
+        ) !Tree {
+            return Tree.init(
+                allocator,
+                try MemStore(depth).init(allocator),
+                pool,
+            );
+        }
+    };
+}
 
-pub const MerkleTreeDb = struct {
-    pub fn init(
-        comptime depth: u6,
-        allocator: std.mem.Allocator,
-        db_path: []const u8,
-        pool: ?*ThreadPool,
-        ephemeral: bool,
-        erase: bool,
-    ) !MerkleTree(depth, MmapStore(depth)) {
-        return MerkleTree(depth, MmapStore(depth)).init(
-            allocator,
-            try MmapStore(depth).init(allocator, db_path, ephemeral, erase),
-            pool,
-        );
-    }
-};
+pub fn MerkleTreeDb(depth: usize, compressFn: hash.HashFunc) type {
+    return struct {
+        const Tree = MerkleTree(depth, MmapStore(depth, compressFn), compressFn);
+        pub fn init(
+            allocator: std.mem.Allocator,
+            db_path: []const u8,
+            pool: ?*ThreadPool,
+            ephemeral: bool,
+            erase: bool,
+        ) !Tree {
+            return Tree.init(
+                allocator,
+                try MmapStore(depth).init(allocator, db_path, ephemeral, erase),
+                pool,
+            );
+        }
+    };
+}
 
 // fn printStruct(s: anytype) void {
 //     const stderr = std.io.getStdErr().writer();
@@ -399,10 +403,10 @@ test "merkle tree db/mem consistency" {
         pool.deinit();
     }
 
-    var mem_tree = try MerkleTreeMem.init(depth, allocator, &pool);
+    var mem_tree = try MerkleTreeMem(depth, hash.poseidon2).init(allocator, &pool);
     defer mem_tree.deinit();
 
-    var db_tree = try MerkleTreeDb.init(depth, allocator, data_dir, &pool, false, true);
+    var db_tree = try MerkleTreeDb(depth, hash.poseidon2).init(allocator, data_dir, &pool, false, true);
     defer db_tree.deinit();
 
     var values = try std.ArrayListAligned(Hash, 32).initCapacity(allocator, num);
@@ -442,7 +446,7 @@ test "merkle tree bench" {
         pool.deinit();
     }
 
-    var merkle_tree = try MerkleTreeDb.init(depth, allocator, data_dir, &pool, false, true);
+    var merkle_tree = try MerkleTreeDb(depth, hash.poseidon2).init(allocator, data_dir, &pool, false, true);
     defer merkle_tree.deinit();
 
     std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
@@ -509,7 +513,7 @@ test "merkle tree individual update bench" {
         pool.deinit();
     }
 
-    var merkle_tree = try MerkleTreeDb.init(depth, allocator, data_dir, &pool, false, true);
+    var merkle_tree = try MerkleTreeDb(depth, hash.poseidon2).init(allocator, data_dir, &pool, false, true);
     defer merkle_tree.deinit();
 
     std.debug.print("Benching: size: {}, threads: {}\n", .{ num, threads });
@@ -541,9 +545,9 @@ test "merkle tree individual update bench" {
             try std.testing.expect(h.eql(bh.*));
 
             if ((result.index >> @truncate(li)) & 1 == 0) {
-                hash.compressTask(&h, sh, &h);
+                hash.poseidon2(&h, sh, &h);
             } else {
-                hash.compressTask(sh, &h, &h);
+                hash.poseidon2(sh, &h, &h);
             }
         }
         try std.testing.expect(h.eql(result.root_before));
@@ -553,9 +557,9 @@ test "merkle tree individual update bench" {
             try std.testing.expect(h.eql(bh.*));
 
             if ((result.index >> @truncate(li)) & 1 == 0) {
-                hash.compressTask(&h, sh, &h);
+                hash.poseidon2(&h, sh, &h);
             } else {
-                hash.compressTask(sh, &h, &h);
+                hash.poseidon2(sh, &h, &h);
             }
         }
         try std.testing.expect(h.eql(result.root_after));

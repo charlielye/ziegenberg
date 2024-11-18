@@ -3,7 +3,7 @@ const hash = @import("../hash.zig");
 
 const Hash = hash.Hash;
 
-pub fn MmapStore(depth: u6) type {
+pub fn MmapStore(depth: u6, compressFn: hash.HashFunc) type {
     return struct {
         const Self = @This();
         layers: [depth]MmapLayer,
@@ -33,7 +33,7 @@ pub fn MmapStore(depth: u6) type {
                     empty_hash,
                     ephemeral,
                 );
-                hash.compressTask(&empty_hash, &empty_hash, &empty_hash);
+                compressFn(&empty_hash, &empty_hash, &empty_hash);
             }
 
             return store;

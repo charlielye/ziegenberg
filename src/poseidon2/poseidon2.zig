@@ -7,6 +7,23 @@ pub fn hash(input: []const Fr) Fr {
     return Poseidon2Sponge.hash_fixed_length(1, input)[0];
 }
 
+pub fn hashBytes(input: []const u8) Fr {
+    const num_fields = input.len / 31 + (@intFromBool(input.len % 31 != 0));
+    std.debug.assert(num_fields <= 128);
+    var input_fields: [128]Fr = undefined;
+
+    for (input_fields[0..num_fields], 0..) |*f, i| {
+        var buf: [32]u8 = .{0} ** 32;
+        const chunk_len = @min(31, input.len - (31 * i));
+        const chunk = input[i * 31 .. i * 31 + chunk_len];
+        for (chunk, 0..) |b, j| buf[31 - j] = b;
+        f.* = Fr.from_buf(buf);
+    }
+    // std.debug.print("{x}\n", .{input_fields[0..num_fields]});
+
+    return hash(input_fields[0..num_fields]);
+}
+
 test "poseidon2 basic test" {
     const a = Fr.random();
     const b = Fr.random();
@@ -37,6 +54,11 @@ test "poseidon2 hash consistency" {
     const expected = Fr.from_int(0x2f43a0f83b51a6f5fc839dea0ecec74947637802a579fa9841930a25a0bcec11);
 
     try std.testing.expect(result.eql(expected));
+}
+
+test "hash bytes" {
+    const h = hashBytes("i would like to hash somewhere between 32 and 64 bytes");
+    std.debug.print("{x}\n", .{h});
 }
 
 test "poseidon2 bench" {

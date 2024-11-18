@@ -5,7 +5,7 @@ const bvmExecute = @import("./bvm/execute.zig").execute;
 const bvmDisassemble = @import("./bvm/disassemble.zig").disassemble;
 const cvmExecute = @import("./cvm/execute.zig").execute;
 const cvmDisassemble = @import("./cvm/disassemble.zig").disassemble;
-const merkle_tree = @import("./merkle_tree/merkle_tree.zig");
+const mt = @import("./merkle_tree/package.zig");
 const ThreadPool = @import("./thread/thread_pool.zig").ThreadPool;
 const F = @import("./bn254/fr.zig").Fr;
 const App = @import("yazap").App;
@@ -217,7 +217,7 @@ fn handleMt(matches: ArgMatches) !void {
             pool.shutdown();
             pool.deinit();
         }
-        var tree = try merkle_tree.MerkleTreeMem.init(40, std.heap.page_allocator, &pool);
+        var tree = try mt.MerkleTreeMem(40, mt.poseidon2).init(std.heap.page_allocator, &pool);
         const stdin = std.io.getStdIn();
         const bytes = try stdin.readToEndAllocOptions(std.heap.page_allocator, std.math.maxInt(usize), null, 32, null);
         const leaves = std.mem.bytesAsSlice(F, bytes);

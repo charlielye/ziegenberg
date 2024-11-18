@@ -3,7 +3,7 @@ const hash = @import("../hash.zig");
 
 const Hash = hash.Hash;
 
-pub fn MemStore(depth: u6) type {
+pub fn MemStore(depth: u6, compressFn: hash.HashFunc) type {
     return struct {
         const Self = @This();
         layers: [depth]MemLayer,
@@ -17,7 +17,7 @@ pub fn MemStore(depth: u6) type {
                     allocator,
                     empty_hash,
                 );
-                hash.compressTask(&empty_hash, &empty_hash, &empty_hash);
+                compressFn(&empty_hash, &empty_hash, &empty_hash);
             }
 
             return store;
