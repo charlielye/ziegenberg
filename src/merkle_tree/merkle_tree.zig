@@ -231,6 +231,9 @@ pub fn MerkleTree(depth: u6, comptime Store: type, comptime compressFn: hash.Has
                 num_to_compress += (l0_end - l0_start) / 2;
                 self.store.layers[0].update(u.hashes, u.index);
             }
+            if (num_to_compress == 0) {
+                return;
+            }
             var tasks = try std.ArrayList(CompressTask).initCapacity(self.allocator, num_to_compress);
             defer tasks.deinit();
             // std.debug.print("Update prep took: {}us\n", .{t.read() / 1000});
@@ -358,7 +361,7 @@ pub fn MerkleTreeMem(depth: usize, compressFn: hash.HashFunc) type {
         ) !Tree {
             return Tree.init(
                 allocator,
-                try MemStore(depth).init(allocator),
+                try MemStore(depth, compressFn).init(allocator),
                 pool,
             );
         }
@@ -377,7 +380,7 @@ pub fn MerkleTreeDb(depth: usize, compressFn: hash.HashFunc) type {
         ) !Tree {
             return Tree.init(
                 allocator,
-                try MmapStore(depth).init(allocator, db_path, ephemeral, erase),
+                try MmapStore(depth, compressFn).init(allocator, db_path, ephemeral, erase),
                 pool,
             );
         }

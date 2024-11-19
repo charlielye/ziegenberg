@@ -8,8 +8,8 @@ pub fn MemStore(depth: u6, compressFn: hash.HashFunc) type {
         const Self = @This();
         layers: [depth]MemLayer,
 
-        pub fn init(allocator: std.mem.Allocator) !MemStore(depth) {
-            var store: MemStore(depth) = undefined;
+        pub fn init(allocator: std.mem.Allocator) !Self {
+            var store: Self = undefined;
 
             var empty_hash = Hash.zero;
             for (0..depth) |layer_index| {
@@ -59,11 +59,11 @@ const MemLayer = struct {
     }
 
     pub inline fn get(self: *MemLayer, at: usize) Hash {
-        return if (self.data[at].is_zero()) self.empty_hash else self.data[at];
+        return if (at >= self.size or self.data[at].is_zero()) self.empty_hash else self.data[at];
     }
 
     pub inline fn get_ptr(self: *MemLayer, at: usize) *const Hash {
-        return if (self.data[at].is_zero()) &self.empty_hash else &self.data[at];
+        return if (at >= self.size or self.data[at].is_zero()) &self.empty_hash else &self.data[at];
     }
 
     /// Appends src to the layer, and returns a slice of elements that must be re-hashed up the tree.

@@ -13,14 +13,14 @@ pub fn MmapStore(depth: u6, compressFn: hash.HashFunc) type {
             db_path: []const u8,
             ephemeral: bool,
             erase: bool,
-        ) !MmapStore(depth) {
+        ) !Self {
             if (erase) {
                 try std.fs.cwd().deleteTree(db_path);
             }
 
             try std.fs.cwd().makePath(db_path);
 
-            var store: MmapStore(depth) = undefined;
+            var store: Self = undefined;
 
             var empty_hash = Hash.zero;
             for (0..depth) |layer_index| {
