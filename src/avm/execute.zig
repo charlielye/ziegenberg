@@ -116,7 +116,7 @@ const AztecVm = struct {
                     try self.callstack.append(self.pc);
                     self.pc = op.address - 1;
                 },
-                .INTERNALRETURN => self.pc = self.callstack.pop(),
+                .INTERNALRETURN => self.pc = self.callstack.pop() orelse unreachable,
                 .EQ,
                 .LT,
                 .LTE,
@@ -250,12 +250,12 @@ const AztecVm = struct {
         var opcode = opcode_in;
         comptime var slot_field_index: usize = 0;
         comptime var num_slot_operands: usize = 0;
-        comptime for (@typeInfo(@TypeOf(opcode)).Struct.fields) |field| {
+        comptime for (@typeInfo(@TypeOf(opcode)).@"struct".fields) |field| {
             if (std.mem.endsWith(u8, field.name, "_slot")) {
                 num_slot_operands += 1;
             }
         };
-        inline for (@typeInfo(@TypeOf(opcode)).Struct.fields) |field| {
+        inline for (@typeInfo(@TypeOf(opcode)).@"struct".fields) |field| {
             if (comptime std.mem.endsWith(u8, field.name, "_slot")) {
                 const is_indirect = (opcode.indirect >> slot_field_index) & 0x1 == 1;
                 const is_relative = (opcode.indirect >> (num_slot_operands + slot_field_index)) & 0x1 == 1;

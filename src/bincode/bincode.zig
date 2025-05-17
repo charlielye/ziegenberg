@@ -8,47 +8,47 @@ pub const Meta = struct {
 
 pub fn deserializeAlloc(stream: anytype, allocator: std.mem.Allocator, comptime T: type) !T {
     return switch (@typeInfo(T)) {
-        .Void => {},
-        .Bool => try deserializeBool(stream),
-        .Float => try deserializeFloat(stream, T),
-        .Int => try deserializeInt(stream, T),
-        .Optional => |info| try deserializeOptionalAlloc(stream, allocator, info.child),
-        .Pointer => |info| try deserializePointerAlloc(stream, info, allocator),
-        .Array => |info| try deserializeArrayAlloc(stream, info, allocator),
-        .Struct => |info| try deserializeStructAlloc(stream, info, allocator, T),
-        .Enum => try deserializeEnum(stream, T),
-        .Union => |info| try deserializeUnionAlloc(stream, info, allocator, T),
+        .void => {},
+        .bool => try deserializeBool(stream),
+        .float => try deserializeFloat(stream, T),
+        .int => try deserializeInt(stream, T),
+        .optional => |info| try deserializeOptionalAlloc(stream, allocator, info.child),
+        .pointer => |info| try deserializePointerAlloc(stream, info, allocator),
+        .array => |info| try deserializeArrayAlloc(stream, info, allocator),
+        .@"struct" => |info| try deserializeStructAlloc(stream, info, allocator, T),
+        .@"enum" => try deserializeEnum(stream, T),
+        .@"union" => |info| try deserializeUnionAlloc(stream, info, allocator, T),
         else => unsupportedType(T),
     };
 }
 
 pub fn deserialize(stream: anytype, comptime T: type) !T {
     return switch (@typeInfo(T)) {
-        .Void => {},
-        .Bool => try deserializeBool(stream),
-        .Float => try deserializeFloat(stream, T),
-        .Int => try deserializeInt(stream, T),
-        .Optional => |info| try deserializeOptional(stream, info.child),
-        .Array => |info| try deserializeArray(stream, info),
-        .Struct => |info| try deserializeStruct(stream, info, T),
-        .Enum => try deserializeEnum(stream, T),
-        .Union => |info| try deserializeUnion(stream, info, T),
+        .void => {},
+        .bool => try deserializeBool(stream),
+        .float => try deserializeFloat(stream, T),
+        .int => try deserializeInt(stream, T),
+        .optional => |info| try deserializeOptional(stream, info.child),
+        .array => |info| try deserializeArray(stream, info),
+        .@"struct" => |info| try deserializeStruct(stream, info, T),
+        .@"enum" => try deserializeEnum(stream, T),
+        .@"union" => |info| try deserializeUnion(stream, info, T),
         else => unsupportedType(T),
     };
 }
 
 pub fn deserializeBuffer(comptime T: type, source: *[]const u8) T {
     return switch (@typeInfo(T)) {
-        .Void => {},
-        .Bool => deserializeBufferBool(source),
-        .Float => deserializeBufferFloat(T, source),
-        .Int => deserializeBufferInt(T, source),
-        .Optional => |info| deserializeBufferOptional(info.child, source),
-        .Pointer => |info| deserializeBufferPointer(info, source),
-        .Array => |info| deserializeBufferArray(info, source),
-        .Struct => |info| deserializeBufferStruct(T, info, source),
-        .Enum => deserializeBufferEnum(T, source),
-        .Union => |info| deserializeBufferUnion(T, info, source),
+        .void => {},
+        .bool => deserializeBufferBool(source),
+        .float => deserializeBufferFloat(T, source),
+        .int => deserializeBufferInt(T, source),
+        .optional => |info| deserializeBufferOptional(info.child, source),
+        .pointer => |info| deserializeBufferPointer(info, source),
+        .array => |info| deserializeBufferArray(info, source),
+        .@"struct" => |info| deserializeBufferStruct(T, info, source),
+        .@"enum" => deserializeBufferEnum(T, source),
+        .@"union" => |info| deserializeBufferUnion(T, info, source),
         else => unsupportedType(T),
     };
 }
@@ -56,16 +56,16 @@ pub fn deserializeBuffer(comptime T: type, source: *[]const u8) T {
 pub fn serialize(stream: anytype, value: anytype) @TypeOf(stream).Error!void {
     const T = @TypeOf(value);
     return switch (@typeInfo(T)) {
-        .Void => {},
-        .Bool => try serializeBool(stream, value),
-        .Float => try serializeFloat(stream, T, value),
-        .Int => try serializeInt(stream, T, value),
-        .Optional => |info| try serializeOptional(stream, info.child, value),
-        .Pointer => |info| try serializePointer(stream, info, T, value),
-        .Array => |info| try serializeArray(stream, info, T, value),
-        .Struct => |info| try serializeStruct(stream, info, T, value),
-        .Enum => try serializeEnum(stream, T, value),
-        .Union => |info| try serializeUnion(stream, info, T, value),
+        .void => {},
+        .bool => try serializeBool(stream, value),
+        .float => try serializeFloat(stream, T, value),
+        .int => try serializeInt(stream, T, value),
+        .optional => |info| try serializeOptional(stream, info.child, value),
+        .pointer => |info| try serializePointer(stream, info, T, value),
+        .array => |info| try serializeArray(stream, info, T, value),
+        .@"struct" => |info| try serializeStruct(stream, info, T, value),
+        .@"enum" => try serializeEnum(stream, T, value),
+        .@"union" => |info| try serializeUnion(stream, info, T, value),
         else => unsupportedType(T),
     };
 }
@@ -157,9 +157,9 @@ fn deserializeBufferUnion(comptime T: type, comptime info: std.builtin.Type.Unio
     }
 }
 
-fn deserializeBufferArray(comptime info: std.builtin.Type.Array, source_ptr: *[]const u8) [info.len]info.child {
-    const T = @Type(.{ .Array = info });
-    if (info.sentinel != null) unsupportedType(T);
+fn deserializeBufferArray(comptime info: std.builtin.Type.array, source_ptr: *[]const u8) [info.len]info.child {
+    const T = @Type(.{ .array = info });
+    if (info.sentinel_ptr != null) unsupportedType(T);
     var value: T = undefined;
     if (info.child == u8) {
         const source = source_ptr.*;
@@ -178,11 +178,11 @@ fn deserializeBufferArray(comptime info: std.builtin.Type.Array, source_ptr: *[]
 }
 
 fn deserializeBufferPointer(comptime info: std.builtin.Type.Pointer, source_ptr: *[]const u8) []const info.child {
-    const T = @Type(.{ .Pointer = info });
-    if (info.sentinel != null) unsupportedType(T);
+    const T = @Type(.{ .pointer = info });
+    if (info.sentinel_ptr != null) unsupportedType(T);
     switch (info.size) {
-        .One => unsupportedType(T),
-        .Slice => {
+        .one => unsupportedType(T),
+        .slice => {
             const len: usize = @intCast(deserializeBufferInt(u64, source_ptr));
             if (info.child == u8) {
                 const source = source_ptr.*;
@@ -258,11 +258,11 @@ fn deserializeOptional(stream: anytype, comptime T: type) !?T {
 }
 
 fn deserializePointerAlloc(stream: anytype, comptime info: std.builtin.Type.Pointer, allocator: std.mem.Allocator) ![]info.child {
-    const T = @Type(.{ .Pointer = info });
-    if (info.sentinel != null) unsupportedType(T);
+    const T = @Type(.{ .pointer = info });
+    if (info.sentinel_ptr != null) unsupportedType(T);
     switch (info.size) {
-        .One => unsupportedType(T),
-        .Slice => {
+        .one => unsupportedType(T),
+        .slice => {
             const len: usize = @intCast(try stream.readInt(u64, std.builtin.Endian.little));
             if (len > 1024 * 1024) {
                 return DeserializeError.LargeAlloc;
@@ -280,14 +280,14 @@ fn deserializePointerAlloc(stream: anytype, comptime info: std.builtin.Type.Poin
             }
             return memory;
         },
-        .C => unsupportedType(T),
-        .Many => unsupportedType(T),
+        .c => unsupportedType(T),
+        .many => unsupportedType(T),
     }
 }
 
 fn deserializeArrayAlloc(stream: anytype, comptime info: std.builtin.Type.Array, allocator: std.mem.Allocator) ![info.len]info.child {
-    const T = @Type(.{ .Array = info });
-    if (info.sentinel != null) unsupportedType(T);
+    const T = @Type(.{ .array = info });
+    if (info.sentinel_ptr != null) unsupportedType(T);
     var value: T = undefined;
     if (info.child == u8) {
         const amount = try stream.readAll(value[0..]);
@@ -302,9 +302,9 @@ fn deserializeArrayAlloc(stream: anytype, comptime info: std.builtin.Type.Array,
     return value;
 }
 
-fn deserializeArray(stream: anytype, comptime info: std.builtin.Type.Array) ![info.len]info.child {
-    const T = @Type(.{ .Array = info });
-    if (info.sentinel != null) unsupportedType(T);
+fn deserializeArray(stream: anytype, comptime info: std.builtin.Type.array) ![info.len]info.child {
+    const T = @Type(.{ .array = info });
+    if (info.sentinel_ptr != null) unsupportedType(T);
     var value: T = undefined;
     if (info.child == u8) {
         const amount = try stream.readAll(value[0..]);
@@ -356,7 +356,7 @@ fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struc
     return value;
 }
 
-fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.Struct, comptime T: type) !T {
+fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.@"struct", comptime T: type) !T {
     var value: T = undefined;
     outer: inline for (info.fields) |field| {
         if (@hasDecl(T, "meta")) {
@@ -465,10 +465,10 @@ pub fn serializeOptional(stream: anytype, comptime T: type, value: ?T) @TypeOf(s
 }
 
 pub fn serializePointer(stream: anytype, comptime info: std.builtin.Type.Pointer, comptime T: type, value: T) @TypeOf(stream).Error!void {
-    if (info.sentinel != null) unsupportedType(T);
+    if (info.sentinel_ptr != null) unsupportedType(T);
     switch (info.size) {
-        .One => unsupportedType(T),
-        .Slice => {
+        .one => unsupportedType(T),
+        .slice => {
             try stream.writeInt(u64, value.len, std.builtin.Endian.little);
             if (info.child == u8) {
                 try stream.writeAll(value);
@@ -478,13 +478,13 @@ pub fn serializePointer(stream: anytype, comptime info: std.builtin.Type.Pointer
                 }
             }
         },
-        .C => unsupportedType(T),
-        .Many => unsupportedType(T),
+        .c => unsupportedType(T),
+        .many => unsupportedType(T),
     }
 }
 
-pub fn serializeArray(stream: anytype, comptime info: std.builtin.Type.Array, comptime T: type, value: T) @TypeOf(stream).Error!void {
-    if (info.sentinel != null) unsupportedType(T);
+pub fn serializeArray(stream: anytype, comptime info: std.builtin.Type.array, comptime T: type, value: T) @TypeOf(stream).Error!void {
+    if (info.sentinel_ptr != null) unsupportedType(T);
     if (info.child == u8) {
         try stream.writeAll(value);
     } else {
@@ -596,7 +596,7 @@ fn invalidProtocol(comptime message: []const u8) noreturn {
 //             defer arena.deinit();
 //             const copy = try deserializeAlloc(input_stream.reader(), arena.allocator(), T);
 
-//             if (@typeInfo(T) == .Struct and @hasDecl(T, "validate")) {
+//             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "validate")) {
 //                 try T.validate(value, copy);
 //             } else {
 //                 try std.testing.expectEqual(value, copy);
@@ -618,7 +618,7 @@ fn invalidProtocol(comptime message: []const u8) noreturn {
 //             var input_stream = std.io.fixedBufferStream(expected);
 //             const copy = try deserialize(input_stream.reader(), T);
 
-//             if (@typeInfo(T) == .Struct and @hasDecl(T, "validate")) {
+//             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "validate")) {
 //                 try T.validate(value, copy);
 //             } else {
 //                 try std.testing.expectEqual(value, copy);
@@ -642,7 +642,7 @@ fn invalidProtocol(comptime message: []const u8) noreturn {
 //             const copy = deserializeBuffer(T, &input_stream);
 //             try expectEqual(@as(usize, 0), input_stream.len);
 
-//             if (@typeInfo(T) == .Struct and @hasDecl(T, "validate")) {
+//             if (@typeInfo(T) == .@"struct" and @hasDecl(T, "validate")) {
 //                 try T.validate(value, copy);
 //             } else {
 //                 try std.testing.expectEqual(value, copy);
@@ -654,7 +654,7 @@ fn invalidProtocol(comptime message: []const u8) noreturn {
 
 //     const testTypeAlloc = TestTypeAlloc{
 //         .u = .{ .y = 5 },
-//         .e = .One,
+//         .e = .one,
 //         .s = "abcdefgh",
 //         .point = .{ 1.1, 2.2 },
 //         .o = 255,
@@ -681,7 +681,7 @@ fn invalidProtocol(comptime message: []const u8) noreturn {
 
 //     const testType = TestType{
 //         .u = .{ .y = 5 },
-//         .e = .One,
+//         .e = .one,
 //         .point = .{ 1.1, 2.2 },
 //         .o = 255,
 //     };

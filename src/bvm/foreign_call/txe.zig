@@ -61,16 +61,16 @@ pub const Txe = struct {
         defer arena.deinit();
         const allocator = arena.allocator();
 
-        const info = @typeInfo(Txe).Struct;
+        const info = @typeInfo(Txe).@"struct";
         inline for (info.decls) |decl| {
             const field = @field(Txe, decl.name);
             const field_type = @TypeOf(field);
             const field_info = @typeInfo(field_type);
-            if (field_info == .Fn and
-                field_info.Fn.params.len >= 1 and
-                field_info.Fn.params[0].type == *Txe and
+            if (field_info == .@"fn" and
+                field_info.@"fn".params.len >= 1 and
+                field_info.@"fn".params[0].type == *Txe and
                 // TODO: Skipping this function, but !std.mem.eql didn't work?
-                (field_info.Fn.params.len == 1 or field_info.Fn.params[1].type != *Memory))
+                (field_info.@"fn".params.len == 1 or field_info.@"fn".params[1].type != *Memory))
             {
                 if (std.mem.eql(u8, decl.name, fc.function)) {
                     // There is a function name matching the call on ourself.

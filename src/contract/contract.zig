@@ -70,12 +70,12 @@ inline fn containsString(strings: []const []const u8, target: []const u8) bool {
 fn toBuffer(allocator: std.mem.Allocator, input: anytype) ![]u8 {
     var buf = std.ArrayList(u8).init(allocator);
     const info = @typeInfo(@TypeOf(input));
-    inline for (info.Struct.fields) |f| {
+    inline for (info.@"struct".fields) |f| {
         const finfo = @typeInfo(f.type);
         switch (finfo) {
-            .Int => try buf.appendSlice(std.mem.asBytes(&@field(input, f.name))),
-            .Pointer => try buf.appendSlice(@field(input, f.name)),
-            .Array => try buf.appendSlice(&@field(input, f.name)),
+            .int => try buf.appendSlice(std.mem.asBytes(&@field(input, f.name))),
+            .pointer => try buf.appendSlice(@field(input, f.name)),
+            .array => try buf.appendSlice(&@field(input, f.name)),
             else => unreachable,
         }
     }

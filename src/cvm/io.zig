@@ -367,7 +367,7 @@ const Directive = union(enum) {
 
     pub fn format(self: Directive, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{s} ", .{@tagName(self)});
-        inline for (@typeInfo(@TypeOf(self)).Union.fields) |field| {
+        inline for (@typeInfo(@TypeOf(self)).@"union".fields) |field| {
             if (self == @field(@TypeOf(self), field.name)) {
                 try formatStruct(@field(self, field.name), writer);
             }
@@ -527,7 +527,7 @@ const BlackBoxOp = union(enum) {
 
     pub fn format(self: BlackBoxOp, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{s} ", .{@tagName(self)});
-        inline for (@typeInfo(BlackBoxOp).Union.fields) |field| {
+        inline for (@typeInfo(BlackBoxOp).@"union".fields) |field| {
             if (self == @field(BlackBoxOp, field.name)) {
                 try formatStruct(@field(self, field.name), writer);
             }

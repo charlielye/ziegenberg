@@ -1,6 +1,7 @@
 const std = @import("std");
 const lmdb = @import("lmdb");
 const mt = @import("./merkle_tree.zig");
+const hash = @import("./hash.zig");
 const Fr = @import("../bn254/fr.zig").Fr;
 const bincode = @import("../bincode/bincode.zig");
 const poseidon2Hash = @import("../poseidon2/poseidon2.zig").hash;
@@ -14,11 +15,11 @@ const ThreadPool = @import("../thread/thread_pool.zig").ThreadPool;
 /// Adds a btree (lmdb) structure for storing ordered value -> tree index mappings.
 /// The actual leaf nodes in the tree are not the direct value, but of compressed type Leaf, to encode the links.
 /// These are required to locate list elements and their pre-images within the merkle tree for updates.
-pub fn IndexedMerkleTree(depth: u6) type {
+pub fn IndexedMerkleTree(depth: u6, comptime compressFn: hash.HashFunc) type {
     return struct {
         const Self = @This();
-        const MerkleTree = mt.MerkleTree(depth, mt.MmapStore(depth));
-        const Hash = mt.Hash;
+        const MerkleTree = mt.MerkleTree(depth, mt.MmapStore(depth, compressFn), compressFn);
+        const Hash = hash.Hash;
         /// Represents an entry in the linked list we write to lmdb.
         const Entry = struct {
             next_value: u256,
@@ -63,7 +64,7 @@ pub fn IndexedMerkleTree(depth: u6) type {
             try std.fs.cwd().makePath(db_path);
 
             const lmdb_env = try lmdb.Environment.init(@ptrCast(db_path.ptr), .{ .map_size = 1024 * 1024 * 1024 });
-            var tree = try mt.MerkleTreeDb.init(depth, allocator, db_path, pool, false, false);
+            var tree = try mt.MerkleTreeDb(depth, hash.poseidon2).init(allocator, db_path, pool, false, false);
 
             const stat = try lmdb_env.stat();
             if (stat.entries == 0) {
@@ -254,7 +255,7 @@ pub fn IndexedMerkleTree(depth: u6) type {
 // }
 
 test "exists" {
-    var tree = try IndexedMerkleTree(2).init(std.heap.page_allocator, "indexed_merkle_tree_data", null, true);
+    var tree = try IndexedMerkleTree(2, hash.poseidon2).init(std.heap.page_allocator, "indexed_merkle_tree_data", null, true);
     defer tree.deinit();
 
     const e = Fr.random();
@@ -271,12 +272,15 @@ test "bench" {
     const threads = @min(try std.Thread.getCpuCount(), 64);
 
     var pool = ThreadPool.init(.{ .max_threads = threads });
-    defer pool.deinit();
+    defer {
+        pool.shutdown();
+        pool.deinit();
+    }
 
-    var tree = try IndexedMerkleTree(depth).init(allocator, "indexed_merkle_tree_data", &pool, true);
+    var tree = try IndexedMerkleTree(depth, hash.poseidon2).init(allocator, "indexed_merkle_tree_data", &pool, true);
     defer tree.deinit();
 
-    var values = try std.ArrayListAligned(mt.Hash, 32).initCapacity(allocator, num);
+    var values = try std.ArrayListAligned(hash.Hash, 32).initCapacity(allocator, num);
     defer values.deinit();
     try values.resize(values.capacity);
     for (values.items, 1..) |*v, i| {

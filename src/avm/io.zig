@@ -148,7 +148,7 @@ fn AvmOpcodes(slot_type: type) type {
             const tag_name = @tagName(self);
             try writer.print("{s: >16} ", .{tag_name});
 
-            const union_info = @typeInfo(@This()).Union;
+            const union_info = @typeInfo(@This()).@"union";
             inline for (union_info.fields) |field| {
                 if (self == @field(@This(), field.name)) {
                     const field_ptr = @field(self, field.name);
@@ -167,7 +167,7 @@ pub const AvmOpcode32 = AvmOpcodes(u32);
 fn getUnionFieldType(comptime UnionType: type, comptime TagName: []const u8) type {
     @setEvalBranchQuota(5000);
     const info = @typeInfo(UnionType);
-    const union_info = info.Union;
+    const union_info = info.@"union";
     for (union_info.fields) |field| {
         if (std.mem.eql(u8, field.name, TagName)) {
             return field.type;
@@ -281,7 +281,7 @@ fn readOperands(comptime T: type, bytes: []const u8, index: *usize) !T {
     var result: T = undefined;
     var i = index.*;
 
-    const fields = @typeInfo(T).Struct.fields;
+    const fields = @typeInfo(T).@"struct".fields;
 
     inline for (fields) |field| {
         const field_ptr = &@field(&result, field.name);
@@ -293,8 +293,8 @@ fn readOperands(comptime T: type, bytes: []const u8, index: *usize) !T {
 
         // const value = try readValue(field.type, bytes, i);
         const value = switch (@typeInfo(field.type)) {
-            .Int => std.mem.readInt(field.type, @ptrCast(bytes[i..]), std.builtin.Endian.big),
-            .Enum => @as(Tag, @enumFromInt(bytes[i])),
+            .int => std.mem.readInt(field.type, @ptrCast(bytes[i..]), std.builtin.Endian.big),
+            .@"enum" => @as(Tag, @enumFromInt(bytes[i])),
             else => unreachable,
         };
         // const value = std.mem.readInt(field.type, @ptrCast(bytes[i..]), std.builtin.Endian.big);
@@ -309,7 +309,7 @@ fn readOperands(comptime T: type, bytes: []const u8, index: *usize) !T {
 
 fn formatStruct(comptime T: type, ptr: anytype, writer: anytype) !void {
     const type_info = @typeInfo(T);
-    if (type_info != .Struct) {
+    if (type_info != .@"struct") {
         return;
     }
 
@@ -317,12 +317,12 @@ fn formatStruct(comptime T: type, ptr: anytype, writer: anytype) !void {
     var first = true;
     comptime var slot_field_index: usize = 0;
     comptime var num_slot_operands: usize = 0;
-    comptime for (type_info.Struct.fields) |field| {
+    comptime for (type_info.@"struct".fields) |field| {
         if (std.mem.endsWith(u8, field.name, "_slot")) {
             num_slot_operands += 1;
         }
     };
-    inline for (type_info.Struct.fields) |field| {
+    inline for (type_info.@"struct".fields) |field| {
         if (comptime std.mem.eql(u8, field.name, "indirect")) {
             continue;
         }
@@ -360,7 +360,7 @@ fn deserializeOpcodes(
         const opcode_byte = bytes[i];
         i += 1;
 
-        const union_info = @typeInfo(AvmWireOpcode).Union;
+        const union_info = @typeInfo(AvmWireOpcode).@"union";
         const opcode: union_info.tag_type.? = @enumFromInt(opcode_byte);
 
         inline for (union_info.fields) |field| {
@@ -387,8 +387,8 @@ fn normalizeOpcodes(
     for (opcodes) |*opcode| {
         const tag = @tagName(opcode.*);
 
-        const union_info_wire = @typeInfo(AvmWireOpcode).Union;
-        const union_info_32 = @typeInfo(AvmOpcode32).Union;
+        const union_info_wire = @typeInfo(AvmWireOpcode).@"union";
+        const union_info_32 = @typeInfo(AvmOpcode32).@"union";
         inline for (union_info_wire.fields) |old_opcode| {
             if (std.mem.eql(u8, old_opcode.name, tag)) {
                 // We've matched at runtime against the opcode name, so can extract the old_value.
@@ -410,7 +410,7 @@ fn normalizeOpcodes(
                     // Create a new value of the 32 bit variant type.
                     var new_value: new_opcode.type = undefined;
                     // Copy each field from the old variant to the new variant.
-                    inline for (@typeInfo(new_opcode.type).Struct.fields) |struct_field| {
+                    inline for (@typeInfo(new_opcode.type).@"struct".fields) |struct_field| {
                         const old_field_value = @field(old_value, struct_field.name);
                         @field(new_value, struct_field.name) = old_field_value;
                     }

@@ -52,7 +52,7 @@ pub fn MmapStore(depth: u6, compressFn: hash.HashFunc) type {
 }
 
 const MmapLayer = struct {
-    data: []align(std.mem.page_size) Hash,
+    data: []align(std.heap.page_size_min) Hash,
     size: usize,
     empty_hash: Hash,
 
@@ -140,6 +140,6 @@ const MmapLayer = struct {
     }
 
     pub fn flush(self: *MmapLayer) !void {
-        try std.posix.msync(std.mem.asBytes(self.data.ptr), 4);
+        try std.posix.msync(std.mem.sliceAsBytes(self.data), 4);
     }
 };

@@ -227,7 +227,7 @@ pub const BlackBoxOp = union(enum) {
 
     pub fn format(self: BlackBoxOp, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{s} ", .{@tagName(self)});
-        inline for (@typeInfo(BlackBoxOp).Union.fields) |field| {
+        inline for (@typeInfo(BlackBoxOp).@"union".fields) |field| {
             if (self == @field(BlackBoxOp, field.name)) {
                 try formatStruct(@field(self, field.name), writer);
             }
@@ -341,19 +341,19 @@ pub fn formatOpcode(self: anytype, comptime _: []const u8, _: std.fmt.FormatOpti
 }
 
 pub fn formatUnionBody(self: anytype, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-    inline for (@typeInfo(@TypeOf(self)).Union.fields) |field| {
+    inline for (@typeInfo(@TypeOf(self)).@"union".fields) |field| {
         if (self == @field(@TypeOf(self), field.name)) {
             const field_ptr = @field(self, field.name);
             switch (@typeInfo(field.type)) {
-                .Void => return,
-                .Struct => {
+                .void => return,
+                .@"struct" => {
                     if (!@hasDecl(field.type, "format")) {
                         try formatStruct(field_ptr, writer);
                     } else {
                         try writer.print("{}", .{field_ptr});
                     }
                 },
-                .Union => {
+                .@"union" => {
                     if (!@hasDecl(field.type, "format")) {
                         try formatUnionBody(field_ptr, "", {}, writer);
                     } else {
@@ -373,7 +373,7 @@ fn every(comptime T: type, input: []const T, comptime f: fn (T) bool) bool {
 
 pub fn formatStruct(ptr: anytype, writer: anytype) !void {
     try writer.print("{{", .{});
-    inline for (@typeInfo(@TypeOf(ptr)).Struct.fields) |field| {
+    inline for (@typeInfo(@TypeOf(ptr)).@"struct".fields) |field| {
         if (field.type == Fr) {
             try writer.print(" .{s} = {short}", .{ field.name, @field(ptr, field.name) });
         } else if (field.type == []const u8 and every(u8, @field(ptr, field.name), std.ascii.isPrint)) {

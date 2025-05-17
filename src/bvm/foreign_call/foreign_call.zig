@@ -49,7 +49,7 @@ pub fn marshalInput(
 ) !void {
     const info = @typeInfo(@TypeOf(input.*));
     switch (info) {
-        .Struct => |s| {
+        .@"struct" => |s| {
             if (@TypeOf(input.*) == F) {
                 std.debug.assert(param == .Single);
                 input.* = F.from_int(param.Single);
@@ -60,10 +60,10 @@ pub fn marshalInput(
                 }
             }
         },
-        .Int => input.* = @intCast(param.Single),
-        .Bool => input.* = param.Single == 1,
-        .Pointer => |p| {
-            std.debug.assert(p.size == .Slice);
+        .int => input.* = @intCast(param.Single),
+        .bool => input.* = param.Single == 1,
+        .pointer => |p| {
+            std.debug.assert(p.size == .slice);
             std.debug.assert(param == .Array);
             input.* = convertSlice(p.child, allocator, param.Array);
         },
@@ -78,7 +78,7 @@ pub fn marshalOutput(
 ) usize {
     const info = @typeInfo(@TypeOf(output.*));
     switch (info) {
-        .Struct => |s| {
+        .@"struct" => |s| {
             var i: usize = 0;
             inline for (s.fields) |field| {
                 if (field.type == F) {
@@ -90,7 +90,7 @@ pub fn marshalOutput(
             }
             return i;
         },
-        .Array => |arr_info| {
+        .array => |arr_info| {
             std.debug.assert(destinations[0] == .HeapArray);
             const arr = destinations[0].HeapArray;
             const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
@@ -98,15 +98,15 @@ pub fn marshalOutput(
             for (0..arr.size) |i| mem.setSlotAtIndex(dst_idx + i, if (arr_info.child == F) output[i].to_int() else output[i]);
             return 1;
         },
-        .Int => {
+        .int => {
             mem.setSlot(destinations[0].MemoryAddress, output.*);
             return 1;
         },
-        .Bool => {
+        .bool => {
             mem.setSlot(destinations[0].MemoryAddress, if (output.*) 1 else 0);
             return 1;
         },
-        .Void => return 0,
+        .void => return 0,
         else => unreachable,
     }
 }

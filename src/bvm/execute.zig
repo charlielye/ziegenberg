@@ -86,9 +86,9 @@ pub const BrilligVm = struct {
     trapped: bool = false,
     return_data: []align(32) u256,
     ops_executed: u64 = 0,
-    blackbox_counters: [@typeInfo(io.BlackBoxOp).Union.fields.len]u64,
-    opcode_counters: [@typeInfo(io.BrilligOpcode).Union.fields.len]u64,
-    opcode_time: [@typeInfo(io.BrilligOpcode).Union.fields.len]u64,
+    blackbox_counters: [@typeInfo(io.BlackBoxOp).@"union".fields.len]u64,
+    opcode_counters: [@typeInfo(io.BrilligOpcode).@"union".fields.len]u64,
+    opcode_time: [@typeInfo(io.BrilligOpcode).@"union".fields.len]u64,
     time_taken: u64 = 0,
     // TODO: Hardcoded in for now. But this needs to be passed into each brillig vm instance.
     txe: Txe,
@@ -99,9 +99,9 @@ pub const BrilligVm = struct {
             .mem = try Memory.init(allocator, mem_size),
             .calldata = calldata,
             .callstack = try std.ArrayList(usize).initCapacity(allocator, 1024),
-            .blackbox_counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).Union.fields.len]u64),
-            .opcode_counters = std.mem.zeroes([@typeInfo(io.BrilligOpcode).Union.fields.len]u64),
-            .opcode_time = std.mem.zeroes([@typeInfo(io.BrilligOpcode).Union.fields.len]u64),
+            .blackbox_counters = std.mem.zeroes([@typeInfo(io.BlackBoxOp).@"union".fields.len]u64),
+            .opcode_counters = std.mem.zeroes([@typeInfo(io.BrilligOpcode).@"union".fields.len]u64),
+            .opcode_time = std.mem.zeroes([@typeInfo(io.BrilligOpcode).@"union".fields.len]u64),
             .return_data = &.{},
             .txe = Txe.init(allocator),
         };
@@ -272,7 +272,7 @@ pub const BrilligVm = struct {
     }
 
     fn processReturn(self: *BrilligVm, _: *BrilligOpcode) !void {
-        self.pc = self.callstack.pop();
+        self.pc = self.callstack.pop() orelse unreachable;
     }
 
     fn processJump(self: *BrilligVm, opcode: *BrilligOpcode) !void {
@@ -490,7 +490,7 @@ pub const BrilligVm = struct {
         for (self.opcode_time) |x| total_cycles += x;
 
         std.debug.print("Opcode hit / time:\n", .{});
-        inline for (@typeInfo(io.BrilligOpcode).Union.fields, 0..) |enumField, idx| {
+        inline for (@typeInfo(io.BrilligOpcode).@"union".fields, 0..) |enumField, idx| {
             std.debug.print("  {s}: {} / {d:.2}%\n", .{
                 enumField.name,
                 self.opcode_counters[idx],
@@ -499,7 +499,7 @@ pub const BrilligVm = struct {
         }
 
         std.debug.print("Blackbox calls:\n", .{});
-        inline for (@typeInfo(io.BlackBoxOp).Union.fields, 0..) |enumField, idx| {
+        inline for (@typeInfo(io.BlackBoxOp).@"union".fields, 0..) |enumField, idx| {
             std.debug.print("  {s}: {}\n", .{ enumField.name, self.blackbox_counters[idx] });
         }
     }
