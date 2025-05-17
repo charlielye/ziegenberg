@@ -255,7 +255,10 @@ pub fn IndexedMerkleTree(depth: u6, comptime compressFn: hash.HashFunc) type {
 // }
 
 test "exists" {
-    var tree = try IndexedMerkleTree(2, hash.poseidon2).init(std.heap.page_allocator, "indexed_merkle_tree_data", null, true);
+    const data_dir = "./data/indexed_merkle_tree_exists";
+    defer std.fs.cwd().deleteTree(data_dir) catch unreachable;
+
+    var tree = try IndexedMerkleTree(2, hash.poseidon2).init(std.heap.page_allocator, data_dir, null, true);
     defer tree.deinit();
 
     const e = Fr.random();
@@ -270,6 +273,8 @@ test "bench" {
     const depth = 40;
     const num = 1024 * 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
+    const data_dir = "./data/indexed_merkle_tree_bench";
+    defer std.fs.cwd().deleteTree(data_dir) catch unreachable;
 
     var pool = ThreadPool.init(.{ .max_threads = threads });
     defer {
@@ -277,7 +282,7 @@ test "bench" {
         pool.deinit();
     }
 
-    var tree = try IndexedMerkleTree(depth, hash.poseidon2).init(allocator, "indexed_merkle_tree_data", &pool, true);
+    var tree = try IndexedMerkleTree(depth, hash.poseidon2).init(allocator, data_dir, &pool, true);
     defer tree.deinit();
 
     var values = try std.ArrayListAligned(hash.Hash, 32).initCapacity(allocator, num);

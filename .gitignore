@@ -2,4 +2,4 @@
 zig-out
 perf.*
 *.log
-*data
+data

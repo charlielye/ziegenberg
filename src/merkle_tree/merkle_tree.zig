@@ -398,7 +398,8 @@ test "merkle tree db/mem consistency" {
     const depth = 40;
     const num = 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
-    const data_dir = "./merkle_tree_data";
+    const data_dir = "./merkle_tree_consistency";
+    defer std.fs.cwd().deleteTree(data_dir) catch unreachable;
 
     var pool = ThreadPool.init(.{ .max_threads = threads });
     defer {
@@ -441,7 +442,8 @@ test "merkle tree bench" {
     const depth = 40;
     const num = 1024 * 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
-    const data_dir = "./merkle_tree_data";
+    const data_dir = "./data/merkle_tree_bench";
+    defer std.fs.cwd().deleteTree(data_dir) catch unreachable;
 
     var pool = ThreadPool.init(.{ .max_threads = threads });
     defer {
@@ -508,7 +510,8 @@ test "merkle tree individual update bench" {
     const depth = 40;
     const num = 1024 * 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
-    const data_dir = "./merkle_tree_indiv_data";
+    const data_dir = "./data/merkle_tree_indiv_update_bench";
+    defer std.fs.cwd().deleteTree(data_dir) catch unreachable;
 
     var pool = ThreadPool.init(.{ .max_threads = threads });
     defer {
