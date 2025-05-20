@@ -15,7 +15,7 @@ const ArgMatches = @import("yazap").ArgMatches;
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    var app = App.init(allocator, "zb-bvm", "Aztec Brillig VM cli tool.");
+    var app = App.init(allocator, "zb", "Ziegenberg/AXE - an Aztec eXecution Engine.");
     defer app.deinit();
 
     var root = app.rootCommand();
@@ -41,8 +41,8 @@ pub fn main() !void {
         var bvm_cmd = app.createCommand("bvm", "Brillig VM commands.");
 
         var run_cmd = app.createCommand("run", "Run the given bytecode with the given calldata.");
-        try run_cmd.addArg(Arg.positional("bytecode_path", null, null));
-        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing calldata."));
+        try run_cmd.addArg(Arg.singleValueOption("bytecode_path", 'b', "Path to file containing raw brillig bytecode (otherwise parse target/<package_name>.json)."));
+        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing raw calldata (otherwise parse Prover.toml)."));
         try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
         try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
         run_cmd.setProperty(.help_on_empty_args);
@@ -185,7 +185,7 @@ fn handleCvm(matches: ArgMatches) !void {
         const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
         const calldata_path = cmd_matches.getSingleValue("calldata_path");
         cvmExecute(.{
-            .file_path = bytecode_path,
+            .bytecode_path = bytecode_path,
             .calldata_path = calldata_path,
             .show_stats = cmd_matches.containsArg("stats"),
             .show_trace = cmd_matches.containsArg("trace"),

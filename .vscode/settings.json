@@ -1,3 +1,6 @@
 {
-  "cSpell.enabled": false
+  "cSpell.enabled": false,
+  "search.exclude": {
+    "**/aztec-packages/**": true
+  }
 }

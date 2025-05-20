@@ -299,7 +299,7 @@ pub const Opcode = union(enum) {
     /// compiler.
     ///
     /// Directives will be replaced by Brillig opcodes in the future.
-    Directive: Directive,
+    // Directive: Directive,
 
     /// Atomic operation on a block of memory
     ///
@@ -361,19 +361,19 @@ pub const Opcode = union(enum) {
     }
 };
 
-const Directive = union(enum) {
-    //decomposition of a: a=\sum b[i]*radix^i where b is an array of witnesses < radix in little endian form
-    ToLeRadix: struct { a: Expression, b: []Witness, radix: u32 },
+// const Directive = union(enum) {
+//     //decomposition of a: a=\sum b[i]*radix^i where b is an array of witnesses < radix in little endian form
+//     ToLeRadix: struct { a: Expression, b: []Witness, radix: u32 },
 
-    pub fn format(self: Directive, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{s} ", .{@tagName(self)});
-        inline for (@typeInfo(@TypeOf(self)).@"union".fields) |field| {
-            if (self == @field(@TypeOf(self), field.name)) {
-                try formatStruct(@field(self, field.name), writer);
-            }
-        }
-    }
-};
+//     pub fn format(self: Directive, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+//         try writer.print("{s} ", .{@tagName(self)});
+//         inline for (@typeInfo(@TypeOf(self)).@"union".fields) |field| {
+//             if (self == @field(@TypeOf(self), field.name)) {
+//                 try formatStruct(@field(self, field.name), writer);
+//             }
+//         }
+//     }
+// };
 
 const Constant = struct {
     pub const meta = [_]bincode.Meta{

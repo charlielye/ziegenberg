@@ -12,7 +12,7 @@ const G1 = @import("../grumpkin/g1.zig").G1;
 const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
 
 pub const ExecuteOptions = struct {
-    file_path: ?[]const u8 = null,
+    bytecode_path: ?[]const u8 = null,
     calldata_path: ?[]const u8 = null,
     show_stats: bool = false,
     show_trace: bool = false,
@@ -24,7 +24,10 @@ pub fn execute(options: ExecuteOptions) !void {
     const allocator = arena.allocator();
     defer arena.deinit();
 
-    const program = try io.load(allocator, options.file_path);
+    // If no bytecode path is provided, use zig-toml to parse Prover.toml to get the "name" from the "package" section.
+    // Then load the nargo artifact from target/<package_name>.json.
+
+    const program = try io.load(allocator, options.bytecode_path);
     std.debug.assert(program.functions.len == 1);
     // const opcodes = program.functions[0].opcodes;
     // std.debug.print("Deserialized {} opcodes.\n", .{opcodes.len});
@@ -191,21 +194,21 @@ const CircuitVm = struct {
                         else => return error.Unimplemented,
                     }
                 },
-                .Directive => |op| {
-                    switch (op) {
-                        .ToLeRadix => |tle_op| {
-                            const e = evaluate(self.allocator, &tle_op.a, &self.witnesses);
-                            if (!e.isConst()) return error.OpcodeNotSolvable;
-                            var in = e.q_c.to_int();
-                            for (tle_op.b) |w| {
-                                const quotient = in / tle_op.radix;
-                                const remainder = in - (quotient * tle_op.radix);
-                                try self.witnesses.put(w, Fr.from_int(remainder));
-                                in = quotient;
-                            }
-                        },
-                    }
-                },
+                // .Directive => |op| {
+                //     switch (op) {
+                //         .ToLeRadix => |tle_op| {
+                //             const e = evaluate(self.allocator, &tle_op.a, &self.witnesses);
+                //             if (!e.isConst()) return error.OpcodeNotSolvable;
+                //             var in = e.q_c.to_int();
+                //             for (tle_op.b) |w| {
+                //                 const quotient = in / tle_op.radix;
+                //                 const remainder = in - (quotient * tle_op.radix);
+                //                 try self.witnesses.put(w, Fr.from_int(remainder));
+                //                 in = quotient;
+                //             }
+                //         },
+                //     }
+                // },
                 .MemoryInit => |op| {
                     const r = try self.memory_solvers.getOrPut(op.block_id);
                     if (!r.found_existing) {

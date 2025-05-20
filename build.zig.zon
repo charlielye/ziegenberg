@@ -33,6 +33,10 @@
             .url = "https://github.com/canvasxyz/zig-lmdb/archive/refs/tags/v0.2.0.tar.gz",
             .hash = "lmdb-0.2.0-6TpzoBU9AAAUrfZe7EG6aF1Iyl_dR9IqyGu5njxCJ2Jf",
         },
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml#451fc7fb5ad302d3d83aeda234a8d15e792ca585",
+            .hash = "toml-0.0.0-bV14BfdxAQDXkZ5wL6eVO9zBz622SAdz_pcWuQmTAsMg",
+        },
     },
     .paths = .{
         "build.zig",

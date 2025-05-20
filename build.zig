@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
     // Dependencies.
     const yazap = b.dependency("yazap", .{});
     const lmdb = b.dependency("lmdb", .{});
+    const toml = b.dependency("toml", .{});
 
     // Lib.
     {
@@ -22,6 +23,7 @@ pub fn build(b: *std.Build) void {
             // .code_model = std.builtin.CodeModel.large,
         });
         lib.root_module.addImport("lmdb", lmdb.module("lmdb"));
+        lib.root_module.addImport("toml", toml.module("zig-toml"));
         // lib.root_module.addSystemIncludePath(lazy_path: LazyPath)
         lib.bundle_compiler_rt = true;
         lib.linkLibC();
@@ -43,9 +45,31 @@ pub fn build(b: *std.Build) void {
         });
         exe.bundle_compiler_rt = true;
         exe.root_module.addImport("yazap", yazap.module("yazap"));
+        // exe.root_module.addImport("toml", toml.module("zig-toml"));
         // exe.linkLibC();
 
         b.installArtifact(exe);
+    }
+
+    // List tests.
+    {
+        const list_tests = b.addTest(.{
+            .name = "list-tests",
+            .root_source_file = b.path("src/lib.zig"),
+            .test_runner = .{ .path = b.path("test_list.zig"), .mode = .simple },
+            .target = target,
+            .optimize = optimize,
+        });
+        list_tests.root_module.addImport("lmdb", lmdb.module("lmdb"));
+        list_tests.root_module.addImport("toml", toml.module("zig-toml"));
+        list_tests.linkLibC();
+        const list_tests_install = b.addInstallArtifact(list_tests, .{});
+
+        const run_list_tests = b.addRunArtifact(list_tests);
+        run_list_tests.step.dependOn(&list_tests_install.step);
+
+        const run_list_tests_step = b.step("list-tests", "List unit tests");
+        run_list_tests_step.dependOn(&run_list_tests.step);
     }
 
     // Unit tests.
@@ -56,40 +80,32 @@ pub fn build(b: *std.Build) void {
         const lib_unit_tests = b.addTest(.{
             .name = "tests",
             .root_source_file = b.path("src/lib.zig"),
+            .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
             .target = target,
             .optimize = optimize,
             .filters = test_filters,
         });
         // std.debug.print("{s}\n", .{lib_unit_tests.getEmittedBin().getPath(b)});
         lib_unit_tests.root_module.addImport("lmdb", lmdb.module("lmdb"));
+        lib_unit_tests.root_module.addImport("toml", toml.module("zig-toml"));
         lib_unit_tests.linkLibC();
         b.installArtifact(lib_unit_tests);
 
-        // b.getInstallStep().dependOn(&b.addInstallArtifact(lib_unit_tests, .{
-        //     .dest_dir = .{ .override = .{ .custom = "bin" } },
-        //     // .dest_sub_path = "tests",
-        // }).step);
-
-        const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-        run_lib_unit_tests.step.dependOn(b.getInstallStep());
-        run_lib_unit_tests.has_side_effects = true;
-
-        // const exe_unit_tests = b.addTest(.{
-        //     .root_source_file = b.path("src/main.zig"),
-        //     .target = target,
-        //     .optimize = optimize,
-        // });
-
-        // const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+        // A step to just build the test executable.
+        const test_exe_step = b.step("test-exe", "Build unit tests");
+        test_exe_step.dependOn(b.getInstallStep());
 
         // Similar to creating the run step earlier, this exposes a `test` step to
         // the `zig build --help` menu, providing a way for the user to request
         // running the unit tests.
-        const test_exe_step = b.step("test-exe", "Build unit tests");
-        test_exe_step.dependOn(&lib_unit_tests.step);
+        const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+        run_lib_unit_tests.step.dependOn(b.getInstallStep());
+        run_lib_unit_tests.has_side_effects = true;
+        if (b.args) |args| {
+            run_lib_unit_tests.addArgs(args);
+        }
 
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_lib_unit_tests.step);
-        // test_step.dependOn(&run_exe_unit_tests.step);
     }
 }
