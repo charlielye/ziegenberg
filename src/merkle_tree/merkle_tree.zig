@@ -94,13 +94,6 @@ pub fn MerkleTree(depth: u6, comptime Store: type, comptime compressFn: hash.Has
             pub fn onSchedule(task: *ThreadPool.Task) void {
                 const self: *IndividualUpdateTask = @fieldParentPtr("task", task);
 
-                // If have a dependent, we can schedule now that we've been scheduled.
-                if (self.next) |t| {
-                    if (self.pool) |p| {
-                        p.schedule(ThreadPool.Batch.from(&t.task));
-                    }
-                }
-
                 self.result.index = self.index;
 
                 var lhs: Hash = undefined;
@@ -110,10 +103,17 @@ pub fn MerkleTree(depth: u6, comptime Store: type, comptime compressFn: hash.Has
                     // Announce our new level. Permits our successor to exit the loop below.
                     self.level.store(li, .release);
 
-                    // Loop, waiting for the update before us to advanced to a higher level.
+                    // Loop, waiting for the update before us to advance to a higher level.
                     if (self.prev) |prev| {
+                        // var spin_count: usize = 0;
                         while (prev.level.load(.acquire) == self.level.load(.monotonic)) {
-                            std.atomic.spinLoopHint();
+                            // std.atomic.spinLoopHint();
+                            // spin_count += 1;
+                            // if (spin_count > 200) {
+                            // Yield to the OS scheduler after spinning for a while.
+                            std.Thread.yield() catch unreachable;
+                            //     spin_count = 0;
+                            // }
                         }
                     }
 
@@ -131,6 +131,14 @@ pub fn MerkleTree(depth: u6, comptime Store: type, comptime compressFn: hash.Has
                         self.result.before_path[0] = self.store.layers[0].get(self.index);
                         self.result.after_path[0] = self.value.*;
                         self.store.layers[0].update(&[_]Hash{self.value.*}, self.index);
+
+                        // If have a dependent, we can schedule now that we've been scheduled.
+                        if (self.next) |t| {
+                            if (self.pool) |p| {
+                                p.schedule(ThreadPool.Batch.from(&t.task));
+                            }
+                        }
+
                         continue;
                     }
 
@@ -343,7 +351,8 @@ pub fn MerkleTree(depth: u6, comptime Store: type, comptime compressFn: hash.Has
 
             // Spin waiting for all jobs to complete.
             while (tasks.items[tasks.items.len - 1].level.load(.acquire) < depth) {
-                std.atomic.spinLoopHint();
+                // std.atomic.spinLoopHint();
+                std.Thread.yield() catch unreachable;
             }
 
             try self.flush();

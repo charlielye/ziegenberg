@@ -27,12 +27,13 @@ function test {
 }
 
 function bench_cmds {
-  # TODO: Perf craters at 64 :/
-  zig build list-tests | awk '{print "xxx:CPUS=65 ./zig-out/bin/tests \"" $0 "\""}' | grep "bench"
+  zig build list-tests | awk '{print "xxx:CPUS=32 ./zig-out/bin/tests \"" $0 "\""}' | grep "bench"
 }
 
 function bench {
-  bench_cmds | grep "bench" | STRICT_SCHEDULING=1 parallelise
+  export VERBOSE=1
+  export CI_REDIS_AVAILABLE=0
+  bench_cmds | STRICT_SCHEDULING=1 parallelise
 }
 
 case "$cmd" in
