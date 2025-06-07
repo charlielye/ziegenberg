@@ -4,12 +4,15 @@ export ci3=$PWD/aztec-packages/ci3
 source $ci3/source
 
 cmd=${1:-}
+[ -n "$cmd" ] && shift
+
+# By default aztec-packages ci system attempts to put logs in redis.
+# We don't want that feature here, so we disable it.
+export CI_REDIS_AVAILABLE=0
 
 function noir_bootstrap {
   cd aztec-packages/noir
-  export DENOISE=1
-  export CI_REDIS_AVAILABLE=0
-  denoise ./bootstrap.sh
+  DENOISE=1 denoise ./bootstrap.sh
 }
 
 function build_fixtures {
@@ -19,21 +22,21 @@ function build_fixtures {
 }
 
 function test_cmds {
-  zig build list-tests | awk '{print "xxx ./zig-out/bin/tests \"" $0 "\""}' | grep -v "bench"
+  zig build list-tests | grep -v "bench" | grep "${1:-}" | awk '{print "xxx ./zig-out/bin/tests \"" $0 "\""}'
 }
 
 function test {
-  test_cmds | parallelise
+  # Pipe through cat to disable status bar mode.
+  test_cmds ${1:-} | parallelise | cat
 }
 
 function bench_cmds {
-  zig build list-tests | awk '{print "xxx:CPUS=32 ./zig-out/bin/tests \"" $0 "\""}' | grep "bench"
+  zig build list-tests | grep "bench" | grep "${1:-}" | awk '{print "xxx:CPUS=32 ./zig-out/bin/tests \"" $0 "\""}'
 }
 
 function bench {
-  export VERBOSE=1
-  export CI_REDIS_AVAILABLE=0
-  bench_cmds | STRICT_SCHEDULING=1 parallelise
+  # Pipe through cat to disable status bar mode.
+  bench_cmds ${1:-} | STRICT_SCHEDULING=1 parallelise | cat
 }
 
 case "$cmd" in
@@ -43,7 +46,7 @@ case "$cmd" in
     zig build test-exe -Doptimize='ReleaseFast'
     ;;
   test|test_cmds|bench|bench_cmds)
-    $cmd
+    $cmd "$@"
     ;;
   *)
     echo "Usage: $0 {build|test}"
