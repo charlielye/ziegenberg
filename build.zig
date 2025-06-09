@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
         });
         exe.bundle_compiler_rt = true;
         exe.root_module.addImport("yazap", yazap.module("yazap"));
-        // exe.root_module.addImport("toml", toml.module("zig-toml"));
+        exe.root_module.addImport("toml", toml.module("zig-toml"));
         // exe.linkLibC();
 
         b.installArtifact(exe);
@@ -74,8 +74,7 @@ pub fn build(b: *std.Build) void {
 
     // Unit tests.
     {
-        // Creates a step for unit testing. This only builds the test executable
-        // but does not run it.
+        // Creates a step to build the unit tests. This only builds the test executable but does not run it.
         const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
         const lib_unit_tests = b.addTest(.{
             .name = "tests",
@@ -85,26 +84,26 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .filters = test_filters,
         });
-        // std.debug.print("{s}\n", .{lib_unit_tests.getEmittedBin().getPath(b)});
         lib_unit_tests.root_module.addImport("lmdb", lmdb.module("lmdb"));
         lib_unit_tests.root_module.addImport("toml", toml.module("zig-toml"));
         lib_unit_tests.linkLibC();
-        b.installArtifact(lib_unit_tests);
 
-        // A step to just build the test executable.
-        const test_exe_step = b.step("test-exe", "Build unit tests");
-        test_exe_step.dependOn(b.getInstallStep());
+        // A step to install the unit tests into zig-out/bin. Depends on them being built.
+        const lib_unit_tests_install = b.addInstallArtifact(lib_unit_tests, .{});
 
-        // Similar to creating the run step earlier, this exposes a `test` step to
-        // the `zig build --help` menu, providing a way for the user to request
-        // running the unit tests.
+        // A step to run the unit tests. Depends on them being built.
         const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-        run_lib_unit_tests.step.dependOn(b.getInstallStep());
+        run_lib_unit_tests.step.dependOn(&lib_unit_tests.step);
         run_lib_unit_tests.has_side_effects = true;
         if (b.args) |args| {
             run_lib_unit_tests.addArgs(args);
         }
 
+        // A command step to just build and install test executable.
+        const test_exe_step = b.step("test-exe", "Build unit tests");
+        test_exe_step.dependOn(&lib_unit_tests_install.step);
+
+        // A command step to build and run the unit tests.
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_lib_unit_tests.step);
     }

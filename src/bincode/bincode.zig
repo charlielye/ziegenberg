@@ -328,7 +328,7 @@ const DeserializeError = error{
     ParseIntError,
 };
 
-fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struct, allocator: std.mem.Allocator, comptime T: type) DeserializeError!T {
+fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struct, allocator: std.mem.Allocator, comptime T: type) anyerror!T {
     var value: T = undefined;
     outer: inline for (info.fields) |field| {
         if (@hasDecl(T, "meta")) {
@@ -500,7 +500,7 @@ pub fn serializeStruct(stream: anytype, comptime info: std.builtin.Type.Struct, 
             inline for (T.meta) |meta_field| {
                 if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
                     var buffer: [64]u8 = undefined;
-                    const result = try std.fmt.bufPrint(&buffer, "{x:0>64}", .{@field(value, field.name)});
+                    const result = std.fmt.bufPrint(&buffer, "{x:0>64}", .{@field(value, field.name)}) catch unreachable;
                     try serialize(stream, result);
                     continue :outer;
                 }

@@ -10,11 +10,17 @@ const WitnessMap = @import("./witness_map.zig").WitnessMap;
 const MemoryOpSolver = @import("./memory_op_solver.zig").MemoryOpSolver;
 const G1 = @import("../grumpkin/g1.zig").G1;
 const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
+const nargo_toml = @import("../nargo/nargo_toml.zig");
+const prover_toml = @import("../nargo/prover_toml.zig");
+const nargo_artifact = @import("../nargo/artifact.zig");
 
 pub const ExecuteOptions = struct {
-    bytecode_path: ?[]const u8 = null,
-    calldata_path: ?[]const u8 = null,
-    show_stats: bool = false,
+    // If null, the current working directory is used.
+    project_path: ?[]const u8 = null,
+    // Absolute or relative to project_path.
+    witness_path: ?[]const u8 = null,
+    // bytecode_path: ?[]const u8 = null,
+    // calldata_path: ?[]const u8 = null,
     show_trace: bool = false,
     binary: bool = false,
 };
@@ -24,25 +30,42 @@ pub fn execute(options: ExecuteOptions) !void {
     const allocator = arena.allocator();
     defer arena.deinit();
 
-    // If no bytecode path is provided, use zig-toml to parse Prover.toml to get the "name" from the "package" section.
-    // Then load the nargo artifact from target/<package_name>.json.
+    const project_path = options.project_path orelse unreachable;
 
-    const program = try io.load(allocator, options.bytecode_path);
+    const nt_path = try std.fmt.allocPrint(allocator, "{s}/Nargo.toml", .{project_path});
+    const nt = try nargo_toml.load(allocator, nt_path);
+    const pt_path = try std.fmt.allocPrint(allocator, "{s}/Prover.toml", .{project_path});
+    const pt = try prover_toml.load(allocator, pt_path);
+    const artifact_path = try std.fmt.allocPrint(allocator, "{s}/target/{s}.json", .{ project_path, nt.package.name });
+    // std.debug.print("Loading artifact from {s}\n", .{artifact_path});
+    const artifact = try nargo_artifact.load(allocator, artifact_path);
+    var calldata_array = std.ArrayList(Fr).init(allocator);
+    defer calldata_array.deinit();
+    for (artifact.abi.parameters, 0..) |param, i| {
+        std.debug.print("Parameter {}: {s} ({s}) = {s}\n", .{ i, param.name, param.type.kind, pt.get(param.name).?.string });
+        const as_int = try std.fmt.parseInt(u256, pt.get(param.name).?.string, 10);
+        try calldata_array.append(Fr.from_int(as_int));
+    }
+    const calldata: []Fr = calldata_array.items;
+    const bytecode = try artifact.getBytecode(allocator);
+
+    const program = try io.deserialize(allocator, bytecode);
+    // const program = try io.load(allocator, options.bytecode_path);
     std.debug.assert(program.functions.len == 1);
     // const opcodes = program.functions[0].opcodes;
     // std.debug.print("Deserialized {} opcodes.\n", .{opcodes.len});
 
-    var calldata: []Fr = &[_]Fr{};
-    if (options.calldata_path) |path| {
-        const f = try std.fs.cwd().openFile(path, .{});
-        defer f.close();
-        const calldata_bytes = try f.readToEndAllocOptions(allocator, std.math.maxInt(usize), null, 32, null);
-        const calldata_u256 = std.mem.bytesAsSlice(u256, calldata_bytes);
-        calldata = std.mem.bytesAsSlice(Fr, calldata_bytes);
-        for (0..calldata.len) |i| {
-            calldata[i] = Fr.from_int(@byteSwap(calldata_u256[i]));
-        }
-    }
+    // var calldata: []Fr = &[_]Fr{};
+    // if (options.calldata_path) |path| {
+    //     const f = try std.fs.cwd().openFile(path, .{});
+    //     defer f.close();
+    //     const calldata_bytes = try f.readToEndAllocOptions(allocator, std.math.maxInt(usize), null, 32, null);
+    //     const calldata_u256 = std.mem.bytesAsSlice(u256, calldata_bytes);
+    //     calldata = std.mem.bytesAsSlice(Fr, calldata_bytes);
+    //     for (0..calldata.len) |i| {
+    //         calldata[i] = Fr.from_int(@byteSwap(calldata_u256[i]));
+    //     }
+    // }
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
     var t = try std.time.Timer.start();
@@ -56,7 +79,20 @@ pub fn execute(options: ExecuteOptions) !void {
     const result = vm.executeVm(0, options.show_trace);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 
-    try vm.witnesses.printWitnesses(options.binary);
+    // Open file writer at target/<package_name>.zb.gz
+    const file_name = if (options.witness_path) |path|
+        try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, path })
+    else
+        try std.fmt.allocPrint(allocator, "{s}/target/{s}.zb.gz", .{ project_path, nt.package.name });
+
+    const file = try std.fs.cwd().createFile(file_name, .{ .truncate = true });
+    defer file.close();
+    std.debug.print("Writing witnesses to {s}\n", .{file_name});
+    // Create a writer for the file that gzips the output.
+    var compressor = try std.compress.gzip.compressor(file.writer(), .{});
+    // Write the witnesses to the file.
+    try vm.witnesses.writeWitnesses(options.binary, compressor.writer());
+    try compressor.finish();
 
     return result;
 }
@@ -194,21 +230,6 @@ const CircuitVm = struct {
                         else => return error.Unimplemented,
                     }
                 },
-                // .Directive => |op| {
-                //     switch (op) {
-                //         .ToLeRadix => |tle_op| {
-                //             const e = evaluate(self.allocator, &tle_op.a, &self.witnesses);
-                //             if (!e.isConst()) return error.OpcodeNotSolvable;
-                //             var in = e.q_c.to_int();
-                //             for (tle_op.b) |w| {
-                //                 const quotient = in / tle_op.radix;
-                //                 const remainder = in - (quotient * tle_op.radix);
-                //                 try self.witnesses.put(w, Fr.from_int(remainder));
-                //                 in = quotient;
-                //             }
-                //         },
-                //     }
-                // },
                 .MemoryInit => |op| {
                     const r = try self.memory_solvers.getOrPut(op.block_id);
                     if (!r.found_existing) {
@@ -244,3 +265,37 @@ const CircuitVm = struct {
         return if (T == Fr) f else @intCast(f.to_int());
     }
 };
+
+test "execute" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+
+    const options = ExecuteOptions{
+        .project_path = "aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul",
+        .witness_path = "target/1_mul.zb.gz",
+        .show_trace = true,
+        .binary = true,
+    };
+    try execute(options);
+
+    const result = try WitnessMap.initFromPath(
+        allocator,
+        "aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.zb.gz",
+    );
+    var result_buf = std.ArrayList(u8).init(allocator);
+    defer result_buf.deinit();
+    try result.writeWitnesses(true, result_buf.writer());
+
+    const expected = try WitnessMap.initFromPath(
+        allocator,
+        "aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.gz",
+    );
+    var expected_buf = std.ArrayList(u8).init(allocator);
+    defer expected_buf.deinit();
+    try expected.writeWitnesses(true, expected_buf.writer());
+
+    // try result.printWitnesses(false);
+    // try expected.printWitnesses(false);
+    try std.testing.expectEqualDeep(result_buf.items, expected_buf.items);
+}

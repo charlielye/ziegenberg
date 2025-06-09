@@ -7,10 +7,7 @@ pub const ProverToml = toml.Table;
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !ProverToml {
     var parser = toml.Parser(ProverToml).init(allocator);
     defer parser.deinit();
-
-    var result = try parser.parseFile(path);
-    defer result.deinit();
-
+    const result = try parser.parseFile(path);
     return result.value;
 }
 

@@ -59,8 +59,10 @@ pub fn main() !void {
         var cvm_cmd = app.createCommand("cvm", "Circuit VM commands.");
 
         var run_cmd = app.createCommand("run", "Run the given bytecode with the given calldata.");
-        try run_cmd.addArg(Arg.positional("bytecode_path", null, null));
-        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing calldata."));
+        try run_cmd.addArg(Arg.positional("project_path", null, null));
+        try run_cmd.addArg(Arg.positional("witness_path", null, null));
+        try run_cmd.addArg(Arg.singleValueOption("bytecode_path", 'b', "Path to file containing raw bytecode."));
+        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing raw calldata."));
         try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
         try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
         try run_cmd.addArg(Arg.booleanOption("binary", 'b', "Output the witness as binary."));
@@ -182,9 +184,13 @@ fn handleBvm(matches: ArgMatches) !void {
 
 fn handleCvm(matches: ArgMatches) !void {
     if (matches.subcommandMatches("run")) |cmd_matches| {
+        const project_path = cmd_matches.getSingleValue("project_path");
+        const witness_path = cmd_matches.getSingleValue("project_path");
         const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
         const calldata_path = cmd_matches.getSingleValue("calldata_path");
         cvmExecute(.{
+            .project_path = project_path,
+            .witness_path = witness_path,
             .bytecode_path = bytecode_path,
             .calldata_path = calldata_path,
             .show_stats = cmd_matches.containsArg("stats"),

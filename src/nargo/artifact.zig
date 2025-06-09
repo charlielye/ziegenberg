@@ -48,11 +48,21 @@ pub const ArtifactAbi = struct {
         defer allocator.free(buf);
         try decoder.decode(buf, self.bytecode);
         var reader_stream = std.io.fixedBufferStream(buf);
+        // var decom = std.compress.gzip.decompressor(reader_stream.reader());
+        // return decom.reader().any();
         var buffer = std.ArrayList(u8).init(allocator);
         defer buffer.deinit();
         try std.compress.gzip.decompress(reader_stream.reader(), buffer.writer());
         return buffer.toOwnedSlice();
     }
+
+    // pub fn getBytecode(self: *const ArtifactAbi, allocator: std.mem.Allocator) ![]const u8 {
+    //     var buffer = std.ArrayList(u8).init(allocator);
+    //     defer buffer.deinit();
+    //     const reader = try getBytecodeReader(self, allocator);
+    //     try reader.readAllArrayList(&buffer, 1024 * 1024 * 10);
+    //     return buffer.toOwnedSlice();
+    // }
 };
 
 /// Load the abi from the json file.

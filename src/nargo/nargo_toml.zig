@@ -15,8 +15,8 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !NargoToml {
     var parser = toml.Parser(NargoToml).init(allocator);
     defer parser.deinit();
 
-    var result = try parser.parseFile(path);
-    defer result.deinit();
+    const result = try parser.parseFile(path);
+    // defer result.deinit();
 
     return result.value;
 }

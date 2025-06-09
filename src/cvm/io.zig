@@ -535,10 +535,14 @@ const BlackBoxOp = union(enum) {
     }
 };
 
+pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype) !Program {
+    return bincode.deserializeAlloc(reader, allocator, Program);
+}
+
 pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Program {
-    var reader = std.io.fixedBufferStream(bytes);
-    return bincode.deserializeAlloc(&reader.reader(), allocator, Program) catch |err| {
-        std.debug.print("Error deserializing at: 0x{x}\n", .{try reader.getPos()});
+    var buf_stream = std.io.fixedBufferStream(bytes);
+    return deserializeFromReader(allocator, buf_stream.reader()) catch |err| {
+        std.debug.print("Error deserializing at: 0x{x}\n", .{try buf_stream.getPos()});
         return err;
     };
 }
