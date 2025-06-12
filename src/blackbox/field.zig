@@ -1,3 +1,4 @@
+const std = @import("std");
 const Fr = @import("../bn254/fr.zig").Fr;
 const encode_fr = @import("./encode_fr.zig").encode_fr;
 const decode_fr = @import("./encode_fr.zig").decode_fr;

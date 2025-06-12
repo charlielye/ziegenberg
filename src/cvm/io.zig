@@ -431,13 +431,13 @@ const BlackBoxOp = union(enum) {
         inputs: []FunctionInput,
         outputs: [32]Witness,
     },
-    SchnorrVerify: struct {
-        public_key_x: FunctionInput,
-        public_key_y: FunctionInput,
-        signature: [64]FunctionInput,
-        message: []FunctionInput,
-        output: Witness,
-    },
+    // SchnorrVerify: struct {
+    //     public_key_x: FunctionInput,
+    //     public_key_y: FunctionInput,
+    //     signature: [64]FunctionInput,
+    //     message: []FunctionInput,
+    //     output: Witness,
+    // },
     EcdsaSecp256k1: struct {
         public_key_x: [32]FunctionInput,
         public_key_y: [32]FunctionInput,

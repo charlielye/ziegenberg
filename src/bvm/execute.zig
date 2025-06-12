@@ -466,8 +466,8 @@ pub const BrilligVm = struct {
     fn processStop(self: *BrilligVm, opcode: *BrilligOpcode) !void {
         const op = &opcode.Stop;
         self.halted = true;
-        const slot = self.mem.resolveSlot(op.return_data.pointer);
-        const size = self.mem.resolveSlot(op.return_data.size);
+        const slot: usize = @intCast(self.mem.getSlot(op.return_data.pointer));
+        const size: usize = @intCast(self.mem.getSlot(op.return_data.size));
         self.return_data = self.mem.memory[slot .. slot + size];
         for (self.return_data) |*v| fieldOps.bn254_fr_normalize(@ptrCast(v));
     }

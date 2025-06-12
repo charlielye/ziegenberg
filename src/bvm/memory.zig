@@ -67,7 +67,7 @@ pub const Memory = struct {
         if (self.max_slot_set < index) {
             self.max_slot_set = index;
         }
-        // std.debug.print("slot {} set to {}\n", .{ index, value });
+        // std.debug.print("slot {}: {x} -> {x}\n", .{ index, self.memory[index], value });
         self.memory[index] = value;
     }
 

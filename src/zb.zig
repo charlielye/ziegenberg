@@ -185,25 +185,25 @@ fn handleBvm(matches: ArgMatches) !void {
 fn handleCvm(matches: ArgMatches) !void {
     if (matches.subcommandMatches("run")) |cmd_matches| {
         const project_path = cmd_matches.getSingleValue("project_path");
-        const witness_path = cmd_matches.getSingleValue("project_path");
-        const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
-        const calldata_path = cmd_matches.getSingleValue("calldata_path");
+        const witness_path = cmd_matches.getSingleValue("witness_path");
+        // const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
+        // const calldata_path = cmd_matches.getSingleValue("calldata_path");
         cvmExecute(.{
             .project_path = project_path,
             .witness_path = witness_path,
-            .bytecode_path = bytecode_path,
-            .calldata_path = calldata_path,
-            .show_stats = cmd_matches.containsArg("stats"),
+            // .bytecode_path = bytecode_path,
+            // .calldata_path = calldata_path,
+            // .show_stats = cmd_matches.containsArg("stats"),
             .show_trace = cmd_matches.containsArg("trace"),
             .binary = cmd_matches.containsArg("binary"),
         }) catch |err| {
             std.debug.print("{}\n", .{err});
             // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
-            std.posix.exit(switch (err) {
-                error.Unimplemented => 3,
-                error.Trapped => 2,
-                else => 1,
-            });
+            switch (err) {
+                // error.Unimplemented => std.posix.exit(3),
+                error.Trapped => std.posix.exit(2),
+                else => return err,
+            }
         };
         return;
     }

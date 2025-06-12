@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Zig",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/zig-out/bin/zb",
+      "args": [
+        "cvm",
+        "run",
+        "aztec-packages/noir/noir-repo/test_programs/execution_success/2_div",
+        "--trace",
+        "--binary"
+      ],
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": false
+    }
+  ]
+}

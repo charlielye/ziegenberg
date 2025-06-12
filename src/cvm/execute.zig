@@ -32,19 +32,65 @@ pub fn execute(options: ExecuteOptions) !void {
 
     const project_path = options.project_path orelse unreachable;
 
+    // Load Nargo.toml.
     const nt_path = try std.fmt.allocPrint(allocator, "{s}/Nargo.toml", .{project_path});
     const nt = try nargo_toml.load(allocator, nt_path);
-    const pt_path = try std.fmt.allocPrint(allocator, "{s}/Prover.toml", .{project_path});
-    const pt = try prover_toml.load(allocator, pt_path);
+
+    // Load the artifact.
     const artifact_path = try std.fmt.allocPrint(allocator, "{s}/target/{s}.json", .{ project_path, nt.package.name });
-    // std.debug.print("Loading artifact from {s}\n", .{artifact_path});
     const artifact = try nargo_artifact.load(allocator, artifact_path);
+
+    // Load Prover.toml for the calldata if it exists.
+    const pt_path = try std.fmt.allocPrint(allocator, "{s}/Prover.toml", .{project_path});
+    const pt = prover_toml.load(allocator, pt_path) catch null;
+
+    // Parse the calldata from Prover.toml.
     var calldata_array = std.ArrayList(Fr).init(allocator);
     defer calldata_array.deinit();
-    for (artifact.abi.parameters, 0..) |param, i| {
-        std.debug.print("Parameter {}: {s} ({s}) = {s}\n", .{ i, param.name, param.type.kind, pt.get(param.name).?.string });
-        const as_int = try std.fmt.parseInt(u256, pt.get(param.name).?.string, 10);
-        try calldata_array.append(Fr.from_int(as_int));
+    if (pt) |ptoml| {
+        for (artifact.abi.parameters, 0..) |param, i| {
+            const value = ptoml.get(param.name) orelse unreachable;
+            _ = i;
+            // std.debug.print("Parameter {}: {s} ({s}) = {any}\n", .{
+            //     i,
+            //     param.name,
+            //     param.type.kind,
+            //     value,
+            // });
+            const parsed = std.meta.stringToEnum(nargo_artifact.Kind, param.type.kind).?;
+            switch (parsed) {
+                .boolean => {
+                    try calldata_array.append(Fr.from_int(if (value.boolean) 1 else 0));
+                },
+                .field, .integer => {
+                    const as_int: u256 = switch (value) {
+                        .integer => @intCast(value.integer),
+                        .string => try std.fmt.parseInt(u256, value.string, 10),
+                        else => unreachable,
+                    };
+                    try calldata_array.append(Fr.from_int(as_int));
+                },
+                .string => {
+                    for (value.string) |elem| {
+                        const as_int: u256 = @intCast(elem);
+                        try calldata_array.append(Fr.from_int(as_int));
+                    }
+                },
+                .array => {
+                    for (value.array.items) |elem| {
+                        const as_int: u256 = switch (elem) {
+                            .integer => @intCast(elem.integer),
+                            .string => try std.fmt.parseInt(u256, elem.string, 10),
+                            else => {
+                                std.debug.print("Unexpected array element: {any}\n", .{elem});
+                                unreachable;
+                            },
+                        };
+                        try calldata_array.append(Fr.from_int(as_int));
+                    }
+                },
+            }
+        }
     }
     const calldata: []Fr = calldata_array.items;
     const bytecode = try artifact.getBytecode(allocator);
@@ -79,6 +125,12 @@ pub fn execute(options: ExecuteOptions) !void {
     const result = vm.executeVm(0, options.show_trace);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 
+    result catch |err| {
+        std.debug.print("Execution failed: {}\n", .{err});
+        try vm.witnesses.printWitnesses(false);
+        return err;
+    };
+
     // Open file writer at target/<package_name>.zb.gz
     const file_name = if (options.witness_path) |path|
         try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, path })
@@ -93,8 +145,6 @@ pub fn execute(options: ExecuteOptions) !void {
     // Write the witnesses to the file.
     try vm.witnesses.writeWitnesses(options.binary, compressor.writer());
     try compressor.finish();
-
-    return result;
 }
 
 const CircuitVm = struct {
@@ -162,6 +212,7 @@ const CircuitVm = struct {
                                 try calldata.append(value.to_int());
                             }
                         } else {
+                            // Normalise a single input into an array.
                             const elems = switch (input) {
                                 .Single => &[_]io.Expression{input.Single},
                                 .Array => input.Array,
@@ -193,15 +244,41 @@ const CircuitVm = struct {
                 },
                 .BlackBoxOp => |blackbox_op| {
                     switch (blackbox_op) {
-                        .RANGE => {},
+                        .RANGE => {
+                            // TODO: Solve pedantically.
+                        },
                         .Sha256Compression => |op| {
                             const input = self.resolveFunctionInputs(u32, 16, &op.inputs);
                             var hash_values = self.resolveFunctionInputs(u32, 8, &op.hash_values);
                             sha256.round(&input, &hash_values);
                             for (op.outputs, 0..) |w, wi| try self.witnesses.put(w, Fr.from_int(hash_values[wi]));
                         },
+                        .Blake2s => |op| {
+                            var input = try std.ArrayList(u8).initCapacity(self.allocator, op.inputs.len);
+                            defer input.deinit();
+                            for (op.inputs) |fi| {
+                                try input.append(self.resolveFunctionInput(u8, fi));
+                            }
+                            var output: [32]u8 = undefined;
+                            std.crypto.hash.blake2.Blake2s256.hash(input.items, &output, .{});
+                            for (op.outputs, output) |w, v| try self.witnesses.put(w, Fr.from_int(v));
+                        },
+                        .Blake3 => |op| {
+                            var input = try std.ArrayList(u8).initCapacity(self.allocator, op.inputs.len);
+                            defer input.deinit();
+                            for (op.inputs) |fi| {
+                                try input.append(self.resolveFunctionInput(u8, fi));
+                            }
+                            var output: [32]u8 = undefined;
+                            std.crypto.hash.Blake3.hash(input.items, &output, .{});
+                            for (op.outputs, output) |w, v| try self.witnesses.put(w, Fr.from_int(v));
+                        },
                         .AES128Encrypt => |op| {
                             var inout = try std.ArrayList(u8).initCapacity(self.allocator, op.inputs.len);
+                            defer inout.deinit();
+                            for (op.inputs) |fi| {
+                                try inout.append(self.resolveFunctionInput(u8, fi));
+                            }
                             const key = self.resolveFunctionInputs(u8, 16, &op.key);
                             const iv = self.resolveFunctionInputs(u8, 16, &op.iv);
                             try aes.padAndEncryptCbc(&inout, &key, &iv);
@@ -268,34 +345,45 @@ const CircuitVm = struct {
 
 test "execute" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    const allocator = arena.allocator();
     defer arena.deinit();
+    const allocator = arena.allocator();
+    const fs = std.fs.cwd();
 
-    const options = ExecuteOptions{
-        .project_path = "aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul",
-        .witness_path = "target/1_mul.zb.gz",
-        .show_trace = true,
-        .binary = true,
-    };
-    try execute(options);
+    const tests_root = "aztec-packages/noir/noir-repo/test_programs/execution_success";
+    var dir = try fs.openDir(tests_root, .{ .iterate = true });
+    defer dir.close();
+    var it = dir.iterate();
 
-    const result = try WitnessMap.initFromPath(
-        allocator,
-        "aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.zb.gz",
-    );
-    var result_buf = std.ArrayList(u8).init(allocator);
-    defer result_buf.deinit();
-    try result.writeWitnesses(true, result_buf.writer());
+    while (try it.next()) |entry| {
+        if (entry.kind != .directory) continue;
 
-    const expected = try WitnessMap.initFromPath(
-        allocator,
-        "aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.gz",
-    );
-    var expected_buf = std.ArrayList(u8).init(allocator);
-    defer expected_buf.deinit();
-    try expected.writeWitnesses(true, expected_buf.writer());
+        const test_name = entry.name;
+        std.debug.print("\n\x1b[34mRunning test: {s}\x1b[0m\n", .{test_name});
 
-    // try result.printWitnesses(false);
-    // try expected.printWitnesses(false);
-    try std.testing.expectEqualDeep(result_buf.items, expected_buf.items);
+        const project_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tests_root, test_name });
+        const witness_rel_path = try std.fmt.allocPrint(allocator, "target/{s}.zb.gz", .{test_name});
+        const options = ExecuteOptions{
+            .project_path = project_path,
+            .witness_path = witness_rel_path,
+            .show_trace = false,
+            .binary = true,
+        };
+
+        try execute(options);
+
+        const result_path = try std.fmt.allocPrint(allocator, "{s}/target/{s}.zb.gz", .{ project_path, test_name });
+        const expected_path = try std.fmt.allocPrint(allocator, "{s}/target/{s}.gz", .{ project_path, test_name });
+
+        const result = try WitnessMap.initFromPath(allocator, result_path);
+        var result_buf = std.ArrayList(u8).init(allocator);
+        defer result_buf.deinit();
+        try result.writeWitnesses(true, result_buf.writer());
+
+        const expected = try WitnessMap.initFromPath(allocator, expected_path);
+        var expected_buf = std.ArrayList(u8).init(allocator);
+        defer expected_buf.deinit();
+        try expected.writeWitnesses(true, expected_buf.writer());
+
+        try std.testing.expectEqualDeep(result_buf.items, expected_buf.items);
+    }
 }

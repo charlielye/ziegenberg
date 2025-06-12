@@ -5,6 +5,14 @@ const cvm = @import("../cvm/io.zig");
 // const F = @import("../bn254/fr.zig").Fr;
 // const mt = @import("../merkle_tree/package.zig");
 
+pub const Kind = enum {
+    integer,
+    string,
+    array,
+    field,
+    boolean,
+};
+
 const Type = struct {
     kind: []const u8,
     sign: ?[]const u8 = null,
