@@ -13,6 +13,8 @@ const Poseidon2 = @import("../poseidon2/permutation.zig").Poseidon2;
 const nargo_toml = @import("../nargo/nargo_toml.zig");
 const prover_toml = @import("../nargo/prover_toml.zig");
 const nargo_artifact = @import("../nargo/artifact.zig");
+const verify_signature = @import("../blackbox/ecdsa.zig").verify_signature;
+const toml = @import("toml");
 
 pub const ExecuteOptions = struct {
     // If null, the current working directory is used.
@@ -24,6 +26,72 @@ pub const ExecuteOptions = struct {
     show_trace: bool = false,
     binary: bool = false,
 };
+
+fn anyIntToU256(width: u32, value: i256) u256 {
+    const mask = (@as(u256, 1) << @truncate(width)) - 1;
+    return @as(u256, @bitCast(value)) & mask;
+}
+
+// Example parameter:
+//   {"name":"z","type":{"kind":"integer","sign":"unsigned","width":32},"visibility":"private"},
+//   {"name":"x","type":{"kind":"array","length":5,"type":{"kind":"integer","sign":"unsigned","width":32}},"visibility":"private"},
+fn loadCalldata(calldata_array: *std.ArrayList(Fr), param_type: nargo_artifact.Type, value: toml.Value) !void {
+    switch (std.meta.stringToEnum(nargo_artifact.Kind, param_type.kind).?) {
+        .boolean => {
+            const as_int: u256 = switch (value) {
+                .boolean, .integer => if (value.boolean) 1 else 0,
+                .string => if (std.mem.startsWith(u8, value.string, "0x"))
+                    try std.fmt.parseInt(u1, value.string[2..], 16)
+                else
+                    try std.fmt.parseInt(u1, value.string, 10),
+                else => unreachable,
+            };
+            try calldata_array.append(Fr.from_int(as_int));
+        },
+        .field => {
+            const as_int: u256 = switch (value) {
+                .integer => @intCast(value.integer),
+                .string => if (std.mem.startsWith(u8, value.string, "0x"))
+                    try std.fmt.parseInt(u256, value.string[2..], 16)
+                else
+                    @bitCast(try std.fmt.parseInt(i256, value.string, 10)),
+                else => unreachable,
+            };
+            try calldata_array.append(Fr.from_int(as_int));
+        },
+        .integer => {
+            const as_int: u256 = switch (value) {
+                .integer => anyIntToU256(param_type.width.?, value.integer),
+                .string => if (std.mem.startsWith(u8, value.string, "0x"))
+                    try std.fmt.parseInt(u256, value.string[2..], 16)
+                else
+                    anyIntToU256(param_type.width.?, try std.fmt.parseInt(i256, value.string, 10)),
+                else => unreachable,
+            };
+            try calldata_array.append(Fr.from_int(as_int));
+        },
+        .string => {
+            for (value.string) |elem| {
+                const as_int: u256 = @intCast(elem);
+                try calldata_array.append(Fr.from_int(as_int));
+            }
+        },
+        .array => {
+            for (value.array.items) |elem| {
+                try loadCalldata(calldata_array, param_type.type.?.*, elem);
+            }
+        },
+        .@"struct" => {
+            for (param_type.fields.?) |field| {
+                const field_value = value.table.get(field.name) orelse {
+                    std.debug.print("Missing field {s} in struct {s}\n", .{ field.name, param_type.kind });
+                    return error.MissingField;
+                };
+                try loadCalldata(calldata_array, field.type, field_value);
+            }
+        },
+    }
+}
 
 pub fn execute(options: ExecuteOptions) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -57,39 +125,7 @@ pub fn execute(options: ExecuteOptions) !void {
             //     param.type.kind,
             //     value,
             // });
-            const parsed = std.meta.stringToEnum(nargo_artifact.Kind, param.type.kind).?;
-            switch (parsed) {
-                .boolean => {
-                    try calldata_array.append(Fr.from_int(if (value.boolean) 1 else 0));
-                },
-                .field, .integer => {
-                    const as_int: u256 = switch (value) {
-                        .integer => @intCast(value.integer),
-                        .string => try std.fmt.parseInt(u256, value.string, 10),
-                        else => unreachable,
-                    };
-                    try calldata_array.append(Fr.from_int(as_int));
-                },
-                .string => {
-                    for (value.string) |elem| {
-                        const as_int: u256 = @intCast(elem);
-                        try calldata_array.append(Fr.from_int(as_int));
-                    }
-                },
-                .array => {
-                    for (value.array.items) |elem| {
-                        const as_int: u256 = switch (elem) {
-                            .integer => @intCast(elem.integer),
-                            .string => try std.fmt.parseInt(u256, elem.string, 10),
-                            else => {
-                                std.debug.print("Unexpected array element: {any}\n", .{elem});
-                                unreachable;
-                            },
-                        };
-                        try calldata_array.append(Fr.from_int(as_int));
-                    }
-                },
-            }
+            try loadCalldata(&calldata_array, param.type, value);
         }
     }
     const calldata: []Fr = calldata_array.items;
@@ -155,6 +191,7 @@ const CircuitVm = struct {
 
     pub fn init(allocator: std.mem.Allocator, program: *const io.Program, calldata: []Fr) !CircuitVm {
         var witnesses = WitnessMap.init(allocator);
+        // Load our calldata into first elements of the witness map.
         for (calldata, 0..) |e, i| {
             try witnesses.put(@truncate(i), e);
         }
@@ -247,6 +284,18 @@ const CircuitVm = struct {
                         .RANGE => {
                             // TODO: Solve pedantically.
                         },
+                        .AND => |op| {
+                            const lhs = self.resolveFunctionInput(u256, op.lhs);
+                            const rhs = self.resolveFunctionInput(u256, op.rhs);
+                            const result = lhs & rhs;
+                            try self.witnesses.put(op.output, Fr.from_int(result));
+                        },
+                        .XOR => |op| {
+                            const lhs = self.resolveFunctionInput(u256, op.lhs);
+                            const rhs = self.resolveFunctionInput(u256, op.rhs);
+                            const result = lhs ^ rhs;
+                            try self.witnesses.put(op.output, Fr.from_int(result));
+                        },
                         .Sha256Compression => |op| {
                             const input = self.resolveFunctionInputs(u32, 16, &op.inputs);
                             var hash_values = self.resolveFunctionInputs(u32, 8, &op.hash_values);
@@ -284,6 +333,24 @@ const CircuitVm = struct {
                             try aes.padAndEncryptCbc(&inout, &key, &iv);
                             for (op.outputs, inout.items) |w, v| try self.witnesses.put(w, Fr.from_int(v));
                         },
+                        .EcdsaSecp256k1 => |op| {
+                            const public_key_x = self.resolveFunctionInputs(u256, 32, &op.public_key_x);
+                            const public_key_y = self.resolveFunctionInputs(u256, 32, &op.public_key_y);
+                            const signature = self.resolveFunctionInputs(u256, 64, &op.signature);
+                            const hashed_message = self.resolveFunctionInputs(u256, 32, &op.hashed_message);
+                            var result: u256 = 0;
+                            verify_signature(std.crypto.ecc.Secp256k1, &hashed_message, &public_key_x, &public_key_y, &signature, &result);
+                            try self.witnesses.put(op.output, Fr.from_int(result));
+                        },
+                        .EcdsaSecp256r1 => |op| {
+                            const public_key_x = self.resolveFunctionInputs(u256, 32, &op.public_key_x);
+                            const public_key_y = self.resolveFunctionInputs(u256, 32, &op.public_key_y);
+                            const signature = self.resolveFunctionInputs(u256, 64, &op.signature);
+                            const hashed_message = self.resolveFunctionInputs(u256, 32, &op.hashed_message);
+                            var result: u256 = 0;
+                            verify_signature(std.crypto.ecc.P256, &hashed_message, &public_key_x, &public_key_y, &signature, &result);
+                            try self.witnesses.put(op.output, Fr.from_int(result));
+                        },
                         .EmbeddedCurveAdd => |op| {
                             const x1 = self.resolveFunctionInput(Fr, op.input1[0]);
                             const y1 = self.resolveFunctionInput(Fr, op.input1[1]);
@@ -304,7 +371,10 @@ const CircuitVm = struct {
                             const r = Poseidon2.permutation(frs);
                             for (op.outputs, r) |w, v| try self.witnesses.put(w, v);
                         },
-                        else => return error.Unimplemented,
+                        else => {
+                            std.debug.print("Unimplemented BlackBoxOp: {any}\n", .{blackbox_op});
+                            return error.Unimplemented;
+                        },
                     }
                 },
                 .MemoryInit => |op| {

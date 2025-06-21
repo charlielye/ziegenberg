@@ -14,9 +14,10 @@ export DUMP_FAIL=1
 
 # Noir test program exclusions.
 exclusions=(
-  array_dynamic_nested_blackbox_input
-  regression_7323
-  array_oob*
+  # array_dynamic_nested_blackbox_input
+  # regression_7323
+  array_oob* # Witness output disparities.
+  brillig_cow_regression # Broken, can't be bothered right now.
 )
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 

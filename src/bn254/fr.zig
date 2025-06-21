@@ -16,3 +16,11 @@ test "add wrap" {
     const r = a.add(Fr.one);
     try std.testing.expectEqual(0, r.to_int());
 }
+
+// Here we test signed integers in fields.
+// A field is 256 (kind of) bits wide.
+// We represent signed integers as their twos-complement representation in the integers width.
+test "signed" {
+    const a = Fr.from_int(@as(u128, @bitCast(@as(i128, -1))));
+    try std.testing.expectEqual(-1, @as(i128, @bitCast(@as(u128, @truncate(a.to_int())))));
+}

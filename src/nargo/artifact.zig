@@ -11,19 +11,22 @@ pub const Kind = enum {
     array,
     field,
     boolean,
+    @"struct",
 };
 
-const Type = struct {
+pub const Type = struct {
     kind: []const u8,
     sign: ?[]const u8 = null,
     width: ?u32 = null,
-    // fields: ?[]Parameter = null,
+    type: ?*Type = null,
+    path: ?[]const u8 = null,
+    fields: ?[]Parameter = null,
 };
 
 pub const Parameter = struct {
     name: []const u8,
     type: Type,
-    visibility: []const u8,
+    visibility: ?[]const u8 = null,
 };
 
 const Abi = struct {

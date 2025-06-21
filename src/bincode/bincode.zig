@@ -383,7 +383,11 @@ fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.@"struct",
 
 fn deserializeEnum(stream: anytype, comptime T: type) !T {
     const raw_tag = try deserializeInt(stream, u32);
-    return @enumFromInt(raw_tag);
+    const tag = std.meta.intToEnum(T, raw_tag) catch {
+        std.debug.print("Enum conversion error: could not convert raw tag {d} to enum {s}\n", .{ raw_tag, @typeName(T) });
+        return DeserializeError.InvalidEnumTag;
+    };
+    return tag;
 }
 
 fn deserializeUnionAlloc(stream: anytype, comptime info: std.builtin.Type.Union, allocator: std.mem.Allocator, comptime T: type) !T {
