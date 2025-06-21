@@ -1,56 +1,35 @@
 const std = @import("std");
 const Bn254Fr = @import("../bn254/fr.zig").Fr;
 
+pub const DeserializeError = error{
+    LargeAlloc,
+    ParseIntError,
+    InvalidEnumTag,
+};
+
 pub const Meta = struct {
     field: []const u8,
     src_type: type,
 };
 
 pub fn deserializeAlloc(stream: anytype, allocator: std.mem.Allocator, comptime T: type) !T {
-    return switch (@typeInfo(T)) {
-        .void => {},
-        .bool => try deserializeBool(stream),
-        .float => try deserializeFloat(stream, T),
-        .int => try deserializeInt(stream, T),
-        .optional => |info| try deserializeOptionalAlloc(stream, allocator, info.child),
-        .pointer => |info| try deserializePointerAlloc(stream, info, allocator),
-        .array => |info| try deserializeArrayAlloc(stream, info, allocator),
-        .@"struct" => |info| try deserializeStructAlloc(stream, info, allocator, T),
-        .@"enum" => try deserializeEnum(stream, T),
-        .@"union" => |info| try deserializeUnionAlloc(stream, info, allocator, T),
-        else => unsupportedType(T),
-    };
+    return deserializeAllocImpl(stream, allocator, T, false, 0);
+}
+
+pub fn deserializeAllocDebug(stream: anytype, allocator: std.mem.Allocator, comptime T: type) !T {
+    return deserializeAllocImpl(stream, allocator, T, true, 0);
 }
 
 pub fn deserialize(stream: anytype, comptime T: type) !T {
-    return switch (@typeInfo(T)) {
-        .void => {},
-        .bool => try deserializeBool(stream),
-        .float => try deserializeFloat(stream, T),
-        .int => try deserializeInt(stream, T),
-        .optional => |info| try deserializeOptional(stream, info.child),
-        .array => |info| try deserializeArray(stream, info),
-        .@"struct" => |info| try deserializeStruct(stream, info, T),
-        .@"enum" => try deserializeEnum(stream, T),
-        .@"union" => |info| try deserializeUnion(stream, info, T),
-        else => unsupportedType(T),
-    };
+    return deserializeImpl(stream, T, false, 0);
+}
+
+pub fn deserializeDebug(stream: anytype, comptime T: type) !T {
+    return deserializeImpl(stream, T, true, 0);
 }
 
 pub fn deserializeBuffer(comptime T: type, source: *[]const u8) T {
-    return switch (@typeInfo(T)) {
-        .void => {},
-        .bool => deserializeBufferBool(source),
-        .float => deserializeBufferFloat(T, source),
-        .int => deserializeBufferInt(T, source),
-        .optional => |info| deserializeBufferOptional(info.child, source),
-        .pointer => |info| deserializeBufferPointer(info, source),
-        .array => |info| deserializeBufferArray(info, source),
-        .@"struct" => |info| deserializeBufferStruct(T, info, source),
-        .@"enum" => deserializeBufferEnum(T, source),
-        .@"union" => |info| deserializeBufferUnion(T, info, source),
-        else => unsupportedType(T),
-    };
+    return deserializeBufferImpl(T, source, false);
 }
 
 pub fn serialize(stream: anytype, value: anytype) @TypeOf(stream).Error!void {
@@ -87,6 +66,69 @@ pub fn DeserializeSliceIterator(comptime T: type) type {
                 return null;
             }
         }
+    };
+}
+
+fn printIndent(level: usize) void {
+    var i: usize = 0;
+    while (i < level * 2) : (i += 1) {
+        std.debug.print(" ", .{});
+    }
+}
+
+fn deserializeBufferImpl(comptime T: type, source: *[]const u8, debug: bool) T {
+    if (debug) std.debug.print("[deserializeBuffer] Type: {s}\n", .{@typeName(T)});
+    return switch (@typeInfo(T)) {
+        .void => {},
+        .bool => deserializeBufferBool(source, debug),
+        .float => deserializeBufferFloat(T, source, debug),
+        .int => deserializeBufferInt(T, source, debug),
+        .optional => |info| deserializeBufferOptional(info.child, source, debug),
+        .pointer => |info| deserializeBufferPointer(info, source, debug),
+        .array => |info| deserializeBufferArray(info, source, debug),
+        .@"struct" => |info| deserializeBufferStruct(T, info, source, debug),
+        .@"enum" => deserializeBufferEnum(T, source, debug),
+        .@"union" => |info| deserializeBufferUnion(T, info, source, debug),
+        else => unsupportedType(T),
+    };
+}
+
+fn deserializeAllocImpl(stream: anytype, allocator: std.mem.Allocator, comptime T: type, debug: bool, level: usize) !T {
+    if (debug) {
+        printIndent(level);
+        std.debug.print("[deserializeAlloc] Type: {s}\n", .{@typeName(T)});
+    }
+    return switch (@typeInfo(T)) {
+        .void => {},
+        .bool => try deserializeBool(stream, debug, level + 1),
+        .float => try deserializeFloat(stream, T, debug, level + 1),
+        .int => try deserializeInt(stream, T, debug, level + 1),
+        .optional => |info| try deserializeOptionalAlloc(stream, allocator, info.child, debug, level + 1),
+        .pointer => |info| try deserializePointerAlloc(stream, info, allocator, debug, level + 1),
+        .array => |info| try deserializeArrayAlloc(stream, info, allocator, debug, level + 1),
+        .@"struct" => |info| try deserializeStructAlloc(stream, info, allocator, T, debug, level + 1),
+        .@"enum" => try deserializeEnum(stream, T, debug, level + 1),
+        .@"union" => |info| try deserializeUnionAlloc(stream, info, allocator, T, debug, level + 1),
+        else => unsupportedType(T),
+    };
+}
+
+fn deserializeImpl(stream: anytype, comptime T: type, debug: bool, level: usize) !T {
+    if (debug) {
+        printIndent(level);
+        std.debug.print("[deserialize] Type: {s}\n", .{@typeName(T)});
+    }
+    return switch (@typeInfo(T)) {
+        .void => {},
+        .bool => try deserializeBool(stream, debug, level + 1),
+        .float => try deserializeFloat(stream, T, debug, level + 1),
+        .int => try deserializeInt(stream, T, debug, level + 1),
+        .optional => |info| try deserializeOptional(stream, info.child, debug, level + 1),
+        .array => |info| try deserializeArray(stream, info, debug, level + 1),
+        .@"struct" => |info| try deserializeStruct(stream, info, T, debug, level + 1),
+        .@"enum" => try deserializeEnum(stream, T, debug, level + 1),
+        .@"union" => |info| try deserializeUnion(stream, info, T, debug, level + 1),
+        else => unsupportedType(T),
     };
 }
 
@@ -203,67 +245,89 @@ fn deserializeBufferPointer(comptime info: std.builtin.Type.Pointer, source_ptr:
     }
 }
 
-fn deserializeBool(stream: anytype) !bool {
-    switch (try stream.readInt(u8, std.builtin.Endian.little)) {
+fn deserializeBool(stream: anytype, debug: bool, level: usize) !bool {
+    const v = try stream.readInt(u8, std.builtin.Endian.little);
+    if (debug) {
+        printIndent(level);
+        std.debug.print("[deserializeBool] value: {d}\n", .{v});
+    }
+    switch (v) {
         0 => return false,
         1 => return true,
         else => invalidProtocol("Boolean values should be encoded as a single byte with value 0 or 1 only."),
     }
 }
 
-fn deserializeFloat(stream: anytype, comptime T: type) !T {
-    switch (T) {
-        f32 => return @bitCast(try stream.readInt(u32, std.builtin.Endian.little)),
-        f64 => return @bitCast(try stream.readInt(u64, std.builtin.Endian.little)),
-        else => unsupportedType(T),
+fn deserializeFloat(stream: anytype, comptime T: type, debug: bool, level: usize) !T {
+    if (T == f32) {
+        const v = try stream.readInt(u32, std.builtin.Endian.little);
+        if (debug) {
+            printIndent(level);
+            std.debug.print("[deserializeFloat] f32 bits: {d}\n", .{v});
+        }
+        return @bitCast(v);
+    } else if (T == f64) {
+        const v = try stream.readInt(u64, std.builtin.Endian.little);
+        if (debug) {
+            printIndent(level);
+            std.debug.print("[deserializeFloat] f64 bits: {d}\n", .{v});
+        }
+        return @bitCast(v);
+    } else {
+        unsupportedType(T);
     }
 }
 
-fn deserializeInt(stream: anytype, comptime T: type) !T {
-    switch (T) {
-        i8 => return try stream.readInt(i8, std.builtin.Endian.little),
-        i16 => return try stream.readInt(i16, std.builtin.Endian.little),
-        i32 => return try stream.readInt(i32, std.builtin.Endian.little),
-        i64 => return try stream.readInt(i64, std.builtin.Endian.little),
-        i128 => return try stream.readInt(i128, std.builtin.Endian.little),
-        i256 => return try stream.readInt(i256, std.builtin.Endian.little),
-        u8 => return try stream.readInt(u8, std.builtin.Endian.little),
-        u16 => return try stream.readInt(u16, std.builtin.Endian.little),
-        u32 => return try stream.readInt(u32, std.builtin.Endian.little),
-        u64 => return try stream.readInt(u64, std.builtin.Endian.little),
-        u128 => return try stream.readInt(u128, std.builtin.Endian.little),
-        u256 => return try stream.readInt(u256, std.builtin.Endian.little),
+fn deserializeInt(stream: anytype, comptime T: type, debug: bool, level: usize) !T {
+    const v = switch (T) {
+        i8 => try stream.readInt(i8, std.builtin.Endian.little),
+        i16 => try stream.readInt(i16, std.builtin.Endian.little),
+        i32 => try stream.readInt(i32, std.builtin.Endian.little),
+        i64 => try stream.readInt(i64, std.builtin.Endian.little),
+        i128 => try stream.readInt(i128, std.builtin.Endian.little),
+        i256 => try stream.readInt(i256, std.builtin.Endian.little),
+        u8 => try stream.readInt(u8, std.builtin.Endian.little),
+        u16 => try stream.readInt(u16, std.builtin.Endian.little),
+        u32 => try stream.readInt(u32, std.builtin.Endian.little),
+        u64 => try stream.readInt(u64, std.builtin.Endian.little),
+        u128 => try stream.readInt(u128, std.builtin.Endian.little),
+        u256 => try stream.readInt(u256, std.builtin.Endian.little),
         else => unsupportedType(T),
+    };
+    if (debug) {
+        printIndent(level);
+        std.debug.print("[deserializeInt] type: {s}, value: {any}\n", .{ @typeName(T), v });
     }
+    return v;
 }
 
-fn deserializeOptionalAlloc(stream: anytype, allocator: std.mem.Allocator, comptime T: type) !?T {
+fn deserializeOptionalAlloc(stream: anytype, allocator: std.mem.Allocator, comptime T: type, debug: bool, level: usize) !?T {
     switch (try stream.readInt(u8, std.builtin.Endian.little)) {
-        // None
         0 => return null,
-        // Some
-        1 => return try deserializeAlloc(stream, allocator, T),
+        1 => return try deserializeAllocImpl(stream, allocator, T, debug, level + 1),
         else => invalidProtocol("Optional is encoded as a single 0 valued byte for null, or a single 1 valued byte followed by the encoding of the contained value."),
     }
 }
 
-fn deserializeOptional(stream: anytype, comptime T: type) !?T {
+fn deserializeOptional(stream: anytype, comptime T: type, debug: bool, level: usize) !?T {
     switch (try stream.readInt(u8, std.builtin.Endian.little)) {
-        // None
         0 => return null,
-        // Some
-        1 => return try deserialize(stream, T),
+        1 => return try deserializeImpl(stream, T, debug, level + 1),
         else => invalidProtocol("Optional is encoded as a single 0 valued byte for null, or a single 1 valued byte followed by the encoding of the contained value."),
     }
 }
 
-fn deserializePointerAlloc(stream: anytype, comptime info: std.builtin.Type.Pointer, allocator: std.mem.Allocator) ![]info.child {
+fn deserializePointerAlloc(stream: anytype, comptime info: std.builtin.Type.Pointer, allocator: std.mem.Allocator, debug: bool, level: usize) ![]info.child {
     const T = @Type(.{ .pointer = info });
     if (info.sentinel_ptr != null) unsupportedType(T);
     switch (info.size) {
         .one => unsupportedType(T),
         .slice => {
             const len: usize = @intCast(try stream.readInt(u64, std.builtin.Endian.little));
+            if (debug) {
+                printIndent(level);
+                std.debug.print("[deserializePointerAlloc] slice len: {d}\n", .{len});
+            }
             if (len > 1024 * 1024) {
                 return DeserializeError.LargeAlloc;
             }
@@ -275,7 +339,7 @@ fn deserializePointerAlloc(stream: anytype, comptime info: std.builtin.Type.Poin
                 }
             } else {
                 for (0..len) |idx| {
-                    memory[idx] = try deserializeAlloc(stream, allocator, info.child);
+                    memory[idx] = try deserializeAllocImpl(stream, allocator, info.child, debug, level + 1);
                 }
             }
             return memory;
@@ -285,10 +349,14 @@ fn deserializePointerAlloc(stream: anytype, comptime info: std.builtin.Type.Poin
     }
 }
 
-fn deserializeArrayAlloc(stream: anytype, comptime info: std.builtin.Type.Array, allocator: std.mem.Allocator) ![info.len]info.child {
+fn deserializeArrayAlloc(stream: anytype, comptime info: std.builtin.Type.Array, allocator: std.mem.Allocator, debug: bool, level: usize) ![info.len]info.child {
     const T = @Type(.{ .array = info });
     if (info.sentinel_ptr != null) unsupportedType(T);
     var value: T = undefined;
+    if (debug) {
+        printIndent(level);
+        std.debug.print("[deserializeArrayAlloc] len: {d}\n", .{info.len});
+    }
     if (info.child == u8) {
         const amount = try stream.readAll(value[0..]);
         if (amount != info.len) {
@@ -296,16 +364,20 @@ fn deserializeArrayAlloc(stream: anytype, comptime info: std.builtin.Type.Array,
         }
     } else {
         for (0..info.len) |idx| {
-            value[idx] = try deserializeAlloc(stream, allocator, info.child);
+            value[idx] = try deserializeAllocImpl(stream, allocator, info.child, debug, level + 1);
         }
     }
     return value;
 }
 
-fn deserializeArray(stream: anytype, comptime info: std.builtin.Type.array) ![info.len]info.child {
+fn deserializeArray(stream: anytype, comptime info: std.builtin.Type.array, debug: bool, level: usize) ![info.len]info.child {
     const T = @Type(.{ .array = info });
     if (info.sentinel_ptr != null) unsupportedType(T);
     var value: T = undefined;
+    if (debug) {
+        printIndent(level);
+        std.debug.print("[deserializeArray] len: {d}\n", .{info.len});
+    }
     if (info.child == u8) {
         const amount = try stream.readAll(value[0..]);
         if (amount != info.len) {
@@ -313,76 +385,65 @@ fn deserializeArray(stream: anytype, comptime info: std.builtin.Type.array) ![in
         }
     } else {
         for (0..info.len) |idx| {
-            value[idx] = try deserialize(stream, info.child);
+            value[idx] = try deserializeImpl(stream, info.child, debug, level + 1);
         }
     }
     return value;
 }
 
-const DeserializeError = error{
-    EndOfStream,
-    OutOfMemory,
-    LargeAlloc,
-    IntToEnumError,
-    InvalidEnumTag,
-    ParseIntError,
-};
-
-fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struct, allocator: std.mem.Allocator, comptime T: type) anyerror!T {
+fn deserializeStructAlloc(stream: anytype, comptime info: std.builtin.Type.Struct, allocator: std.mem.Allocator, comptime T: type, debug: bool, level: usize) anyerror!T {
     var value: T = undefined;
     outer: inline for (info.fields) |field| {
+        if (debug) {
+            printIndent(level);
+            std.debug.print("[deserializeStructAlloc] field: {s}\n", .{field.name});
+        }
         if (@hasDecl(T, "meta")) {
             inline for (T.meta) |meta_field| {
-                // @compileLog(std.mem.eql(u8, meta_field.field, field.name));
                 if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
-                    // @compileLog(field.name, " ", meta_field.field);
-                    const intermediate = try deserializeAlloc(stream, allocator, meta_field.src_type);
+                    const intermediate = try deserializeAllocImpl(stream, allocator, meta_field.src_type, debug, level + 1);
                     @field(value, field.name) = switch (field.type) {
                         u256 => std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError,
                         Bn254Fr => Bn254Fr.from_int(std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError),
                         else => unreachable,
                     };
-                    // std.debug.print("{s}\n", .{intermediate});
-                    // @field(value, field.name) = field.type.deserialize(intermediate) catch return DeserializeError.CustomDeserializeError;
-                    // std.debug.print("{any}\n", .{@field(value, field.name)});
-                    // const field_value = @field(value, field.name);
-                    // @field(value, field.name) = try @TypeOf(field_value).deserialize(intermediate) catch DeserializeError.CustomDeserializeError;
                     continue :outer;
                 }
             }
         }
-        @field(value, field.name) = try deserializeAlloc(stream, allocator, field.type);
+        @field(value, field.name) = try deserializeAllocImpl(stream, allocator, field.type, debug, level + 1);
     }
     return value;
 }
 
-fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.@"struct", comptime T: type) !T {
+fn deserializeStruct(stream: anytype, comptime info: std.builtin.Type.@"struct", comptime T: type, debug: bool) !T {
     var value: T = undefined;
     outer: inline for (info.fields) |field| {
+        if (debug) std.debug.print("[deserializeStruct] field: {s}\n", .{field.name});
         if (@hasDecl(T, "meta")) {
             inline for (T.meta) |meta_field| {
                 if (comptime std.mem.eql(u8, meta_field.field, field.name)) {
-                    const intermediate = try deserialize(stream, meta_field.src_type);
+                    const intermediate = try deserializeImpl(stream, meta_field.src_type, debug, 1);
                     @field(value, field.name) = switch (field.type) {
                         u256 => std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError,
                         Bn254Fr => Bn254Fr.from_int(std.fmt.parseInt(u256, intermediate, 16) catch return DeserializeError.ParseIntError),
                         else => unreachable,
                     };
-                    // std.debug.print("{any}\n", .{@field(value, field.name)});
-                    // @field(value, field.name) = try field.type.deserializer(intermediate);
-                    // const field_value = @field(value, field.name);
-                    // @field(value, field.name) = try @TypeOf(field_value).deserialize(intermediate);
                     continue :outer;
                 }
             }
         }
-        @field(value, field.name) = try deserialize(stream, field.type);
+        @field(value, field.name) = try deserializeImpl(stream, field.type, debug, 1);
     }
     return value;
 }
 
-fn deserializeEnum(stream: anytype, comptime T: type) !T {
-    const raw_tag = try deserializeInt(stream, u32);
+fn deserializeEnum(stream: anytype, comptime T: type, debug: bool, level: usize) !T {
+    const raw_tag = try deserializeInt(stream, u32, debug, level);
+    if (debug) {
+        printIndent(level);
+        std.debug.print("[deserializeEnum] raw_tag: {d}\n", .{raw_tag});
+    }
     const tag = std.meta.intToEnum(T, raw_tag) catch {
         std.debug.print("Enum conversion error: could not convert raw tag {d} to enum {s}\n", .{ raw_tag, @typeName(T) });
         return DeserializeError.InvalidEnumTag;
@@ -390,17 +451,18 @@ fn deserializeEnum(stream: anytype, comptime T: type) !T {
     return tag;
 }
 
-fn deserializeUnionAlloc(stream: anytype, comptime info: std.builtin.Type.Union, allocator: std.mem.Allocator, comptime T: type) !T {
+fn deserializeUnionAlloc(stream: anytype, comptime info: std.builtin.Type.Union, allocator: std.mem.Allocator, comptime T: type, debug: bool, level: usize) !T {
     if (info.tag_type) |Tag| {
-        const raw_tag = try deserializeAlloc(stream, allocator, u32);
+        const raw_tag = try deserializeAllocImpl(stream, allocator, u32, debug, level + 1);
         const tag: Tag = try std.meta.intToEnum(info.tag_type.?, raw_tag);
-
+        if (debug) {
+            printIndent(level);
+            std.debug.print("[deserializeUnionAlloc] tag: {d}\n", .{raw_tag});
+        }
         inline for (info.fields) |field| {
             if (tag == @field(Tag, field.name)) {
-                // std.debug.print("Tag {s}: \n", .{field.name});
-                const inner = try deserializeAlloc(stream, allocator, field.type);
+                const inner = try deserializeAllocImpl(stream, allocator, field.type, debug, level + 1);
                 const r = @unionInit(T, field.name, inner);
-                // std.debug.print("{}\n", .{r});
                 return r;
             }
         }
@@ -410,14 +472,17 @@ fn deserializeUnionAlloc(stream: anytype, comptime info: std.builtin.Type.Union,
     }
 }
 
-fn deserializeUnion(stream: anytype, comptime info: std.builtin.Type.Union, comptime T: type) !T {
+fn deserializeUnion(stream: anytype, comptime info: std.builtin.Type.Union, comptime T: type, debug: bool, level: usize) !T {
     if (info.tag_type) |Tag| {
-        const raw_tag = try deserialize(stream, u32);
+        const raw_tag = try deserializeImpl(stream, u32, debug, level + 1);
         const tag: Tag = @enumFromInt(raw_tag);
-
+        if (debug) {
+            printIndent(level);
+            std.debug.print("[deserializeUnion] tag: {d}\n", .{raw_tag});
+        }
         inline for (info.fields) |field| {
             if (tag == @field(Tag, field.name)) {
-                const inner = try deserialize(stream, field.type);
+                const inner = try deserializeImpl(stream, field.type, debug, level + 1);
                 return @unionInit(T, field.name, inner);
             }
         }

@@ -158,13 +158,6 @@ pub const BlackBoxOp = union(enum) {
         signature: HeapArray,
         result: MemoryAddress,
     },
-    SchnorrVerify: struct {
-        public_key_x: MemoryAddress,
-        public_key_y: MemoryAddress,
-        message: HeapVector,
-        signature: HeapVector,
-        result: MemoryAddress,
-    },
     MultiScalarMul: struct {
         points: HeapVector,
         scalars: HeapVector,

@@ -420,16 +420,16 @@ pub const BrilligVm = struct {
                     @ptrCast(self.mem.getSlotAddr(op.result)),
                 );
             },
-            .SchnorrVerify => |op| {
-                blackbox.blackbox_schnorr_verify_signature(
-                    @ptrCast(self.mem.getIndirectSlotAddr(op.message.pointer)),
-                    @truncate(self.mem.getSlot(op.message.size)),
-                    @ptrCast(self.mem.getSlotAddr(op.public_key_x)),
-                    @ptrCast(self.mem.getSlotAddr(op.public_key_y)),
-                    @ptrCast(self.mem.getIndirectSlotAddr(op.signature.pointer)),
-                    @ptrCast(self.mem.getSlotAddr(op.result)),
-                );
-            },
+            // .SchnorrVerify => |op| {
+            //     blackbox.blackbox_schnorr_verify_signature(
+            //         @ptrCast(self.mem.getIndirectSlotAddr(op.message.pointer)),
+            //         @truncate(self.mem.getSlot(op.message.size)),
+            //         @ptrCast(self.mem.getSlotAddr(op.public_key_x)),
+            //         @ptrCast(self.mem.getSlotAddr(op.public_key_y)),
+            //         @ptrCast(self.mem.getIndirectSlotAddr(op.signature.pointer)),
+            //         @ptrCast(self.mem.getSlotAddr(op.result)),
+            //     );
+            // },
             .MultiScalarMul => |op| {
                 blackbox.blackbox_msm(
                     @ptrCast(self.mem.getIndirectSlotAddr(op.points.pointer)),
