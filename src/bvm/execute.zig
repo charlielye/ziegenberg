@@ -385,8 +385,8 @@ pub const BrilligVm = struct {
             .ToRadix => |op| {
                 blackbox.blackbox_to_radix(
                     @ptrCast(self.mem.getSlotAddr(op.input)),
-                    @ptrCast(self.mem.getIndirectSlotAddr(op.output.pointer)),
-                    @truncate(op.output.size),
+                    @ptrCast(self.mem.getIndirectSlotAddr(op.output_pointer)),
+                    @truncate(self.mem.getSlot(op.num_limbs)),
                     @truncate(self.mem.getSlot(op.radix)),
                 );
             },

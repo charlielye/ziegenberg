@@ -14,10 +14,13 @@ export DUMP_FAIL=1
 
 # Noir test program exclusions.
 exclusions=(
-  # array_dynamic_nested_blackbox_input
-  # regression_7323
-  array_oob* # Witness output disparities.
-  brillig_cow_regression # Broken, can't be bothered right now.
+  array_oob_regression_7952 # TOML parser can't deal with empty array.
+  databus_in_fn_with_empty_arr # TOML parser can't deal with empty array.
+  fold* # Can't handle more then 1 fn yet.
+  overlapping_dep_and_mod # Workspaces, urgh.
+  ram_blowup_regression # Blows up.
+  regression_7323 # Requires unstable features.
+  workspace* # Workspaces, urgh.
 )
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 

@@ -12,15 +12,17 @@ pub const Kind = enum {
     field,
     boolean,
     @"struct",
+    tuple,
 };
 
 pub const Type = struct {
-    kind: []const u8,
+    name: ?[]const u8 = null,
+    kind: ?[]const u8 = null,
     sign: ?[]const u8 = null,
     width: ?u32 = null,
     type: ?*Type = null,
     path: ?[]const u8 = null,
-    fields: ?[]Parameter = null,
+    fields: ?[]Type = null,
 };
 
 pub const Parameter = struct {
@@ -81,12 +83,21 @@ pub fn load(allocator: std.mem.Allocator, contract_path: []const u8) !ArtifactAb
     var file = try std.fs.cwd().openFile(contract_path, .{});
     defer file.close();
     var json_reader = std.json.reader(allocator, file.reader());
-    const parsed = try std.json.parseFromTokenSource(
+    var diagnostics = std.json.Diagnostics{};
+    json_reader.enableDiagnostics(&diagnostics);
+    const parsed = std.json.parseFromTokenSource(
         ArtifactAbi,
         allocator,
         &json_reader,
         .{ .ignore_unknown_fields = true },
-    );
+    ) catch |err| {
+        std.debug.print("Error parsing JSON at line {}:{}: {}\n", .{
+            diagnostics.getLine(),
+            diagnostics.getColumn(),
+            err,
+        });
+        return err;
+    };
     const abi = parsed.value;
     return abi;
 }

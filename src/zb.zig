@@ -61,6 +61,7 @@ pub fn main() !void {
         var run_cmd = app.createCommand("run", "Run the given bytecode with the given calldata.");
         try run_cmd.addArg(Arg.positional("project_path", null, null));
         try run_cmd.addArg(Arg.positional("witness_path", null, null));
+        try run_cmd.addArg(Arg.singleValueOption("artifact_path", 'a', "Path to file containing nargo json artifact."));
         try run_cmd.addArg(Arg.singleValueOption("bytecode_path", 'b', "Path to file containing raw bytecode."));
         try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing raw calldata."));
         try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
@@ -185,11 +186,13 @@ fn handleBvm(matches: ArgMatches) !void {
 fn handleCvm(matches: ArgMatches) !void {
     if (matches.subcommandMatches("run")) |cmd_matches| {
         const project_path = cmd_matches.getSingleValue("project_path");
+        const artifact_path = cmd_matches.getSingleValue("artifact_path");
         const witness_path = cmd_matches.getSingleValue("witness_path");
         // const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
         // const calldata_path = cmd_matches.getSingleValue("calldata_path");
         cvmExecute(.{
             .project_path = project_path,
+            .artifact_path = artifact_path,
             .witness_path = witness_path,
             // .bytecode_path = bytecode_path,
             // .calldata_path = calldata_path,
@@ -197,7 +200,7 @@ fn handleCvm(matches: ArgMatches) !void {
             .show_trace = cmd_matches.containsArg("trace"),
             .binary = cmd_matches.containsArg("binary"),
         }) catch |err| {
-            std.debug.print("{}\n", .{err});
+            // std.debug.print("Exiting due to error: {}\n", .{err});
             // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
             switch (err) {
                 // error.Unimplemented => std.posix.exit(3),

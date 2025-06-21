@@ -1,6 +1,7 @@
 const std = @import("std");
 const io = @import("io.zig");
 const Fr = @import("../bn254/fr.zig").Fr;
+const GrumpkinFr = @import("../grumpkin/fr.zig").Fr;
 const solve = @import("./expression_solver.zig").solve;
 const evaluate = @import("./expression_solver.zig").evaluate;
 const BrilligVm = @import("../bvm/execute.zig").BrilligVm;
@@ -15,11 +16,13 @@ const prover_toml = @import("../nargo/prover_toml.zig");
 const nargo_artifact = @import("../nargo/artifact.zig");
 const verify_signature = @import("../blackbox/ecdsa.zig").verify_signature;
 const toml = @import("toml");
+const msm = @import("../msm/naive.zig").msm;
 
 pub const ExecuteOptions = struct {
     // If null, the current working directory is used.
     project_path: ?[]const u8 = null,
     // Absolute or relative to project_path.
+    artifact_path: ?[]const u8 = null,
     witness_path: ?[]const u8 = null,
     // bytecode_path: ?[]const u8 = null,
     // calldata_path: ?[]const u8 = null,
@@ -36,10 +39,11 @@ fn anyIntToU256(width: u32, value: i256) u256 {
 //   {"name":"z","type":{"kind":"integer","sign":"unsigned","width":32},"visibility":"private"},
 //   {"name":"x","type":{"kind":"array","length":5,"type":{"kind":"integer","sign":"unsigned","width":32}},"visibility":"private"},
 fn loadCalldata(calldata_array: *std.ArrayList(Fr), param_type: nargo_artifact.Type, value: toml.Value) !void {
-    switch (std.meta.stringToEnum(nargo_artifact.Kind, param_type.kind).?) {
+    switch (std.meta.stringToEnum(nargo_artifact.Kind, param_type.kind.?).?) {
         .boolean => {
             const as_int: u256 = switch (value) {
-                .boolean, .integer => if (value.boolean) 1 else 0,
+                .boolean => if (value.boolean) 1 else 0,
+                .integer => if (value.integer != 0) 1 else 0,
                 .string => if (std.mem.startsWith(u8, value.string, "0x"))
                     try std.fmt.parseInt(u1, value.string[2..], 16)
                 else
@@ -83,11 +87,16 @@ fn loadCalldata(calldata_array: *std.ArrayList(Fr), param_type: nargo_artifact.T
         },
         .@"struct" => {
             for (param_type.fields.?) |field| {
-                const field_value = value.table.get(field.name) orelse {
-                    std.debug.print("Missing field {s} in struct {s}\n", .{ field.name, param_type.kind });
+                const field_value = value.table.get(field.name.?) orelse {
+                    std.debug.print("Missing field {s} in struct {s}\n", .{ field.name.?, param_type.kind.? });
                     return error.MissingField;
                 };
-                try loadCalldata(calldata_array, field.type, field_value);
+                try loadCalldata(calldata_array, field.type.?.*, field_value);
+            }
+        },
+        .tuple => {
+            for (value.array.items, 0..) |elem, i| {
+                try loadCalldata(calldata_array, param_type.fields.?[i], elem);
             }
         },
     }
@@ -105,24 +114,31 @@ pub fn execute(options: ExecuteOptions) !void {
     const nt = try nargo_toml.load(allocator, nt_path);
 
     // Load the artifact.
-    const artifact_path = try std.fmt.allocPrint(allocator, "{s}/target/{s}.json", .{ project_path, nt.package.name });
+    const artifact_path = if (options.artifact_path) |path|
+        try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, path })
+    else
+        try std.fmt.allocPrint(allocator, "{s}/target/{s}.json", .{ project_path, nt.package.name });
     const artifact = try nargo_artifact.load(allocator, artifact_path);
 
     // Load Prover.toml for the calldata if it exists.
     const pt_path = try std.fmt.allocPrint(allocator, "{s}/Prover.toml", .{project_path});
-    const pt = prover_toml.load(allocator, pt_path) catch null;
+    const pt = prover_toml.load(allocator, pt_path) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
 
     // Parse the calldata from Prover.toml.
     var calldata_array = std.ArrayList(Fr).init(allocator);
     defer calldata_array.deinit();
     if (pt) |ptoml| {
+        std.debug.print("Prover.toml found, loading calldata...\n", .{});
         for (artifact.abi.parameters, 0..) |param, i| {
             const value = ptoml.get(param.name) orelse unreachable;
             _ = i;
             // std.debug.print("Parameter {}: {s} ({s}) = {any}\n", .{
             //     i,
             //     param.name,
-            //     param.type.kind,
+            //     param.type.kind.?,
             //     value,
             // });
             try loadCalldata(&calldata_array, param.type, value);
@@ -322,6 +338,17 @@ const CircuitVm = struct {
                             std.crypto.hash.Blake3.hash(input.items, &output, .{});
                             for (op.outputs, output) |w, v| try self.witnesses.put(w, Fr.from_int(v));
                         },
+                        .Poseidon2Permutation => |op| {
+                            const frs = self.resolveFunctionInputs(Fr, 4, op.inputs);
+                            const r = Poseidon2.permutation(frs);
+                            for (op.outputs, r) |w, v| try self.witnesses.put(w, v);
+                        },
+                        .Keccakf1600 => |op| {
+                            const state = self.resolveFunctionInputs(u64, 25, &op.inputs);
+                            var hasher = std.crypto.core.keccak.KeccakF(1600){ .st = state };
+                            hasher.permute();
+                            for (op.outputs, 0..) |w, wi| try self.witnesses.put(w, Fr.from_int(state[wi]));
+                        },
                         .AES128Encrypt => |op| {
                             var inout = try std.ArrayList(u8).initCapacity(self.allocator, op.inputs.len);
                             defer inout.deinit();
@@ -365,13 +392,49 @@ const CircuitVm = struct {
                             try self.witnesses.put(op.outputs.y, r.y);
                             try self.witnesses.put(op.outputs.i, if (r.is_infinity()) Fr.one else Fr.zero);
                         },
-                        // .MultiScalarMul => {},
-                        .Poseidon2Permutation => |op| {
-                            const frs = self.resolveFunctionInputs(Fr, 4, op.inputs);
-                            const r = Poseidon2.permutation(frs);
-                            for (op.outputs, r) |w, v| try self.witnesses.put(w, v);
+                        .MultiScalarMul => |op| {
+                            const scalars_frs = try self.resolveVariableFunctionInputs(Fr, op.scalars);
+                            const points_frs = try self.resolveVariableFunctionInputs(Fr, op.points);
+
+                            const num_points = points_frs.len / 3;
+                            var points = try std.ArrayList(G1.Element).initCapacity(self.allocator, num_points);
+                            var scalars = try std.ArrayList(GrumpkinFr).initCapacity(self.allocator, num_points);
+
+                            for (0..num_points) |j| {
+                                const x = points_frs[j * 3];
+                                const y = points_frs[j * 3 + 1];
+                                const inf = points_frs[j * 3 + 2];
+
+                                if (inf.is_zero()) {
+                                    try points.append(G1.Element.from_xy(x, y));
+                                } else {
+                                    try points.append(G1.Element.infinity);
+                                }
+
+                                const slo = scalars_frs[j * 2].to_int();
+                                const shi = scalars_frs[j * 2 + 1].to_int();
+                                const s = slo | (shi << 128);
+                                try scalars.append(GrumpkinFr.from_int(s));
+                            }
+
+                            const result = msm(G1, scalars.items, points.items).normalize();
+
+                            try self.witnesses.put(op.outputs.x, result.x);
+                            try self.witnesses.put(op.outputs.y, result.y);
+                            try self.witnesses.put(op.outputs.i, if (result.is_infinity()) Fr.one else Fr.zero);
                         },
-                        else => {
+                        .RecursiveAggregation => {
+                            // const vk = self.resolveVariableFunctionInputs(Fr, op.verification_key);
+                            // const proof = self.resolveVariableFunctionInputs(Fr, op.proof);
+                            // const public_inputs = self.resolveVariableFunctionInputs(Fr, op.public_inputs);
+                        },
+                        .BigIntAdd,
+                        .BigIntDiv,
+                        .BigIntMul,
+                        .BigIntSub,
+                        .BigIntFromLeBytes,
+                        .BigIntToLeBytes,
+                        => {
                             std.debug.print("Unimplemented BlackBoxOp: {any}\n", .{blackbox_op});
                             return error.Unimplemented;
                         },
@@ -391,6 +454,19 @@ const CircuitVm = struct {
                 else => return error.Unimplemented,
             }
         }
+    }
+
+    inline fn resolveVariableFunctionInputs(
+        self: *CircuitVm,
+        comptime T: type,
+        src: []const io.FunctionInput,
+    ) ![]T {
+        var input = try std.ArrayList(T).initCapacity(self.allocator, src.len);
+        defer input.deinit();
+        for (src) |fi| {
+            try input.append(self.resolveFunctionInput(T, fi));
+        }
+        return input.toOwnedSlice();
     }
 
     inline fn resolveFunctionInputs(
