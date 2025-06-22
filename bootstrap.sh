@@ -14,13 +14,20 @@ export DUMP_FAIL=1
 
 # Noir test program exclusions.
 exclusions=(
-  array_oob_regression_7952 # TOML parser can't deal with empty array.
-  databus_in_fn_with_empty_arr # TOML parser can't deal with empty array.
-  fold* # Can't handle more then 1 fn yet.
-  overlapping_dep_and_mod # Workspaces, urgh.
-  ram_blowup_regression # Blows up.
-  regression_7323 # Requires unstable features.
-  workspace* # Workspaces, urgh.
+  # TOML parser can't deal with empty array.
+  array_oob_regression_7952
+  databus_in_fn_with_empty_arr
+  # Can't handle more then 1 fn yet.
+  fold*
+  # Workspaces, urgh.
+  overlapping_dep_and_mod
+  workspace*
+  # Requires unstable features.
+  regression_7323
+  # Pure brillig doesn't pass even in nargo.
+  reference_counts_*
+  # Debug build blows up ram.
+  ram_blowup_regression
 )
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 
@@ -31,12 +38,14 @@ function noir_bootstrap {
   DENOISE=1 denoise ./bootstrap.sh
 }
 
+# Compiles and executes a given noir test program to generate witness data.
+# Creates both ACIR and pure Brillig artifacts.
 function compile_and_execute {
   export RAYON_NUM_THREADS=1
   cd $1
   local name=$(basename $1)
   ../../../target/release/nargo compile --silence-warnings --force-brillig
-  ../../../target/release/nargo execute
+  ../../../target/release/nargo execute --force-brillig
   mv target/$name.json target/$name.brillig.json
   mv target/$name.gz target/$name.brillig.gz
   ../../../target/release/nargo compile --silence-warnings
@@ -44,28 +53,52 @@ function compile_and_execute {
 }
 export -f compile_and_execute
 
+# Compiles and executes all noir exexution success test programs to generate witness data.
 function build_fixtures {
   parallel --tag -k --line-buffer --halt now,fail=1 compile_and_execute ::: $test_programs_dir/$exclude_pattern
 }
 
-function test_cmds {
+# Builds zb, tests and lib.
+# Defaults to ReleaseFast.
+# For debug: ./bootstrap.sh build Debug
+function build {
+  zig build -Doptimize=${1:-ReleaseFast}
+}
+
+function test_cmds_unit {
   zig build list-tests | grep -v "bench" | grep "${1:-}" | awk '{print "xxx ./zig-out/bin/tests \"" $0 "\""}'
 }
 
-function test {
-  # Pipe through cat to disable status bar mode.
-  test_cmds ${1:-} | parallelise | cat
-}
-
-function test_program_cmds {
+function test_cmds_programs {
   for path in $test_programs_dir/$exclude_pattern; do
     echo "xxx check_parity $(basename $path)"
-  done
+    echo "xxx check_parity_brillig $(basename $path)"
+  done | grep "${1:-}"
 }
 
-function test_programs {
+# Runs tests with debug build.
+# ./bootstrap.sh test
+# ./bootstrap.sh test unit [filter]
+# ./bootstrap.sh test programs [filter]
+function test {
+  # Build debug version.
+  build Debug
   # Pipe through cat to disable status bar mode.
-  test_program_cmds | parallelise ${1:-} | cat
+  {
+    if [ -z "$1" ]; then
+      test_cmds_unit
+      test_cmds_programs
+    else
+      "test_cmds_$1" ${2:-}
+    fi
+  } | parallelise | cat
+}
+
+function test_programs_release {
+  # Build release version.
+  build ReleaseFast
+  # Pipe through cat to disable status bar mode.
+  test_cmds_programs | parallelise ${1:-} | cat
 }
 
 function bench_cmds {
@@ -73,31 +106,37 @@ function bench_cmds {
 }
 
 function bench {
+  # Build release version.
+  build ReleaseFast
   # Pipe through cat to disable status bar mode.
-  bench_cmds ${1:-} | STRICT_SCHEDULING=1 parallelise | cat
+  bench_cmds ${1:-} | NO_HEADER=1 VERBOSE=1 STRICT_SCHEDULING=1 parallelise | cat
 }
 
 function check_parity {
   set -e
-  # zig build -Doptimize=Debug
   local path=$test_programs_dir/$1
   zb cvm run $path --binary
   cmp <(zcat $path/target/$1.gz) <(zcat $path/target/$1.zb.gz)
   echo "Parity check passed for $1."
 }
-export -f check_parity
+
+function check_parity_brillig {
+  set -e
+  local path=$test_programs_dir/$1
+  zb cvm run $path --binary --artifact_path=target/$1.brillig.json --witness_path=target/$1.zb.brillig.gz
+  cmp <(zcat $path/target/$1.brillig.gz) <(zcat $path/target/$1.zb.brillig.gz)
+  echo "Parity check passed for $1."
+}
+
+export -f check_parity check_parity_brillig
 
 case "$cmd" in
-  ""|build)
+  ""|full)
     (noir_bootstrap)
     (build_fixtures)
-    zig build test-exe -Doptimize='ReleaseFast'
-    ;;
-  build_fixtures|test|test_cmds|bench|bench_cmds|check_parity|test_programs|test_program_cmds)
-    $cmd "$@"
+    build ${1:-}
     ;;
   *)
-    echo "Usage: $0 {build|test}"
-    exit 1
+    $cmd "$@"
     ;;
 esac

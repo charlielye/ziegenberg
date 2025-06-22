@@ -132,64 +132,84 @@ fn deserializeImpl(stream: anytype, comptime T: type, debug: bool, level: usize)
     };
 }
 
-fn deserializeBufferInt(comptime T: type, source_ptr: *[]const u8) T {
+fn deserializeBufferInt(comptime T: type, source_ptr: *[]const u8, debug: bool) T {
     const bytesRequired = @sizeOf(T);
     const source = source_ptr.*;
     if (bytesRequired <= source.len) {
         var tmp: [bytesRequired]u8 = undefined;
         std.mem.copyForwards(u8, &tmp, source[0..bytesRequired]);
         source_ptr.* = source[bytesRequired..];
-        return std.mem.readInt(T, &tmp, std.builtin.Endian.little);
+        const v = std.mem.readInt(T, &tmp, std.builtin.Endian.little);
+        if (debug) {
+            std.debug.print("[deserializeBufferInt] type: {s}, value: {any}\n", .{ @typeName(T), v });
+        }
+        return v;
     } else {
         invalidProtocol("Buffer ran out of bytes too soon.");
     }
 }
 
-fn deserializeBufferBool(source: *[]const u8) bool {
-    return switch (deserializeBufferInt(u8, source)) {
+fn deserializeBufferBool(source: *[]const u8, debug: bool) bool {
+    const v = deserializeBufferInt(u8, source, debug);
+    if (debug) {
+        std.debug.print("[deserializeBufferBool] value: {d}\n", .{v});
+    }
+    return switch (v) {
         0 => return false,
         1 => return true,
         else => invalidProtocol("Boolean values should be encoded as a single byte with value 0 or 1 only."),
     };
 }
 
-fn deserializeBufferOptional(comptime T: type, source: *[]const u8) ?T {
-    if (deserializeBufferBool(source)) {
-        return deserializeBuffer(T, source);
+fn deserializeBufferOptional(comptime T: type, source: *[]const u8, debug: bool) ?T {
+    if (deserializeBufferBool(source, debug)) {
+        if (debug) std.debug.print("[deserializeBufferOptional] present\n", .{});
+        return deserializeBuffer(T, source, debug);
     } else {
+        if (debug) std.debug.print("[deserializeBufferOptional] null\n", .{});
         return null;
     }
 }
 
-fn deserializeBufferFloat(comptime T: type, source: *[]const u8) T {
+fn deserializeBufferFloat(comptime T: type, source: *[]const u8, debug: bool) T {
     switch (T) {
-        f32 => return @bitCast(deserializeBufferInt(u32, source)),
-        f64 => return @bitCast(deserializeBufferInt(u64, source)),
+        f32 => {
+            const v: T = @bitCast(deserializeBufferInt(u32, source, debug));
+            if (debug) std.debug.print("[deserializeBufferFloat] f32 value: {d}\n", .{v});
+            return v;
+        },
+        f64 => {
+            const v: T = @bitCast(deserializeBufferInt(u64, source, debug));
+            if (debug) std.debug.print("[deserializeBufferFloat] f64 value: {d}\n", .{v});
+            return v;
+        },
         else => unsupportedType(T),
     }
 }
 
-fn deserializeBufferEnum(comptime T: type, source: *[]const u8) T {
-    const raw_tag = deserializeBufferInt(u32, source);
+fn deserializeBufferEnum(comptime T: type, source: *[]const u8, debug: bool) T {
+    const raw_tag = deserializeBufferInt(u32, source, debug);
+    if (debug) std.debug.print("[deserializeBufferEnum] raw_tag: {d}\n", .{raw_tag});
     return @enumFromInt(raw_tag);
 }
 
-fn deserializeBufferStruct(comptime T: type, comptime info: std.builtin.Type.Struct, source: *[]const u8) T {
+fn deserializeBufferStruct(comptime T: type, comptime info: std.builtin.Type.Struct, source: *[]const u8, debug: bool) T {
     var value: T = undefined;
     inline for (info.fields) |field| {
-        @field(value, field.name) = deserializeBuffer(field.type, source);
+        if (debug) std.debug.print("[deserializeBufferStruct] field: {s}\n", .{field.name});
+        @field(value, field.name) = deserializeBufferImpl(field.type, source, debug);
     }
     return value;
 }
 
-fn deserializeBufferUnion(comptime T: type, comptime info: std.builtin.Type.Union, source: *[]const u8) T {
+fn deserializeBufferUnion(comptime T: type, comptime info: std.builtin.Type.Union, source: *[]const u8, debug: bool) T {
     if (info.tag_type) |Tag| {
-        const raw_tag = deserializeBufferInt(u32, source);
+        const raw_tag = deserializeBufferInt(u32, source, debug);
         const tag: Tag = @enumFromInt(raw_tag);
-
+        if (debug) std.debug.print("[deserializeBufferUnion] tag: {d}\n", .{raw_tag});
         inline for (info.fields) |field| {
             if (tag == @field(Tag, field.name)) {
-                const inner = deserializeBuffer(field.type, source);
+                const inner = deserializeBuffer(field.type, source, debug);
                 return @unionInit(T, field.name, inner);
             }
         }
@@ -199,10 +219,11 @@ fn deserializeBufferUnion(comptime T: type, comptime info: std.builtin.Type.Unio
     }
 }
 
-fn deserializeBufferArray(comptime info: std.builtin.Type.array, source_ptr: *[]const u8) [info.len]info.child {
+fn deserializeBufferArray(comptime info: std.builtin.Type.array, source_ptr: *[]const u8, debug: bool) [info.len]info.child {
     const T = @Type(.{ .array = info });
     if (info.sentinel_ptr != null) unsupportedType(T);
     var value: T = undefined;
+    if (debug) std.debug.print("[deserializeBufferArray] len: {d}\n", .{info.len});
     if (info.child == u8) {
         const source = source_ptr.*;
         if (info.len <= source.len) {
@@ -213,19 +234,20 @@ fn deserializeBufferArray(comptime info: std.builtin.Type.array, source_ptr: *[]
         }
     } else {
         for (0..info.len) |idx| {
-            value[idx] = deserializeBuffer(info.child, source_ptr);
+            value[idx] = deserializeBuffer(info.child, source_ptr, debug);
         }
     }
     return value;
 }
 
-fn deserializeBufferPointer(comptime info: std.builtin.Type.Pointer, source_ptr: *[]const u8) []const info.child {
+fn deserializeBufferPointer(comptime info: std.builtin.Type.Pointer, source_ptr: *[]const u8, debug: bool) []const info.child {
     const T = @Type(.{ .pointer = info });
     if (info.sentinel_ptr != null) unsupportedType(T);
     switch (info.size) {
         .one => unsupportedType(T),
         .slice => {
-            const len: usize = @intCast(deserializeBufferInt(u64, source_ptr));
+            const len: usize = @intCast(deserializeBufferInt(u64, source_ptr, debug));
+            if (debug) std.debug.print("[deserializeBufferPointer] slice len: {d}\n", .{len});
             if (info.child == u8) {
                 const source = source_ptr.*;
                 if (len <= source.len) {

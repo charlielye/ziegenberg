@@ -60,8 +60,8 @@ pub fn main() !void {
 
         var run_cmd = app.createCommand("run", "Run the given bytecode with the given calldata.");
         try run_cmd.addArg(Arg.positional("project_path", null, null));
-        try run_cmd.addArg(Arg.positional("witness_path", null, null));
         try run_cmd.addArg(Arg.singleValueOption("artifact_path", 'a', "Path to file containing nargo json artifact."));
+        try run_cmd.addArg(Arg.singleValueOption("witness_path", 'w', "Path to to write output witness data."));
         try run_cmd.addArg(Arg.singleValueOption("bytecode_path", 'b', "Path to file containing raw bytecode."));
         try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing raw calldata."));
         try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));

@@ -63,6 +63,11 @@ pub fn build(b: *std.Build) void {
         list_tests.root_module.addImport("lmdb", lmdb.module("lmdb"));
         list_tests.root_module.addImport("toml", toml.module("zig-toml"));
         list_tests.linkLibC();
+
+        // Install the list test binary into the standard location on the default "zig build".
+        b.installArtifact(list_tests);
+
+        // A step to install the list test binary into zig-out/bin. Depends on them being built.
         const list_tests_install = b.addInstallArtifact(list_tests, .{});
 
         const run_list_tests = b.addRunArtifact(list_tests);
@@ -88,12 +93,15 @@ pub fn build(b: *std.Build) void {
         lib_unit_tests.root_module.addImport("toml", toml.module("zig-toml"));
         lib_unit_tests.linkLibC();
 
+        // Install the unit tests into the standard location on the default "zig build".
+        b.installArtifact(lib_unit_tests);
+
         // A step to install the unit tests into zig-out/bin. Depends on them being built.
         const lib_unit_tests_install = b.addInstallArtifact(lib_unit_tests, .{});
 
-        // A step to run the unit tests. Depends on them being built.
+        // A step to run the unit tests. Depends on them being built and installed.
         const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-        run_lib_unit_tests.step.dependOn(&lib_unit_tests.step);
+        run_lib_unit_tests.step.dependOn(&lib_unit_tests_install.step);
         run_lib_unit_tests.has_side_effects = true;
         if (b.args) |args| {
             run_lib_unit_tests.addArgs(args);

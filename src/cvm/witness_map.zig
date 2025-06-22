@@ -88,7 +88,7 @@ pub const WitnessMap = struct {
 
     fn readWitnesses(self: *WitnessMap, allocator: std.mem.Allocator, binary: bool, reader: anytype) !void {
         if (binary) {
-            const items = try bincode.deserializeAlloc(reader, allocator, []io.StackItem, false);
+            const items = try bincode.deserializeAlloc(reader, allocator, []io.StackItem);
             if (items.len != 1 or items[0].witnesses.len == 0) {
                 return error.InvalidWitnessData;
             }
