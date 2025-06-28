@@ -24,8 +24,8 @@ pub const ExecuteOptions = struct {
     // Absolute or relative to project_path.
     artifact_path: ?[]const u8 = null,
     witness_path: ?[]const u8 = null,
-    // bytecode_path: ?[]const u8 = null,
-    // calldata_path: ?[]const u8 = null,
+    bytecode_path: ?[]const u8 = null,
+    calldata_path: ?[]const u8 = null,
     show_trace: bool = false,
     binary: bool = false,
 };
@@ -102,68 +102,80 @@ fn loadCalldata(calldata_array: *std.ArrayList(Fr), param_type: nargo_artifact.T
     }
 }
 
+fn loadCalldataFromProverToml(
+    allocator: std.mem.Allocator,
+    artifact: *const nargo_artifact.ArtifactAbi,
+    pt_path: []const u8,
+) ![]Fr {
+    const pt = try prover_toml.load(allocator, pt_path);
+    var calldata_array = std.ArrayList(Fr).init(allocator);
+    defer calldata_array.deinit();
+    std.debug.print("Loading calldata from {s}...\n", .{pt_path});
+    for (artifact.abi.parameters, 0..) |param, i| {
+        const value = pt.get(param.name) orelse unreachable;
+        _ = i;
+        // std.debug.print("Parameter {}: {s} ({s}) = {any}\n", .{
+        //     i,
+        //     param.name,
+        //     param.type.kind.?,
+        //     value,
+        // });
+        try loadCalldata(&calldata_array, param.type, value);
+    }
+    return calldata_array.toOwnedSlice();
+}
+
 pub fn execute(options: ExecuteOptions) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
 
-    const project_path = options.project_path orelse unreachable;
+    const project_path = options.project_path orelse try std.fs.cwd().realpathAlloc(allocator, ".");
 
     // Load Nargo.toml.
     const nt_path = try std.fmt.allocPrint(allocator, "{s}/Nargo.toml", .{project_path});
-    const nt = try nargo_toml.load(allocator, nt_path);
+    const nt = nargo_toml.load(allocator, nt_path) catch null;
+    const name = if (nt) |t| t.package.name else std.fs.path.basename(project_path);
 
-    // Load the artifact.
     const artifact_path = if (options.artifact_path) |path|
         try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, path })
     else
-        try std.fmt.allocPrint(allocator, "{s}/target/{s}.json", .{ project_path, nt.package.name });
-    const artifact = try nargo_artifact.load(allocator, artifact_path);
+        try std.fmt.allocPrint(allocator, "{s}/target/{s}.json", .{ project_path, name });
 
-    // Load Prover.toml for the calldata if it exists.
-    const pt_path = try std.fmt.allocPrint(allocator, "{s}/Prover.toml", .{project_path});
-    const pt = prover_toml.load(allocator, pt_path) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => return err,
-    };
+    // Init calldata to empty slice.
+    var calldata: []Fr = &[_]Fr{};
+    var program: io.Program = undefined;
 
-    // Parse the calldata from Prover.toml.
-    var calldata_array = std.ArrayList(Fr).init(allocator);
-    defer calldata_array.deinit();
-    if (pt) |ptoml| {
-        std.debug.print("Prover.toml found, loading calldata...\n", .{});
-        for (artifact.abi.parameters, 0..) |param, i| {
-            const value = ptoml.get(param.name) orelse unreachable;
-            _ = i;
-            // std.debug.print("Parameter {}: {s} ({s}) = {any}\n", .{
-            //     i,
-            //     param.name,
-            //     param.type.kind.?,
-            //     value,
-            // });
-            try loadCalldata(&calldata_array, param.type, value);
+    if (options.bytecode_path) |path| {
+        std.debug.print("Loading bytecode from {s}...\n", .{path});
+        // If bytecode path is provided, load bytecode from it, and optionally load calldata from given path if given.
+        program = try io.load(allocator, path);
+
+        if (options.calldata_path) |calldata_path| {
+            const artifact = try nargo_artifact.load(allocator, artifact_path);
+            const pt_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, calldata_path });
+            calldata = try loadCalldataFromProverToml(allocator, &artifact, pt_path);
+        }
+    } else {
+        // Otherwise, load the bytecode from the artifact, and calldata from Prover.toml (unless overridden).
+        const artifact = try nargo_artifact.load(allocator, artifact_path);
+        const bytecode = try artifact.getBytecode(allocator);
+        program = try io.deserialize(allocator, bytecode);
+
+        if (options.calldata_path) |path| {
+            const pt_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, path });
+            calldata = try loadCalldataFromProverToml(allocator, &artifact, pt_path);
+        } else {
+            // If default Prover.toml doesn't exist we continue with empty calldata.
+            const pt_path = try std.fmt.allocPrint(allocator, "{s}/Prover.toml", .{project_path});
+            calldata = loadCalldataFromProverToml(allocator, &artifact, pt_path) catch |err| switch (err) {
+                error.FileNotFound => calldata,
+                else => return err,
+            };
         }
     }
-    const calldata: []Fr = calldata_array.items;
-    const bytecode = try artifact.getBytecode(allocator);
 
-    const program = try io.deserialize(allocator, bytecode);
-    // const program = try io.load(allocator, options.bytecode_path);
     std.debug.assert(program.functions.len == 1);
-    // const opcodes = program.functions[0].opcodes;
-    // std.debug.print("Deserialized {} opcodes.\n", .{opcodes.len});
-
-    // var calldata: []Fr = &[_]Fr{};
-    // if (options.calldata_path) |path| {
-    //     const f = try std.fs.cwd().openFile(path, .{});
-    //     defer f.close();
-    //     const calldata_bytes = try f.readToEndAllocOptions(allocator, std.math.maxInt(usize), null, 32, null);
-    //     const calldata_u256 = std.mem.bytesAsSlice(u256, calldata_bytes);
-    //     calldata = std.mem.bytesAsSlice(Fr, calldata_bytes);
-    //     for (0..calldata.len) |i| {
-    //         calldata[i] = Fr.from_int(@byteSwap(calldata_u256[i]));
-    //     }
-    // }
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
     var t = try std.time.Timer.start();
@@ -183,20 +195,19 @@ pub fn execute(options: ExecuteOptions) !void {
         return err;
     };
 
-    // Open file writer at target/<package_name>.zb.gz
-    const file_name = if (options.witness_path) |path|
-        try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, path })
-    else
-        try std.fmt.allocPrint(allocator, "{s}/target/{s}.zb.gz", .{ project_path, nt.package.name });
-
-    const file = try std.fs.cwd().createFile(file_name, .{ .truncate = true });
-    defer file.close();
-    std.debug.print("Writing witnesses to {s}\n", .{file_name});
-    // Create a writer for the file that gzips the output.
-    var compressor = try std.compress.gzip.compressor(file.writer(), .{});
-    // Write the witnesses to the file.
-    try vm.witnesses.writeWitnesses(options.binary, compressor.writer());
-    try compressor.finish();
+    if (options.witness_path) |witness_path| {
+        const file_name = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, witness_path });
+        const file = try std.fs.cwd().createFile(file_name, .{ .truncate = true });
+        defer file.close();
+        std.debug.print("Writing witnesses to {s}\n", .{file_name});
+        // Create a writer for the file that gzips the output.
+        var compressor = try std.compress.gzip.compressor(file.writer(), .{});
+        // Write the witnesses to the file.
+        try vm.witnesses.writeWitnesses(options.binary, compressor.writer());
+        try compressor.finish();
+    } else {
+        try vm.witnesses.printWitnesses(options.binary);
+    }
 }
 
 const CircuitVm = struct {
@@ -279,7 +290,9 @@ const CircuitVm = struct {
                             }
                         }
                     }
-                    var brillig_vm = try BrilligVm.init(self.allocator, calldata.items);
+                    var arena = std.heap.ArenaAllocator.init(self.allocator);
+                    defer arena.deinit();
+                    var brillig_vm = try BrilligVm.init(arena.allocator(), calldata.items);
                     defer brillig_vm.deinit();
                     try brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0);
                     var return_data_idx: u32 = 0;

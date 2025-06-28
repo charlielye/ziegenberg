@@ -188,13 +188,13 @@ fn handleCvm(matches: ArgMatches) !void {
         const project_path = cmd_matches.getSingleValue("project_path");
         const artifact_path = cmd_matches.getSingleValue("artifact_path");
         const witness_path = cmd_matches.getSingleValue("witness_path");
-        // const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
+        const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
         // const calldata_path = cmd_matches.getSingleValue("calldata_path");
         cvmExecute(.{
             .project_path = project_path,
             .artifact_path = artifact_path,
             .witness_path = witness_path,
-            // .bytecode_path = bytecode_path,
+            .bytecode_path = bytecode_path,
             // .calldata_path = calldata_path,
             // .show_stats = cmd_matches.containsArg("stats"),
             .show_trace = cmd_matches.containsArg("trace"),

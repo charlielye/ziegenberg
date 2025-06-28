@@ -23,6 +23,8 @@ pub fn handleForeignCall(allocator: std.mem.Allocator, mem: *Memory, fc: *const 
 
     if (std.mem.eql(u8, "print", fc.function)) {
         try handlePrint(arena.allocator(), mem, params);
+    } else if (std.mem.eql(u8, "noOp", fc.function)) {
+        std.debug.print("noop\n", .{});
     } else {
         std.debug.print("Unimplemented foreign call: {s}\n", .{fc.function});
         return error.Unimplemented;

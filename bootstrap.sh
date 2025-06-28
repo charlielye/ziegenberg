@@ -32,6 +32,7 @@ exclusions=(
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 
 export test_programs_dir="aztec-packages/noir/noir-repo/test_programs/execution_success"
+export test_protocol_dir="aztec-packages/noir-projects/noir-protocol-circuits/target/tests"
 
 function noir_bootstrap {
   cd aztec-packages/noir
@@ -58,6 +59,10 @@ function build_fixtures {
   parallel --tag -k --line-buffer --halt now,fail=1 compile_and_execute ::: $test_programs_dir/$exclude_pattern
 }
 
+function build_noir_protocol_circuits {
+  (cd aztec-packages/noir-projects/noir-protocol-circuits && yarn && yarn generate_variants && ../../noir/noir-repo/target/release/nargo dump)
+}
+
 # Builds zb, tests and lib.
 # Defaults to ReleaseFast.
 # For debug: ./bootstrap.sh build Debug
@@ -76,13 +81,24 @@ function test_cmds_programs {
   done | grep "${1:-}"
 }
 
+function proto_test {
+    ./zig-out/bin/zb cvm run --bytecode_path=$test_protocol_dir/$1 || [[ "$1" =~ \.fail\. ]]
+}
+export -f proto_test
+
+function test_cmds_protocol_circuits {
+  for path in $test_protocol_dir/*.cvm_bytecode; do
+    echo "xxx proto_test $(basename $path)"
+  done | grep "${1:-}"
+}
+
 # Runs tests with debug build.
 # ./bootstrap.sh test
 # ./bootstrap.sh test unit [filter]
 # ./bootstrap.sh test programs [filter]
 function test {
   # Build debug version.
-  build Debug
+  # build Debug
   # Pipe through cat to disable status bar mode.
   {
     if [ -z "$1" ]; then
@@ -91,7 +107,7 @@ function test {
     else
       "test_cmds_$1" ${2:-}
     fi
-  } | parallelise | cat
+  } | parallelise ${JOBS:-} | cat
 }
 
 function test_programs_release {
@@ -115,7 +131,7 @@ function bench {
 function check_parity {
   set -e
   local path=$test_programs_dir/$1
-  zb cvm run $path --binary
+  ./zig-out/bin/zb cvm run $path --binary --witness_path=target/$1.zb.gz
   cmp <(zcat $path/target/$1.gz) <(zcat $path/target/$1.zb.gz)
   echo "Parity check passed for $1."
 }
@@ -123,7 +139,7 @@ function check_parity {
 function check_parity_brillig {
   set -e
   local path=$test_programs_dir/$1
-  zb cvm run $path --binary --artifact_path=target/$1.brillig.json --witness_path=target/$1.zb.brillig.gz
+  ./zig-out/bin/zb cvm run $path --binary --artifact_path=target/$1.brillig.json --witness_path=target/$1.zb.brillig.gz
   cmp <(zcat $path/target/$1.brillig.gz) <(zcat $path/target/$1.zb.brillig.gz)
   echo "Parity check passed for $1."
 }
