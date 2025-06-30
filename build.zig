@@ -46,9 +46,16 @@ pub fn build(b: *std.Build) void {
         exe.bundle_compiler_rt = true;
         exe.root_module.addImport("yazap", yazap.module("yazap"));
         exe.root_module.addImport("toml", toml.module("zig-toml"));
-        // exe.linkLibC();
+        exe.linkLibC();
 
         b.installArtifact(exe);
+
+        // A step to install the exe into zig-out/bin. Depends on being built.
+        const exe_install = b.addInstallArtifact(exe, .{});
+
+        // A command step to just build and install test executable.
+        const test_exe_step = b.step("build-exe", "Build exe");
+        test_exe_step.dependOn(&exe_install.step);
     }
 
     // List tests.

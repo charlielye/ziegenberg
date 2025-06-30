@@ -13,6 +13,7 @@ pub const Memory = struct {
     max_slot_set: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, num_slots: usize) !Memory {
+        // std.debug.print("{}\n",.{@alignOf(std.c.max_align_t)});
         return .{
             .allocator = allocator,
             .memory = try allocator.alignedAlloc(u256, 4096, num_slots),

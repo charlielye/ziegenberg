@@ -9,12 +9,11 @@
       "args": [
         "cvm",
         "run",
-        "aztec-packages/noir/noir-repo/test_programs/execution_success/2_div",
-        "--trace",
-        "--binary"
+        "--bytecode_path=aztec-packages/noir-projects/noir-protocol-circuits/target/tests/block_root__block_root_rollup_inputs__tests__correct_block_root_rollup_output.pass.cvm_bytecode"
       ],
       "cwd": "${workspaceFolder}",
-      "stopOnEntry": false
+      "stopOnEntry": false,
+      "preLaunchTask": "build-zb"
     }
   ]
 }

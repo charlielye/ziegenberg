@@ -38,9 +38,12 @@ pub fn execute(options: ExecuteOptions) !void {
     }
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
+    var fc_handler = Txe.init(allocator);
+    defer fc_handler.deinit();
+
     var t = try std.time.Timer.start();
     std.debug.print("Initing...\n", .{});
-    var brillig_vm = try BrilligVm.init(allocator, calldata);
+    var brillig_vm = try BrilligVm.init(allocator, calldata, &fc_handler);
     defer brillig_vm.deinit();
     std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
@@ -53,8 +56,8 @@ pub fn execute(options: ExecuteOptions) !void {
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 pub const BrilligVm = struct {
-    // const mem_size = 1024 * 1024;
-    const mem_size = 1024 * 1024 * 32;
+    const mem_size = 1024 * 1024;
+    // const mem_size = 1024 * 1024 * 32;
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) anyerror!void{
         &processBinaryFieldOp,
         &processBinaryIntOp,
@@ -91,9 +94,9 @@ pub const BrilligVm = struct {
     opcode_time: [@typeInfo(io.BrilligOpcode).@"union".fields.len]u64,
     time_taken: u64 = 0,
     // TODO: Hardcoded in for now. But this needs to be passed into each brillig vm instance.
-    txe: Txe,
+    fc_handler: *Txe,
 
-    pub fn init(allocator: std.mem.Allocator, calldata: []u256) !BrilligVm {
+    pub fn init(allocator: std.mem.Allocator, calldata: []u256, fc_handler: *Txe) !BrilligVm {
         const vm = BrilligVm{
             .allocator = allocator,
             .mem = try Memory.init(allocator, mem_size),
@@ -103,7 +106,7 @@ pub const BrilligVm = struct {
             .opcode_counters = std.mem.zeroes([@typeInfo(io.BrilligOpcode).@"union".fields.len]u64),
             .opcode_time = std.mem.zeroes([@typeInfo(io.BrilligOpcode).@"union".fields.len]u64),
             .return_data = &.{},
-            .txe = Txe.init(allocator),
+            .fc_handler = fc_handler,
         };
 
         // Lock the allocated memory in RAM using mlock.
@@ -459,7 +462,7 @@ pub const BrilligVm = struct {
 
     fn processForeignCall(self: *BrilligVm, opcode: *BrilligOpcode) !void {
         const fc = &opcode.ForeignCall;
-        try self.txe.handleForeignCall(&self.mem, fc);
+        try self.fc_handler.handleForeignCall(&self.mem, fc);
         self.pc += 1;
     }
 

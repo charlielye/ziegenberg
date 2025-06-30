@@ -32,6 +32,7 @@ exclusions=(
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 
 export test_programs_dir="aztec-packages/noir/noir-repo/test_programs/execution_success"
+export test_tests_dir="aztec-packages/noir/noir-repo/test_programs/noir_test_success"
 export test_protocol_dir="aztec-packages/noir-projects/noir-protocol-circuits/target/tests"
 
 function noir_bootstrap {

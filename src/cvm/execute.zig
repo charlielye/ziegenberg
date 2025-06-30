@@ -17,6 +17,7 @@ const nargo_artifact = @import("../nargo/artifact.zig");
 const verify_signature = @import("../blackbox/ecdsa.zig").verify_signature;
 const toml = @import("toml");
 const msm = @import("../msm/naive.zig").msm;
+const Txe = @import("../bvm/foreign_call/txe.zig").Txe;
 
 pub const ExecuteOptions = struct {
     // If null, the current working directory is used.
@@ -215,6 +216,7 @@ const CircuitVm = struct {
     program: *const io.Program,
     witnesses: WitnessMap,
     memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
+    fc_handler: Txe,
 
     pub fn init(allocator: std.mem.Allocator, program: *const io.Program, calldata: []Fr) !CircuitVm {
         var witnesses = WitnessMap.init(allocator);
@@ -227,11 +229,13 @@ const CircuitVm = struct {
             .program = program,
             .witnesses = witnesses,
             .memory_solvers = std.AutoHashMap(u32, MemoryOpSolver).init(allocator),
+            .fc_handler = Txe.init(allocator),
         };
     }
 
     pub fn deinit(self: *CircuitVm) void {
         self.witnesses.deinit();
+        self.fc_handler.deinit();
     }
 
     pub fn executeVm(self: *CircuitVm, function_index: usize, show_trace: bool) !void {
@@ -292,7 +296,7 @@ const CircuitVm = struct {
                     }
                     var arena = std.heap.ArenaAllocator.init(self.allocator);
                     defer arena.deinit();
-                    var brillig_vm = try BrilligVm.init(arena.allocator(), calldata.items);
+                    var brillig_vm = try BrilligVm.init(arena.allocator(), calldata.items, &self.fc_handler);
                     defer brillig_vm.deinit();
                     try brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0);
                     var return_data_idx: u32 = 0;
