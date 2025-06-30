@@ -74,8 +74,10 @@ pub fn handleForeignCall(allocator: std.mem.Allocator, mem: *Memory, fc: *const 
     } else if (std.mem.eql(u8, "noOp", fc.function)) {
         std.debug.print("noop\n", .{});
     } else {
-        std.debug.print("Unimplemented foreign call: {s}\n", .{fc.function});
-        return error.Unimplemented;
+        if (fc.destination_value_types.len > 0) {
+            std.debug.print("Unimplemented foreign call: {s}\n", .{fc.function});
+            return error.Unimplemented;
+        }
     }
 }
 
@@ -144,17 +146,28 @@ pub fn marshalForeignCallParam(
         switch (fcp) {
             .Single => mem.setSlot(voa.MemoryAddress, fcp.Single),
             .Array => {
-                // return marshalOutput(&output.*.Array, mem, destinations);
-                // var written: usize = 0;
-                // for (output.Array) |*e|
-                //     written += marshalOutput(e, mem, destinations[written..]);
-                // return written;
-                std.debug.assert(voa == .HeapArray);
-                const arr = voa.HeapArray;
-                const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
-                // TODO: This will break if the array element is anything other than int.
-                for (0..arr.size) |i|
-                    mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                switch (voa) {
+                    .HeapArray => {
+                        const arr = voa.HeapArray;
+                        const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+                        // TODO: This will break if the array element is anything other than int.
+                        for (0..arr.size) |i|
+                            mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                    },
+                    .HeapVector => {
+                        const arr = voa.HeapVector;
+                        const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+                        // const size_idx: usize = @intCast(mem.getSlot(arr.size));
+                        mem.setSlot(arr.size, fcp.Array.len);
+                        // std.debug.print("{}\n", .{(arr.size)});
+                        // std.debug.print("{}\n", .{mem.getSlot(arr.size)});
+                        // const size: usize = @intCast(norm(mem.getSlot(arr.size)));
+                        // TODO: This will break if the array element is anything other than int.
+                        for (0..fcp.Array.len) |i|
+                            mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                    },
+                    else => unreachable,
+                }
             },
         }
     }

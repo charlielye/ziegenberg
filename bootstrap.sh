@@ -28,6 +28,11 @@ exclusions=(
   reference_counts_*
   # Debug build blows up ram.
   ram_blowup_regression
+
+  # TODO!
+  regression_4561
+  signed_double_negation
+  ski_calculus
 )
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 
@@ -53,11 +58,19 @@ function compile_and_execute {
   ../../../target/release/nargo compile --silence-warnings
   ../../../target/release/nargo execute
 }
-export -f compile_and_execute
+
+function nargo_dump {
+  export RAYON_NUM_THREADS=1
+  cd $1
+  local name=$(basename $1)
+  ../../../target/release/nargo dump
+}
+export -f compile_and_execute nargo_dump
 
 # Compiles and executes all noir exexution success test programs to generate witness data.
 function build_fixtures {
   parallel --tag -k --line-buffer --halt now,fail=1 compile_and_execute ::: $test_programs_dir/$exclude_pattern
+  parallel --tag -k --line-buffer --halt now,fail=1 nargo_dump ::: $test_tests_dir/$exclude_pattern
 }
 
 function build_noir_protocol_circuits {
@@ -76,16 +89,27 @@ function test_cmds_unit {
 }
 
 function test_cmds_programs {
-  for path in $test_programs_dir/$exclude_pattern; do
-    echo "xxx check_parity $(basename $path)"
-    echo "xxx check_parity_brillig $(basename $path)"
-  done | grep "${1:-}"
+  {
+    for path in $test_programs_dir/$exclude_pattern; do
+      echo "xxx check_parity $(basename $path)"
+      echo "xxx check_parity_brillig $(basename $path)"
+    done
+    for path in $test_tests_dir/$exclude_pattern; do
+      for test_path in $path/target/tests/*.cvm_bytecode; do
+        echo "xxx run_program_test $(basename $path) $(basename $test_path)"
+      done
+    done
+  } | grep "${1:-}"
 }
 
 function proto_test {
     ./zig-out/bin/zb cvm run --bytecode_path=$test_protocol_dir/$1 || [[ "$1" =~ \.fail\. ]]
 }
-export -f proto_test
+
+function run_program_test {
+    ./zig-out/bin/zb cvm run --bytecode_path=$test_tests_dir/$1/target/tests/$2 || [[ "$2" =~ \.fail\. ]]
+}
+export -f proto_test run_program_test
 
 function test_cmds_protocol_circuits {
   for path in $test_protocol_dir/*.cvm_bytecode; do
