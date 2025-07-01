@@ -42,7 +42,12 @@ exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 export test_programs_dir="aztec-packages/noir/noir-repo/test_programs/execution_success"
 export test_tests_dir="aztec-packages/noir/noir-repo/test_programs/noir_test_success"
 export test_protocol_dir="aztec-packages/noir-projects/noir-protocol-circuits/target/tests"
+export test_contracts_dir="aztec-packages/noir-projects/noir-contracts/target/tests"
 
+########################################################################################################################
+# BUILD COMMANDS
+# -------------
+###
 function noir_bootstrap {
   cd aztec-packages/noir
   DENOISE=1 denoise ./bootstrap.sh
@@ -69,14 +74,19 @@ function nargo_dump {
 }
 export -f compile_and_execute nargo_dump
 
-# Compiles and executes all noir exexution success test programs to generate witness data.
+function build_noir_projects {
+  (cd aztec-packages/noir-projects/noir-protocol-circuits && yarn && yarn generate_variants && ../../noir/noir-repo/target/release/nargo dump)
+  (cd aztec-packages/noir-projects/noir-contracts && ../../noir/noir-repo/target/release/nargo dump)
+}
+
+# Compiles and executes all noir execution_success test programs to generate witness data.
+# Uses nargo to dump out all noir_test_success test bytecode.
+# Uses nargo to dump out all protocol circuits test bytecode.
+# Uses nargo to dump out all aztec contracts test bytecode.
 function build_fixtures {
   parallel --tag -k --line-buffer --halt now,fail=1 compile_and_execute ::: $test_programs_dir/$exclude_pattern
   parallel --tag -k --line-buffer --halt now,fail=1 nargo_dump ::: $test_tests_dir/$exclude_pattern
-}
-
-function build_noir_protocol_circuits {
-  (cd aztec-packages/noir-projects/noir-protocol-circuits && yarn && yarn generate_variants && ../../noir/noir-repo/target/release/nargo dump)
+  build_noir_projects
 }
 
 # Builds zb, tests and lib.
@@ -86,6 +96,12 @@ function build {
   zig build -Doptimize=${1:-ReleaseFast}
 }
 
+########################################################################################################################
+# TEST COMMANDS
+# -------------
+# Outputs different catagories of test commands to be piped into parallel.
+# Follows the structure as expected by ci3's run_test_cmd script.
+###
 function test_cmds_unit {
   zig build list-tests | grep -v "bench" | grep "${1:-}" | awk '{print "xxx ./zig-out/bin/tests \"" $0 "\""}'
 }
@@ -104,57 +120,43 @@ function test_cmds_programs {
   } | grep "${1:-}"
 }
 
-function proto_test {
-    ./zig-out/bin/zb cvm run --bytecode_path=$test_protocol_dir/$1 || [[ "$1" =~ \.fail\. ]]
-}
-
-function run_program_test {
-    ./zig-out/bin/zb cvm run --bytecode_path=$test_tests_dir/$1/target/tests/$2 "${@:3}" || [[ "$2" =~ \.fail\. ]]
-}
-export -f proto_test run_program_test
-
 function test_cmds_protocol_circuits {
   for path in $test_protocol_dir/*.cvm_bytecode; do
     echo "xxx proto_test $(basename $path)"
   done | grep "${1:-}"
 }
 
-# Runs tests with debug build.
-# ./bootstrap.sh test
-# ./bootstrap.sh test unit [filter]
-# ./bootstrap.sh test programs [filter]
-function test {
-  # Build debug version.
-  # build Debug
-
-  # Pipe through cat to disable status bar mode.
+function test_cmds_contracts {
   {
-    if [ -z "${1:-}" ]; then
-      test_cmds_unit
-      test_cmds_programs
-      test_cmds_protocol_circuits
-    else
-      "test_cmds_$1" ${2:-}
-    fi
-  } | parallelise ${JOBS:-} | cat
+    for path in $test_tests_dir/$exclude_pattern; do
+      for test_path in $path/target/tests/*.cvm_bytecode; do
+        echo "xxx run_program_test $(basename $path) $(basename $test_path)"
+      done
+    done
+  } | grep "${1:-}"
 }
 
-function test_programs_release {
-  # Build release version.
-  build ReleaseFast
-  # Pipe through cat to disable status bar mode.
-  test_cmds_programs | parallelise ${1:-} | cat
-}
-
-function bench_cmds {
+function test_cmds_bench {
   zig build list-tests | grep "bench" | grep "${1:-}" | awk '{print "xxx:CPUS=32 ./zig-out/bin/tests \"" $0 "\""}'
 }
 
-function bench {
-  # Build release version.
-  build ReleaseFast
-  # Pipe through cat to disable status bar mode.
-  bench_cmds ${1:-} | NO_HEADER=1 VERBOSE=1 STRICT_SCHEDULING=1 parallelise | cat
+########################################################################################################################
+# TEST FUNCTIONS
+# --------------
+# These are the actual test command functions.
+# test_cmds_* functions output variations of calls to these commands.
+# The test function then pipes them into parallel.
+# You can also execute them directly via bootstrap.sh e.g:
+#   ./bootstrap.sh proto_test blob__tests__test_full_blobs.pass.cvm_bytecode
+#   ./bootstrap.sh run_program_test mock_oracle test_mock.pass.cvm_bytecode
+#   ./bootstrap.sh check_witness_parity bit_not
+###
+function proto_test {
+    ./zig-out/bin/zb cvm run --bytecode_path=$test_protocol_dir/$1 || [[ "$1" =~ \.fail\. ]]
+}
+
+function run_program_test {
+    ./zig-out/bin/zb cvm run --bytecode_path=$test_tests_dir/$1/target/tests/$2 "${@:3}" || [[ "$2" =~ \.fail\. ]]
 }
 
 function check_witness_parity {
@@ -173,10 +175,58 @@ function check_witness_parity_brillig {
   echo "Parity check passed for $1."
 }
 
-export -f check_witness_parity check_witness_parity_brillig
+export -f check_witness_parity check_witness_parity_brillig proto_test run_program_test
 
+########################################################################################################################
+# TEST ENTRYPOINT
+# ---------------
+# Runs tests with debug build.
+#   ./bootstrap.sh test
+#   ./bootstrap.sh test unit [filter]
+#   ./bootstrap.sh test programs [filter]
+#   ./bootstrap.sh test protocol_circuits [filter]
+#   ./bootstrap.sh test contracts [filter]
+###
+function test {
+  # Build debug version.
+  # build Debug
+
+  # Pipe through cat to disable status bar mode.
+  {
+    if [ -z "${1:-}" ]; then
+      test_cmds_unit
+      test_cmds_programs
+      test_cmds_protocol_circuits
+      # test_cmds_contracts
+    else
+      "test_cmds_$1" ${2:-}
+    fi
+  } | parallelise ${JOBS:-} | cat
+}
+
+########################################################################################################################
+# BENCHMARK ENTRYPOINT
+# --------------------
+# Performs a release build first.
+# Runs all benchmarks through the "strict scheduler".
+# This ensures dedicated cpu cores for each benchmark.
+#   ./bootstrap.sh bench [filter]
+###
+function bench {
+  # Build release version.
+  build ReleaseFast
+  # Pipe through cat to disable status bar mode.
+  test_cmds_bench ${1:-} | NO_HEADER=1 VERBOSE=1 STRICT_SCHEDULING=1 parallelise | cat
+}
+
+########################################################################################################################
+# MAIN COMMAND DISPATCH
+# --------------------
+# Default if no command given is to build everything.
+# Otherwise call the requested function and forward any arguments.
+###
 case "$cmd" in
-  ""|full)
+  "")
     (noir_bootstrap)
     (build_fixtures)
     build ${1:-}
