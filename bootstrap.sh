@@ -14,6 +14,7 @@ export CI_REDIS_AVAILABLE=0
 # This shouldn't really make a difference but without performance sucks.
 export MEMSUSPEND=0
 
+# With no redis for logs, we want to be sure to dump failure logs to terminal.
 export DUMP_FAIL=1
 
 # Noir test program exclusions.
@@ -92,8 +93,8 @@ function test_cmds_unit {
 function test_cmds_programs {
   {
     for path in $test_programs_dir/$exclude_pattern; do
-      echo "xxx check_parity $(basename $path)"
-      echo "xxx check_parity_brillig $(basename $path)"
+      echo "xxx check_witness_parity $(basename $path)"
+      echo "xxx check_witness_parity_brillig $(basename $path)"
     done
     for path in $test_tests_dir/$exclude_pattern; do
       for test_path in $path/target/tests/*.cvm_bytecode; do
@@ -125,6 +126,7 @@ function test_cmds_protocol_circuits {
 function test {
   # Build debug version.
   # build Debug
+
   # Pipe through cat to disable status bar mode.
   {
     if [ -z "${1:-}" ]; then
@@ -155,7 +157,7 @@ function bench {
   bench_cmds ${1:-} | NO_HEADER=1 VERBOSE=1 STRICT_SCHEDULING=1 parallelise | cat
 }
 
-function check_parity {
+function check_witness_parity {
   set -e
   local path=$test_programs_dir/$1
   ./zig-out/bin/zb cvm run $path --binary --witness_path=target/$1.zb.gz
@@ -163,7 +165,7 @@ function check_parity {
   echo "Parity check passed for $1."
 }
 
-function check_parity_brillig {
+function check_witness_parity_brillig {
   set -e
   local path=$test_programs_dir/$1
   ./zig-out/bin/zb cvm run $path --binary --artifact_path=target/$1.brillig.json --witness_path=target/$1.zb.brillig.gz
@@ -171,7 +173,7 @@ function check_parity_brillig {
   echo "Parity check passed for $1."
 }
 
-export -f check_parity check_parity_brillig
+export -f check_witness_parity check_witness_parity_brillig
 
 case "$cmd" in
   ""|full)
