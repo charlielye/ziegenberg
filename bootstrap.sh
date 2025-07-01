@@ -125,7 +125,7 @@ function test {
   # build Debug
   # Pipe through cat to disable status bar mode.
   {
-    if [ -z "$1" ]; then
+    if [ -z "${1:-}" ]; then
       test_cmds_unit
       test_cmds_programs
     else

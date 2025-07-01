@@ -61,6 +61,41 @@ pub const ForeignCallParam = union(enum) {
         }
         return new_slice;
     }
+
+    pub fn flatten(self: ForeignCallParam, allocator: std.mem.Allocator) ![]u256 {
+        const total_size: usize = self.countFlattenedElements();
+        const result = try allocator.alloc(u256, total_size);
+        var idx: usize = 0;
+        self.flattenParam(result, &idx);
+        return result;
+    }
+
+    fn countFlattenedElements(self: ForeignCallParam) usize {
+        switch (self) {
+            .Single => return 1,
+            .Array => |arr| {
+                var count: usize = 0;
+                for (arr) |elem| {
+                    count += elem.countFlattenedElements();
+                }
+                return count;
+            },
+        }
+    }
+
+    fn flattenParam(self: ForeignCallParam, out: []u256, idx: *usize) void {
+        switch (self) {
+            .Single => |val| {
+                out[idx.*] = val;
+                idx.* += 1;
+            },
+            .Array => |arr| {
+                for (arr) |elem| {
+                    flattenParam(elem, out, idx);
+                }
+            },
+        }
+    }
 };
 
 pub fn handleForeignCall(allocator: std.mem.Allocator, mem: *Memory, fc: *const io.ForeignCall) !void {
@@ -132,47 +167,6 @@ pub fn marshalInput(
             input.* = if (p.child == ForeignCallParam) param.Array else convertSlice(p.child, allocator, param.Array);
         },
         else => unreachable,
-    }
-}
-
-fn countFlattenedElements(param: ForeignCallParam) usize {
-    switch (param) {
-        .Single => return 1,
-        .Array => |arr| {
-            var count: usize = 0;
-            for (arr) |elem| {
-                count += countFlattenedElements(elem);
-            }
-            return count;
-        },
-    }
-}
-
-fn flattenToU256Array(allocator: std.mem.Allocator, params: []const ForeignCallParam) ![]u256 {
-    var total_size: usize = 0;
-    for (params) |param| {
-        total_size += countFlattenedElements(param);
-    }
-
-    const result = try allocator.alloc(u256, total_size);
-    var idx: usize = 0;
-    for (params) |param| {
-        flattenParam(param, result, &idx);
-    }
-    return result;
-}
-
-fn flattenParam(param: ForeignCallParam, out: []u256, idx: *usize) void {
-    switch (param) {
-        .Single => |val| {
-            out[idx.*] = val;
-            idx.* += 1;
-        },
-        .Array => |arr| {
-            for (arr) |elem| {
-                flattenParam(elem, out, idx);
-            }
-        },
     }
 }
 
@@ -249,7 +243,7 @@ pub fn marshalForeignCallParam(
                             const arr_type = value_type.Array;
                             if (hasNestedArrays(arr_type.value_types)) {
                                 // Need to reconstruct from flattened array
-                                const flattened = flattenToU256Array(arena.allocator(), &[_]ForeignCallParam{fcp}) catch unreachable;
+                                const flattened = fcp.flatten(arena.allocator()) catch unreachable;
                                 var values_idx: usize = 0;
                                 writeSliceOfValuesToMemory(mem, dst_idx, flattened, &values_idx, &value_type);
                             } else {
@@ -276,7 +270,7 @@ pub fn marshalForeignCallParam(
                         if (value_type == .Vector) {
                             const vec_type = value_type.Vector;
                             if (hasNestedArrays(vec_type.value_types)) {
-                                const flattened = flattenToU256Array(arena.allocator(), &[_]ForeignCallParam{fcp}) catch unreachable;
+                                const flattened = fcp.flatten(arena.allocator()) catch unreachable;
                                 var values_idx: usize = 0;
                                 writeSliceOfValuesToMemory(mem, dst_idx, flattened, &values_idx, &value_type);
                             } else {

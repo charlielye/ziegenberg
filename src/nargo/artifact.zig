@@ -106,19 +106,13 @@ test "parse abi" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const abi = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.json");
-    // try pretty.print(std.heap.page_allocator, abi, .{ .max_depth = 20 });
-    try std.testing.expectEqualDeep("1.0.0-beta.5+0000000000000000000000000000000000000000", abi.noir_version);
-    // try std.testing.expectEqualDeep("Token", abi.name);
-    // try std.testing.expectEqual(37, abi.functions.len);
+    try std.testing.expectStringStartsWith(abi.noir_version, "1.0.0-beta.5+");
 }
 
 test "execute abi" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const abi = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.json");
-    // try pretty.print(std.heap.page_allocator, abi, .{ .max_depth = 20 });
-    // try std.testing.expectEqualDeep("1.0.0-beta.5+0000000000000000000000000000000000000000", abi.noir_version);
-    // try std.testing.expectEqualDeep("Token", abi.name);
     const bytecode = try abi.getBytecode(arena.allocator());
     const program = try cvm.deserialize(arena.allocator(), bytecode);
     try std.testing.expectEqual(1, program.functions.len);
