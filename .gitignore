@@ -4,3 +4,4 @@ perf.*
 *.log
 data
 joblog.txt
+scratch

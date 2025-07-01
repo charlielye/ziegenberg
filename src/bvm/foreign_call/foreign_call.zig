@@ -135,14 +135,107 @@ pub fn marshalInput(
     }
 }
 
+fn countFlattenedElements(param: ForeignCallParam) usize {
+    switch (param) {
+        .Single => return 1,
+        .Array => |arr| {
+            var count: usize = 0;
+            for (arr) |elem| {
+                count += countFlattenedElements(elem);
+            }
+            return count;
+        },
+    }
+}
+
+fn flattenToU256Array(allocator: std.mem.Allocator, params: []const ForeignCallParam) ![]u256 {
+    var total_size: usize = 0;
+    for (params) |param| {
+        total_size += countFlattenedElements(param);
+    }
+
+    const result = try allocator.alloc(u256, total_size);
+    var idx: usize = 0;
+    for (params) |param| {
+        flattenParam(param, result, &idx);
+    }
+    return result;
+}
+
+fn flattenParam(param: ForeignCallParam, out: []u256, idx: *usize) void {
+    switch (param) {
+        .Single => |val| {
+            out[idx.*] = val;
+            idx.* += 1;
+        },
+        .Array => |arr| {
+            for (arr) |elem| {
+                flattenParam(elem, out, idx);
+            }
+        },
+    }
+}
+
+fn hasNestedArrays(types: []const io.HeapValueType) bool {
+    for (types) |t| {
+        switch (t) {
+            .Array, .Vector => return true,
+            .Simple => {},
+        }
+    }
+    return false;
+}
+
+fn writeSliceOfValuesToMemory(
+    mem: *Memory,
+    destination: usize,
+    values: []const u256,
+    values_idx: *usize,
+    value_type: *const io.HeapValueType,
+) void {
+    switch (value_type.*) {
+        .Simple => {
+            mem.setSlotAtIndex(destination, values[values_idx.*]);
+            values_idx.* += 1;
+        },
+        .Array => |arr| {
+            var current_pointer = destination;
+            for (0..arr.size) |i| {
+                const elem_type = &arr.value_types[i % arr.value_types.len];
+                switch (elem_type.*) {
+                    .Simple => {
+                        mem.setSlotAtIndex(current_pointer, values[values_idx.*]);
+                        values_idx.* += 1;
+                        current_pointer += 1;
+                    },
+                    .Array, .Vector => {
+                        // Read pointer from memory and skip reference count
+                        const nested_ptr: usize = @intCast(mem.getSlotAtIndex(current_pointer));
+                        const nested_dest = nested_ptr + 1; // Skip reference count
+                        writeSliceOfValuesToMemory(mem, nested_dest, values, values_idx, elem_type);
+                        current_pointer += 1;
+                    },
+                }
+            }
+        },
+        .Vector => {
+            std.debug.panic("Vectors in nested types not yet supported", .{});
+        },
+    }
+}
+
 pub fn marshalForeignCallParam(
     output: []ForeignCallParam,
     mem: *Memory,
     destination: []io.ValueOrArray,
+    destination_value_types: []io.HeapValueType,
 ) void {
-    for (output, destination) |fcp, voa| {
-        std.debug.print("Marshal output fcp: {any}\n", .{fcp});
-        std.debug.print("Marshal destination: {any}\n", .{voa});
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    for (output, destination, destination_value_types) |fcp, voa, value_type| {
+        // std.debug.print("Marshal output fcp: {any}\n", .{fcp});
+        // std.debug.print("Marshal destination: {any}\n", .{voa});
         switch (fcp) {
             .Single => mem.setSlot(voa.MemoryAddress, fcp.Single),
             .Array => {
@@ -150,17 +243,50 @@ pub fn marshalForeignCallParam(
                     .HeapArray => {
                         const arr = voa.HeapArray;
                         const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
-                        for (0..fcp.Array.len) |i| {
-                            std.debug.print("writing {} to {}\n", .{ fcp.Array[i].Single, dst_idx + i });
-                            mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+
+                        // Check if we need to reconstruct nested structure
+                        if (value_type == .Array) {
+                            const arr_type = value_type.Array;
+                            if (hasNestedArrays(arr_type.value_types)) {
+                                // Need to reconstruct from flattened array
+                                const flattened = flattenToU256Array(arena.allocator(), &[_]ForeignCallParam{fcp}) catch unreachable;
+                                var values_idx: usize = 0;
+                                writeSliceOfValuesToMemory(mem, dst_idx, flattened, &values_idx, &value_type);
+                            } else {
+                                // Simple array - direct write
+                                for (0..fcp.Array.len) |i| {
+                                    // std.debug.print("writing {} to {}\n", .{ fcp.Array[i].Single, dst_idx + i });
+                                    mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                                }
+                            }
+                        } else {
+                            // No type info, assume simple array
+                            for (0..fcp.Array.len) |i| {
+                                // std.debug.print("writing {} to {}\n", .{ fcp.Array[i].Single, dst_idx + i });
+                                mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                            }
                         }
                     },
                     .HeapVector => {
-                        const arr = voa.HeapVector;
-                        const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
-                        mem.setSlot(arr.size, fcp.Array.len);
-                        for (0..fcp.Array.len) |i|
-                            mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                        const vec = voa.HeapVector;
+                        const dst_idx: usize = @intCast(mem.getSlot(vec.pointer));
+                        mem.setSlot(vec.size, fcp.Array.len);
+
+                        // Similar logic for vectors
+                        if (value_type == .Vector) {
+                            const vec_type = value_type.Vector;
+                            if (hasNestedArrays(vec_type.value_types)) {
+                                const flattened = flattenToU256Array(arena.allocator(), &[_]ForeignCallParam{fcp}) catch unreachable;
+                                var values_idx: usize = 0;
+                                writeSliceOfValuesToMemory(mem, dst_idx, flattened, &values_idx, &value_type);
+                            } else {
+                                for (0..fcp.Array.len) |i|
+                                    mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                            }
+                        } else {
+                            for (0..fcp.Array.len) |i|
+                                mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                        }
                     },
                     else => unreachable,
                 }
@@ -173,6 +299,7 @@ pub fn marshalOutput(
     output: anytype,
     mem: *Memory,
     destinations: []io.ValueOrArray,
+    destination_value_types: []io.HeapValueType,
 ) usize {
     const output_type = @TypeOf(output.*);
 
@@ -181,18 +308,8 @@ pub fn marshalOutput(
         mem.setSlot(destinations[0].MemoryAddress, output.*.to_int());
         return 1;
     } else if (output_type == []ForeignCallParam) {
-        marshalForeignCallParam(output.*, mem, destinations);
+        marshalForeignCallParam(output.*, mem, destinations, destination_value_types);
         return 1;
-        // return switch (output.*) {
-        //     .Single => marshalOutput(&output.*.Single, mem, destinations),
-        //     .Array => {
-        //         // return marshalOutput(&output.*.Array, mem, destinations);
-        //         var written: usize = 0;
-        //         for (output.*.Array) |*e|
-        //             written += marshalOutput(e, mem, destinations[written..]);
-        //         return written;
-        //     },
-        // };
     }
 
     const info = @typeInfo(output_type);
@@ -200,7 +317,7 @@ pub fn marshalOutput(
         .@"struct" => |s| {
             var i: usize = 0;
             inline for (s.fields) |field| {
-                i += marshalOutput(&@field(output, field.name), mem, destinations[i..]);
+                i += marshalOutput(&@field(output, field.name), mem, destinations[i..], destination_value_types[i..]);
             }
             return i;
         },
