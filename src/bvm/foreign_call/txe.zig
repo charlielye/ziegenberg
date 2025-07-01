@@ -186,9 +186,9 @@ pub const Txe = struct {
         std.debug.print("reset called!\n", .{});
     }
 
-    pub fn createAccount(self: *Txe) !CompleteAddress {
+    pub fn createAccount(self: *Txe, secret: F) !CompleteAddress {
         _ = self;
-        std.debug.print("createAccount called!\n", .{});
+        std.debug.print("createAccount called: {x}\n", .{secret});
         return .{
             .address = F.random(),
             .public_keys = .{

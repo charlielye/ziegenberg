@@ -231,8 +231,8 @@ pub fn marshalForeignCallParam(
     defer arena.deinit();
 
     for (output, destination, destination_value_types) |fcp, voa, value_type| {
-        std.debug.print("Marshal output fcp: {any}\n", .{fcp});
-        std.debug.print("Marshal destination: {any}\n", .{voa});
+        // std.debug.print("Marshal output fcp: {any}\n", .{fcp});
+        // std.debug.print("Marshal destination: {any}\n", .{voa});
         switch (fcp) {
             .Single => mem.setSlot(voa.MemoryAddress, fcp.Single),
             .Array => {
@@ -295,6 +295,51 @@ pub fn marshalForeignCallParam(
     }
 }
 
+fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]ForeignCallParam {
+    const T = @TypeOf(value);
+    const info = @typeInfo(T);
+
+    var result = std.ArrayList(ForeignCallParam).init(allocator);
+
+    // Check if this is a Field type first
+    if (T == F) {
+        try result.append(ForeignCallParam{ .Single = value.to_int() });
+        return result.toOwnedSlice();
+    }
+
+    switch (info) {
+        .@"struct" => |s| {
+            // Check if this struct has a to_int method (like Field types)
+            if (@hasDecl(T, "to_int")) {
+                try result.append(ForeignCallParam{ .Single = value.to_int() });
+            } else {
+                inline for (s.fields) |field| {
+                    const field_value = @field(value, field.name);
+                    const field_params = try structToForeignCallParams(allocator, field_value);
+                    try result.appendSlice(field_params);
+                }
+            }
+        },
+        .bool => {
+            try result.append(ForeignCallParam{ .Single = if (value) 1 else 0 });
+        },
+        .array => {
+            for (value) |elem| {
+                const elem_params = try structToForeignCallParams(allocator, elem);
+                try result.appendSlice(elem_params);
+            }
+        },
+        .int => {
+            try result.append(ForeignCallParam{ .Single = value });
+        },
+        else => {
+            @compileError("Unsupported type in structToForeignCallParams: " ++ @typeName(T));
+        },
+    }
+
+    return result.toOwnedSlice();
+}
+
 pub fn marshalOutput(
     output: anytype,
     mem: *Memory,
@@ -309,17 +354,19 @@ pub fn marshalOutput(
         return 1;
     } else if (output_type == []ForeignCallParam) {
         marshalForeignCallParam(output.*, mem, destinations, destination_value_types);
-        return 1;
+        return destinations.len;
     }
 
     const info = @typeInfo(output_type);
     switch (info) {
-        .@"struct" => |s| {
-            var i: usize = 0;
-            inline for (s.fields) |field| {
-                i += marshalOutput(&@field(output, field.name), mem, destinations[i..], destination_value_types[i..]);
-            }
-            return i;
+        .@"struct" => {
+            // Structs need to be flattened into ForeignCallParams for marshaling
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+
+            const flattened = structToForeignCallParams(arena.allocator(), output.*) catch unreachable;
+            marshalForeignCallParam(flattened, mem, destinations, destination_value_types);
+            return destinations.len;
         },
         .array => |arr_info| {
             std.debug.assert(destinations[0] == .HeapArray);
