@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
         const list_tests = b.addTest(.{
             .name = "list-tests",
             .root_source_file = b.path("src/lib.zig"),
-            .test_runner = .{ .path = b.path("test_list.zig"), .mode = .simple },
+            .test_runner = .{ .path = b.path("src/test_list.zig"), .mode = .simple },
             .target = target,
             .optimize = optimize,
         });
@@ -91,7 +91,7 @@ pub fn build(b: *std.Build) void {
         const lib_unit_tests = b.addTest(.{
             .name = "tests",
             .root_source_file = b.path("src/lib.zig"),
-            .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
+            .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
             .target = target,
             .optimize = optimize,
             .filters = test_filters,

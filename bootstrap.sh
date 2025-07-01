@@ -10,6 +10,10 @@ cmd=${1:-}
 # We don't want that feature here, so we disable it.
 export CI_REDIS_AVAILABLE=0
 
+# Think something sus is going on with memsuspend on parallel.
+# This shouldn't really make a difference but without performance sucks.
+export MEMSUSPEND=0
+
 export DUMP_FAIL=1
 
 # Noir test program exclusions.
