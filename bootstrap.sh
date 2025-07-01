@@ -31,8 +31,6 @@ exclusions=(
   ram_blowup_regression
   # Tests that require inputs?
   signed_double_negation
-  # TODO!
-  # regression_4561
 )
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 
@@ -128,6 +126,7 @@ function test {
     if [ -z "${1:-}" ]; then
       test_cmds_unit
       test_cmds_programs
+      test_cmds_protocol_circuits
     else
       "test_cmds_$1" ${2:-}
     fi

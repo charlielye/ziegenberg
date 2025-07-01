@@ -96,6 +96,9 @@ pub const ForeignCallParam = union(enum) {
             },
         }
     }
+
+    // pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+    // }
 };
 
 pub fn handleForeignCall(allocator: std.mem.Allocator, mem: *Memory, fc: *const io.ForeignCall) !void {
@@ -228,8 +231,8 @@ pub fn marshalForeignCallParam(
     defer arena.deinit();
 
     for (output, destination, destination_value_types) |fcp, voa, value_type| {
-        // std.debug.print("Marshal output fcp: {any}\n", .{fcp});
-        // std.debug.print("Marshal destination: {any}\n", .{voa});
+        std.debug.print("Marshal output fcp: {any}\n", .{fcp});
+        std.debug.print("Marshal destination: {any}\n", .{voa});
         switch (fcp) {
             .Single => mem.setSlot(voa.MemoryAddress, fcp.Single),
             .Array => {
@@ -247,17 +250,18 @@ pub fn marshalForeignCallParam(
                                 var values_idx: usize = 0;
                                 writeSliceOfValuesToMemory(mem, dst_idx, flattened, &values_idx, &value_type);
                             } else {
-                                // Simple array - direct write
-                                for (0..fcp.Array.len) |i| {
-                                    // std.debug.print("writing {} to {}\n", .{ fcp.Array[i].Single, dst_idx + i });
-                                    mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                                // Simple array - but may still have nested structure in the ForeignCallParam
+                                // Need to flatten it first
+                                const flattened = fcp.flatten(arena.allocator()) catch unreachable;
+                                for (0..flattened.len) |i| {
+                                    mem.setSlotAtIndex(dst_idx + i, flattened[i]);
                                 }
                             }
                         } else {
-                            // No type info, assume simple array
-                            for (0..fcp.Array.len) |i| {
-                                // std.debug.print("writing {} to {}\n", .{ fcp.Array[i].Single, dst_idx + i });
-                                mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                            // No type info, need to flatten in case of nested structure
+                            const flattened = fcp.flatten(arena.allocator()) catch unreachable;
+                            for (0..flattened.len) |i| {
+                                mem.setSlotAtIndex(dst_idx + i, flattened[i]);
                             }
                         }
                     },
@@ -274,12 +278,14 @@ pub fn marshalForeignCallParam(
                                 var values_idx: usize = 0;
                                 writeSliceOfValuesToMemory(mem, dst_idx, flattened, &values_idx, &value_type);
                             } else {
-                                for (0..fcp.Array.len) |i|
-                                    mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                                const flattened = fcp.flatten(arena.allocator()) catch unreachable;
+                                for (0..flattened.len) |i|
+                                    mem.setSlotAtIndex(dst_idx + i, flattened[i]);
                             }
                         } else {
-                            for (0..fcp.Array.len) |i|
-                                mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                            const flattened = fcp.flatten(arena.allocator()) catch unreachable;
+                            for (0..flattened.len) |i|
+                                mem.setSlotAtIndex(dst_idx + i, flattened[i]);
                         }
                     },
                     else => unreachable,

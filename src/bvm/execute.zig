@@ -56,7 +56,7 @@ pub fn execute(options: ExecuteOptions) !void {
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
 pub const BrilligVm = struct {
-    const mem_size = 1024 * 1024;
+    const mem_size = 1024 * 1024 * 8;
     // const mem_size = 1024 * 1024 * 32;
     const jump_table = [_]*const fn (*BrilligVm, *BrilligOpcode) anyerror!void{
         &processBinaryFieldOp,

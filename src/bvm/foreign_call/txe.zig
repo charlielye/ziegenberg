@@ -95,7 +95,8 @@ pub const Txe = struct {
                 if (std.mem.eql(u8, call.name, fc.function) and
                     (call.params == null or foreign_call.ForeignCallParam.sliceEql(call.params.?, params)))
                 {
-                    std.debug.print("Calling mocked function: {s} with params: {any}\n", .{ fc.function, params });
+                    // std.debug.print("Calling mocked function: {s} with params: {any}\n", .{ fc.function, params });
+                    std.debug.print("Calling mocked function: {s}\n", .{fc.function});
                     std.debug.print("Destination value types: {any}\n", .{fc.destination_value_types});
                     call.last_called_params = try foreign_call.ForeignCallParam.sliceDeepCopy(params, self.allocator);
                     call.times_called += 1;
@@ -116,7 +117,7 @@ pub const Txe = struct {
 
         // Special case function handlers that can't be genericised.
         if (std.mem.eql(u8, "set_mock_returns", fc.function)) {
-            std.debug.print("Making foreign call to: set_mock_returns\n", .{});
+            std.debug.print("Making foreign call to: set_mock_returns with params: {any}\n", .{params[1..]});
             const id: usize = @intCast(params[0].Single);
             self.mock_calls.items[id].?.result = try foreign_call.ForeignCallParam.sliceDeepCopy(params[1..], self.allocator);
             return;
