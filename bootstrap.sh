@@ -24,15 +24,15 @@ exclusions=(
   workspace*
   # Requires unstable features.
   regression_7323
+  ski_calculus
   # Pure brillig doesn't pass even in nargo.
   reference_counts_*
   # Debug build blows up ram.
   ram_blowup_regression
-
-  # TODO!
-  regression_4561
+  # Tests that require inputs?
   signed_double_negation
-  ski_calculus
+  # TODO!
+  # regression_4561
 )
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 
@@ -62,7 +62,6 @@ function compile_and_execute {
 function nargo_dump {
   export RAYON_NUM_THREADS=1
   cd $1
-  local name=$(basename $1)
   ../../../target/release/nargo dump
 }
 export -f compile_and_execute nargo_dump
@@ -107,7 +106,7 @@ function proto_test {
 }
 
 function run_program_test {
-    ./zig-out/bin/zb cvm run --bytecode_path=$test_tests_dir/$1/target/tests/$2 || [[ "$2" =~ \.fail\. ]]
+    ./zig-out/bin/zb cvm run --bytecode_path=$test_tests_dir/$1/target/tests/$2 "${@:3}" || [[ "$2" =~ \.fail\. ]]
 }
 export -f proto_test run_program_test
 

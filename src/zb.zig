@@ -63,7 +63,7 @@ pub fn main() !void {
         try run_cmd.addArg(Arg.singleValueOption("artifact_path", 'a', "Path to file containing nargo json artifact."));
         try run_cmd.addArg(Arg.singleValueOption("witness_path", 'w', "Path to to write output witness data."));
         try run_cmd.addArg(Arg.singleValueOption("bytecode_path", 'b', "Path to file containing raw bytecode."));
-        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing raw calldata."));
+        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to toml file containing calldata."));
         try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
         try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
         try run_cmd.addArg(Arg.booleanOption("binary", 'b', "Output the witness as binary."));
@@ -189,13 +189,13 @@ fn handleCvm(matches: ArgMatches) !void {
         const artifact_path = cmd_matches.getSingleValue("artifact_path");
         const witness_path = cmd_matches.getSingleValue("witness_path");
         const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
-        // const calldata_path = cmd_matches.getSingleValue("calldata_path");
+        const calldata_path = cmd_matches.getSingleValue("calldata_path");
         cvmExecute(.{
             .project_path = project_path,
             .artifact_path = artifact_path,
             .witness_path = witness_path,
             .bytecode_path = bytecode_path,
-            // .calldata_path = calldata_path,
+            .calldata_path = calldata_path,
             // .show_stats = cmd_matches.containsArg("stats"),
             .show_trace = cmd_matches.containsArg("trace"),
             .binary = cmd_matches.containsArg("binary"),

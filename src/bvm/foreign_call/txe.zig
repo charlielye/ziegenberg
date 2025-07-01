@@ -96,6 +96,7 @@ pub const Txe = struct {
                     (call.params == null or foreign_call.ForeignCallParam.sliceEql(call.params.?, params)))
                 {
                     std.debug.print("Calling mocked function: {s} with params: {any}\n", .{ fc.function, params });
+                    std.debug.print("Destination value types: {any}\n", .{fc.destination_value_types});
                     call.last_called_params = try foreign_call.ForeignCallParam.sliceDeepCopy(params, self.allocator);
                     call.times_called += 1;
                     // _ = foreign_call.marshalOutput(&call.result, mem, fc.destinations);

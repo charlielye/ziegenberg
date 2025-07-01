@@ -9,7 +9,7 @@
       "args": [
         "cvm",
         "run",
-        "--bytecode_path=aztec-packages/noir-projects/noir-protocol-circuits/target/tests/block_root__block_root_rollup_inputs__tests__correct_block_root_rollup_output.pass.cvm_bytecode"
+        "--bytecode_path=aztec-packages/noir/noir-repo/test_programs/noir_test_success/regression_4561/target/tests/test_simple_nested_return.pass.cvm_bytecode"
       ],
       "cwd": "${workspaceFolder}",
       "stopOnEntry": false,

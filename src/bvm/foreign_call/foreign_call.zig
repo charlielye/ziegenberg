@@ -150,19 +150,15 @@ pub fn marshalForeignCallParam(
                     .HeapArray => {
                         const arr = voa.HeapArray;
                         const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
-                        // TODO: This will break if the array element is anything other than int.
-                        for (0..arr.size) |i|
+                        for (0..fcp.Array.len) |i| {
+                            std.debug.print("writing {} to {}\n", .{ fcp.Array[i].Single, dst_idx + i });
                             mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
+                        }
                     },
                     .HeapVector => {
                         const arr = voa.HeapVector;
                         const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
-                        // const size_idx: usize = @intCast(mem.getSlot(arr.size));
                         mem.setSlot(arr.size, fcp.Array.len);
-                        // std.debug.print("{}\n", .{(arr.size)});
-                        // std.debug.print("{}\n", .{mem.getSlot(arr.size)});
-                        // const size: usize = @intCast(norm(mem.getSlot(arr.size)));
-                        // TODO: This will break if the array element is anything other than int.
                         for (0..fcp.Array.len) |i|
                             mem.setSlotAtIndex(dst_idx + i, fcp.Array[i].Single);
                     },
