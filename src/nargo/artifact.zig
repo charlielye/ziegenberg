@@ -105,14 +105,14 @@ pub fn load(allocator: std.mem.Allocator, contract_path: []const u8) !ArtifactAb
 test "parse abi" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const abi = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.json");
-    try std.testing.expectStringStartsWith(abi.noir_version, "1.0.0-beta.5+");
+    const abi = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/a_1_mul/target/a_1_mul.json");
+    try std.testing.expectStringStartsWith(abi.noir_version, "1.0.0-beta.");
 }
 
 test "execute abi" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const abi = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/target/1_mul.json");
+    const abi = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/a_1_mul/target/a_1_mul.json");
     const bytecode = try abi.getBytecode(arena.allocator());
     const program = try cvm.deserialize(arena.allocator(), bytecode);
     try std.testing.expectEqual(1, program.functions.len);

@@ -14,7 +14,7 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !ProverToml {
 test "parse" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const prover_toml = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/Prover.toml");
+    const prover_toml = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/a_1_mul/Prover.toml");
 
     try std.testing.expectEqualDeep("3", prover_toml.get("x").?.string);
     try std.testing.expectEqualDeep("4", prover_toml.get("y").?.string);

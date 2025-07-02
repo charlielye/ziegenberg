@@ -31,9 +31,21 @@ pub const ExecuteOptions = struct {
     binary: bool = false,
 };
 
-fn anyIntToU256(width: u32, value: i256) u256 {
-    const mask = (@as(u256, 1) << @truncate(width)) - 1;
-    return @as(u256, @bitCast(value)) & mask;
+fn anyIntToU256(width: ?u32, value: i256) u256 {
+    if (width) |w| {
+        const mask = (@as(u256, 1) << @truncate(w)) - 1;
+        return @as(u256, @bitCast(value)) & mask;
+    }
+    return @bitCast(value);
+}
+
+fn parseNumberString(str: []const u8, width: ?u32) !u256 {
+    return if (std.mem.startsWith(u8, str, "0x"))
+        try std.fmt.parseInt(u256, str[2..], 16)
+    else if (std.mem.startsWith(u8, str, "-0x"))
+        anyIntToU256(width, -try std.fmt.parseInt(i256, str[3..], 16))
+    else
+        anyIntToU256(width, try std.fmt.parseInt(i256, str, 10));
 }
 
 // Example parameter:
@@ -45,10 +57,7 @@ fn loadCalldata(calldata_array: *std.ArrayList(Fr), param_type: nargo_artifact.T
             const as_int: u256 = switch (value) {
                 .boolean => if (value.boolean) 1 else 0,
                 .integer => if (value.integer != 0) 1 else 0,
-                .string => if (std.mem.startsWith(u8, value.string, "0x"))
-                    try std.fmt.parseInt(u1, value.string[2..], 16)
-                else
-                    try std.fmt.parseInt(u1, value.string, 10),
+                .string => if (try parseNumberString(value.string, null) == 0) 0 else 1,
                 else => unreachable,
             };
             try calldata_array.append(Fr.from_int(as_int));
@@ -56,21 +65,15 @@ fn loadCalldata(calldata_array: *std.ArrayList(Fr), param_type: nargo_artifact.T
         .field => {
             const as_int: u256 = switch (value) {
                 .integer => @intCast(value.integer),
-                .string => if (std.mem.startsWith(u8, value.string, "0x"))
-                    try std.fmt.parseInt(u256, value.string[2..], 16)
-                else
-                    @bitCast(try std.fmt.parseInt(i256, value.string, 10)),
+                .string => try parseNumberString(value.string, null),
                 else => unreachable,
             };
             try calldata_array.append(Fr.from_int(as_int));
         },
         .integer => {
             const as_int: u256 = switch (value) {
-                .integer => anyIntToU256(param_type.width.?, value.integer),
-                .string => if (std.mem.startsWith(u8, value.string, "0x"))
-                    try std.fmt.parseInt(u256, value.string[2..], 16)
-                else
-                    anyIntToU256(param_type.width.?, try std.fmt.parseInt(i256, value.string, 10)),
+                .integer => anyIntToU256(param_type.width, value.integer),
+                .string => try parseNumberString(value.string, param_type.width),
                 else => unreachable,
             };
             try calldata_array.append(Fr.from_int(as_int));

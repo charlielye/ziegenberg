@@ -48,23 +48,53 @@ pub fn structDispatcher(
                 const Args = std.meta.ArgsTuple(@TypeOf(field));
                 var args: Args = undefined;
                 // Check that the number of parameters matches the number of arguments in the foreign call.
-                if (args.len != params.len + 1) {
-                    std.debug.print("Parameter count mismatch for {s}: Recieved {} expected {}.\n", .{
+                // For functions with optional parameters, each optional is represented as 2 values
+                var expected_param_count: usize = 0;
+                inline for (field_info.@"fn".params[1..]) |param_info| {
+                    if (@typeInfo(param_info.type.?) == .optional) {
+                        expected_param_count += 2; // Optional params are [is_some, value]
+                    } else {
+                        expected_param_count += 1;
+                    }
+                }
+
+                if (params.len != expected_param_count) {
+                    std.debug.print("Parameter count mismatch for {s}: Received {} expected {}.\n", .{
                         decl.name,
                         params.len,
-                        args.len - 1,
+                        expected_param_count,
                     });
-                    return error.ForeignCallParameterCountMistmatch;
+                    return error.ForeignCallParameterCountMismatch;
                 }
                 // First arg should be this Txe struct.
                 args[0] = target;
+
+                // Marshal each parameter
+                var param_idx: usize = 0;
                 inline for (1..args.len) |i| {
-                    std.debug.print("Marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[i - 1] });
-                    // Marshal the ForeignCallParam into the argument type.
-                    foreign_call.marshalInput(&args[i], allocator, params[i - 1]) catch |err| {
-                        std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[i - 1] });
-                        return err;
-                    };
+                    const param_type = field_info.@"fn".params[i].type.?;
+                    if (@typeInfo(param_type) == .optional) {
+                        // Optional parameter - create array from two consecutive params
+                        var opt_array = [_]foreign_call.ForeignCallParam{
+                            params[param_idx], // is_some
+                            params[param_idx + 1], // value
+                        };
+                        const opt_param = foreign_call.ForeignCallParam{ .Array = &opt_array };
+                        std.debug.print("Marshal into {s} arg {} (optional): {any}\n", .{ decl.name, i, opt_param });
+                        foreign_call.marshalInput(&args[i], allocator, opt_param) catch |err| {
+                            std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, opt_param });
+                            return err;
+                        };
+                        param_idx += 2;
+                    } else {
+                        std.debug.print("Marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
+                        // Marshal the ForeignCallParam into the argument type.
+                        foreign_call.marshalInput(&args[i], allocator, params[param_idx]) catch |err| {
+                            std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
+                            return err;
+                        };
+                        param_idx += 1;
+                    }
                 }
                 // Make the function call.
                 std.debug.print("Making foreign call to: {s}\n", .{decl.name});

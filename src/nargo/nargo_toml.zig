@@ -32,9 +32,9 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !NargoToml {
 test "parse" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const prover_toml = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/1_mul/Nargo.toml");
+    const prover_toml = try load(arena.allocator(), "./aztec-packages/noir/noir-repo/test_programs/execution_success/a_1_mul/Nargo.toml");
 
-    try std.testing.expectEqualDeep("1_mul", prover_toml.package.name);
+    try std.testing.expectEqualDeep("a_1_mul", prover_toml.package.name);
     try std.testing.expectEqualDeep("0.1.0", prover_toml.package.version);
     try std.testing.expectEqualDeep("bin", prover_toml.package.type);
 }

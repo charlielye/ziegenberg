@@ -163,6 +163,20 @@ pub fn marshalInput(
         },
         .int => input.* = @intCast(param.Single),
         .bool => input.* = param.Single == 1,
+        .optional => |opt| {
+            // Optionals are represented as [bool, value] in ForeignCallParam
+            std.debug.assert(param == .Array);
+            std.debug.assert(param.Array.len == 2);
+            const is_some = param.Array[0].Single == 1;
+            if (is_some) {
+                // Create the optional value
+                var value: opt.child = undefined;
+                try marshalInput(&value, allocator, param.Array[1]);
+                input.* = value;
+            } else {
+                input.* = null;
+            }
+        },
         // Slices
         .pointer => |p| {
             std.debug.assert(p.size == .slice);

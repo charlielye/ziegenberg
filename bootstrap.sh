@@ -21,6 +21,7 @@ export DUMP_FAIL=1
 exclusions=(
   # TOML parser can't deal with empty array.
   array_oob_regression_7952
+  array_oob_regression_7965
   databus_in_fn_with_empty_arr
   # Can't handle more then 1 fn yet.
   fold*

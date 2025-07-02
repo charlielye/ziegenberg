@@ -277,4 +277,8 @@ pub const Txe = struct {
         };
         return result;
     }
+    
+    pub fn getContractAddress(self: *Txe) !AztecAddress {
+        return self.contract_address;
+    }
 };
