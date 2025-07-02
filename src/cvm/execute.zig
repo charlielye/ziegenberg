@@ -17,7 +17,7 @@ const nargo_artifact = @import("../nargo/artifact.zig");
 const verify_signature = @import("../blackbox/ecdsa.zig").verify_signature;
 const toml = @import("toml");
 const msm = @import("../msm/naive.zig").msm;
-const Txe = @import("../bvm/foreign_call/txe.zig").Txe;
+const ForeignCallDispatcher = @import("../bvm/foreign_call/dispatcher.zig").Dispatcher;
 
 pub const ExecuteOptions = struct {
     // If null, the current working directory is used.
@@ -216,7 +216,7 @@ const CircuitVm = struct {
     program: *const io.Program,
     witnesses: WitnessMap,
     memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
-    fc_handler: Txe,
+    fc_handler: ForeignCallDispatcher,
 
     pub fn init(allocator: std.mem.Allocator, program: *const io.Program, calldata: []Fr) !CircuitVm {
         var witnesses = WitnessMap.init(allocator);
@@ -229,7 +229,7 @@ const CircuitVm = struct {
             .program = program,
             .witnesses = witnesses,
             .memory_solvers = std.AutoHashMap(u32, MemoryOpSolver).init(allocator),
-            .fc_handler = Txe.init(allocator),
+            .fc_handler = ForeignCallDispatcher.init(allocator),
         };
     }
 

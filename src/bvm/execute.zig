@@ -9,7 +9,7 @@ const blackbox = @import("../blackbox/blackbox.zig");
 const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
 // const handleForeignCall = @import("./foreign_call/foreign_call.zig").handleForeignCall;
 const Memory = @import("./memory.zig").Memory;
-const Txe = @import("./foreign_call/txe.zig").Txe;
+const ForeignCallDispatcher = @import("../bvm/foreign_call/dispatcher.zig").Dispatcher;
 
 pub const ExecuteOptions = struct {
     file_path: ?[]const u8 = null,
@@ -38,7 +38,7 @@ pub fn execute(options: ExecuteOptions) !void {
     }
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
-    var fc_handler = Txe.init(allocator);
+    var fc_handler = ForeignCallDispatcher.init(allocator);
     defer fc_handler.deinit();
 
     var t = try std.time.Timer.start();
@@ -94,9 +94,9 @@ pub const BrilligVm = struct {
     opcode_time: [@typeInfo(io.BrilligOpcode).@"union".fields.len]u64,
     time_taken: u64 = 0,
     // TODO: Hardcoded in for now. But this needs to be passed into each brillig vm instance.
-    fc_handler: *Txe,
+    fc_handler: *ForeignCallDispatcher,
 
-    pub fn init(allocator: std.mem.Allocator, calldata: []u256, fc_handler: *Txe) !BrilligVm {
+    pub fn init(allocator: std.mem.Allocator, calldata: []u256, fc_handler: *ForeignCallDispatcher) !BrilligVm {
         const vm = BrilligVm{
             .allocator = allocator,
             .mem = try Memory.init(allocator, mem_size),

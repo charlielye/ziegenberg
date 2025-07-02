@@ -7,7 +7,8 @@ const io = @import("../io.zig");
 /// Dispatch function for foreign calls.
 /// Uses comptime meta foo to marshal data in and out of vm memory, and call functions with the same name on self.
 /// Handler functions arguments and return types must match the layout as described by the foreign call.
-pub fn foreignCallStructDispatcher(
+/// The given allocator is used for transient data and is freed by the caller.
+pub fn structDispatcher(
     target: anytype,
     allocator: std.mem.Allocator,
     mem: *Memory,
@@ -15,8 +16,8 @@ pub fn foreignCallStructDispatcher(
     params: []foreign_call.ForeignCallParam,
 ) !bool {
     // Transient memory required only for this call.
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    // var arena = std.heap.ArenaAllocator.init(allocator);
+    // defer arena.deinit();
 
     // Get the type information of the target struct.
     const info = @typeInfo(@TypeOf(target.*)).@"struct";
@@ -53,7 +54,7 @@ pub fn foreignCallStructDispatcher(
                 inline for (1..args.len) |i| {
                     std.debug.print("Marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[i - 1] });
                     // Marshal the ForeignCallParam into the argument type.
-                    foreign_call.marshalInput(&args[i], arena.allocator(), params[i - 1]) catch |err| {
+                    foreign_call.marshalInput(&args[i], allocator, params[i - 1]) catch |err| {
                         std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[i - 1] });
                         return err;
                     };

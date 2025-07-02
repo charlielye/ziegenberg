@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/lib.zig"),
             .test_runner = .{ .path = b.path("src/test_list.zig"), .mode = .simple },
             .target = target,
-            .optimize = optimize,
+            .optimize = std.builtin.OptimizeMode.Debug,
         });
         list_tests.root_module.addImport("lmdb", lmdb.module("lmdb"));
         list_tests.root_module.addImport("toml", toml.module("zig-toml"));

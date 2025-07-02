@@ -3,7 +3,7 @@ const Memory = @import("../memory.zig").Memory;
 const foreign_call = @import("./foreign_call.zig");
 const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
-const foreignCallStructDispatcher = @import("./foreign_call_struct_dispatcher.zig").foreignCallStructDispatcher;
+const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
 
 const MockedCall = struct {
     /// The id of the mock, used to update or remove it
@@ -41,9 +41,11 @@ pub const Mocker = struct {
     /// Dispatch function for foreign calls.
     /// Uses comptime meta foo to marshal data in and out of vm memory, and call functions with the same name on self.
     /// Handler functions arguments and return types must match the layout as described by the foreign call.
+    /// The given allocator is used for transient data and is freed by the caller.
     /// Note the use of ForeignCallParam.sliceDeepCopy to copy data that needs to become long-lived into self.allocator.
     pub fn handleForeignCall(
         self: *Mocker,
+        allocator: std.mem.Allocator,
         mem: *Memory,
         fc: *const io.ForeignCall,
         params: []foreign_call.ForeignCallParam,
@@ -87,7 +89,7 @@ pub const Mocker = struct {
             return true;
         }
 
-        return try foreignCallStructDispatcher(self, self.allocator, mem, fc, params);
+        return try structDispatcher(self, allocator, mem, fc, params);
     }
 
     pub fn create_mock(

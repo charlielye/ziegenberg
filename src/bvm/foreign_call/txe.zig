@@ -3,8 +3,7 @@ const Memory = @import("../memory.zig").Memory;
 const foreign_call = @import("./foreign_call.zig");
 const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
-const Mocker = @import("./mocker.zig").Mocker;
-const foreignCallStructDispatcher = @import("./foreign_call_struct_dispatcher.zig").foreignCallStructDispatcher;
+const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
 
 const AztecAddress = F;
 
@@ -42,7 +41,6 @@ pub const Txe = struct {
     function_selector: F = F.zero,
     is_static_call: bool = false,
     nested_call_returndata: []F,
-    mocker: Mocker,
     //   private contractDataOracle: ContractDataOracle;
 
     pub fn init(allocator: std.mem.Allocator) Txe {
@@ -51,38 +49,21 @@ pub const Txe = struct {
             .contract_address = F.random(),
             .msg_sender = F.max,
             .nested_call_returndata = &[_]F{},
-            .mocker = Mocker.init(allocator),
         };
     }
 
-    pub fn deinit(self: *Txe) void {
-        self.mocker.deinit();
-    }
+    pub fn deinit(_: *Txe) void {}
 
     /// Dispatch function for foreign calls.
-    /// Uses comptime meta foo to marshal data in and out of vm memory, and call functions with the same name on self.
-    /// Handler functions arguments and return types must match the layout as described by the foreign call.
-    pub fn handleForeignCall(self: *Txe, mem: *Memory, fc: *const io.ForeignCall) !void {
-        // This arena allocator is for the transient memory needed for processing the call.
-        // In the actual call handlers you have access to self.allocator for longer lived data.
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-
-        // Extract from the VM memory, a slice of ForeignCallParam's, one per argument.
-        const params = try foreign_call.extractParams(arena.allocator(), mem, fc);
-
-        // First see if this is a mock setup call, or a mocked call.
-        if (try self.mocker.handleForeignCall(mem, fc, params)) {
-            return;
-        }
-
-        // Otherwise attempt to dispatch on ourself.
-        if (try foreignCallStructDispatcher(self, arena.allocator(), mem, fc, params)) {
-            return;
-        }
-
-        // We didn't find a matching function. Fallback on default foreign call handler.
-        try foreign_call.handleForeignCall(arena.allocator(), mem, fc, params);
+    /// The given allocator is used for transient data and is freed by the caller.
+    pub fn handleForeignCall(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        mem: *Memory,
+        fc: *const io.ForeignCall,
+        params: []foreign_call.ForeignCallParam,
+    ) !bool {
+        return try structDispatcher(self, allocator, mem, fc, params);
     }
 
     pub fn reset(_: *Txe) !void {
