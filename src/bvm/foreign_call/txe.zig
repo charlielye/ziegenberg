@@ -257,8 +257,6 @@ pub const Txe = struct {
         self: *Txe,
         block_number: ?u32,
         timestamp: ?u64,
-        side_effects_counter: u32,
-        is_static: bool,
     ) !PrivateContextInputs {
         const result = PrivateContextInputs{
             .tx_context = .{
@@ -273,9 +271,9 @@ pub const Txe = struct {
                 .msg_sender = self.msg_sender,
                 .contract_address = self.contract_address,
                 .function_selector = self.function_selector,
-                .is_static_call = is_static,
+                .is_static_call = false,
             },
-            .start_side_effect_counter = side_effects_counter,
+            .start_side_effect_counter = self.side_effect_counter,
         };
         return result;
     }
