@@ -48,7 +48,14 @@ pub fn structDispatcher(
                 const Args = std.meta.ArgsTuple(@TypeOf(field));
                 var args: Args = undefined;
                 // Check that the number of parameters matches the number of arguments in the foreign call.
-                std.debug.assert(args.len == params.len + 1);
+                if (args.len != params.len + 1) {
+                    std.debug.print("Parameter count mismatch for {s}: Recieved {} expected {}.\n", .{
+                        decl.name,
+                        params.len,
+                        args.len - 1,
+                    });
+                    return error.ForeignCallParameterCountMistmatch;
+                }
                 // First arg should be this Txe struct.
                 args[0] = target;
                 inline for (1..args.len) |i| {

@@ -49,8 +49,8 @@ export test_contracts_dir="aztec-packages/noir-projects/noir-contracts/target/te
 # -------------
 ###
 function noir_bootstrap {
-  cd aztec-packages/noir
-  DENOISE=1 denoise ./bootstrap.sh
+  cd aztec-packages/noir/noir-repo
+  cargo build --release --bin nargo
 }
 
 # Compiles and executes a given noir test program to generate witness data.
@@ -75,8 +75,14 @@ function nargo_dump {
 export -f compile_and_execute nargo_dump
 
 function build_noir_projects {
-  (cd aztec-packages/noir-projects/noir-protocol-circuits && yarn && yarn generate_variants && ../../noir/noir-repo/target/release/nargo dump)
-  (cd aztec-packages/noir-projects/noir-contracts && ../../noir/noir-repo/target/release/nargo dump)
+  (cd aztec-packages/noir-projects/noir-protocol-circuits &&
+    git clean -fdx &&
+    yarn &&
+    yarn generate_variants &&
+    ../../noir/noir-repo/target/release/nargo dump)
+  (cd aztec-packages/noir-projects/noir-contracts &&
+    git clean -fdx &&
+    ../../noir/noir-repo/target/release/nargo dump)
 }
 
 # Compiles and executes all noir execution_success test programs to generate witness data.
@@ -84,6 +90,8 @@ function build_noir_projects {
 # Uses nargo to dump out all protocol circuits test bytecode.
 # Uses nargo to dump out all aztec contracts test bytecode.
 function build_fixtures {
+  (cd $test_programs_dir && git clean -fdx)
+  (cd $test_tests_dir && git clean -fdx)
   parallel --tag -k --line-buffer --halt now,fail=1 compile_and_execute ::: $test_programs_dir/$exclude_pattern
   parallel --tag -k --line-buffer --halt now,fail=1 nargo_dump ::: $test_tests_dir/$exclude_pattern
   build_noir_projects
