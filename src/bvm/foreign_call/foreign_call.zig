@@ -101,14 +101,14 @@ pub const ForeignCallParam = union(enum) {
     // }
 };
 
-pub fn handleForeignCall(allocator: std.mem.Allocator, mem: *Memory, fc: *const io.ForeignCall) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const params = try extractParams(arena.allocator(), mem, fc);
-
+pub fn handleForeignCall(
+    allocator: std.mem.Allocator,
+    mem: *Memory,
+    fc: *const io.ForeignCall,
+    params: []ForeignCallParam,
+) !void {
     if (std.mem.eql(u8, "print", fc.function)) {
-        try handlePrint(arena.allocator(), mem, params);
+        try handlePrint(allocator, mem, params);
     } else if (std.mem.eql(u8, "noOp", fc.function)) {
         std.debug.print("noop\n", .{});
     } else {
