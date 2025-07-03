@@ -277,8 +277,139 @@ pub const Txe = struct {
         };
         return result;
     }
-    
+
     pub fn getContractAddress(self: *Txe) !AztecAddress {
         return self.contract_address;
     }
+
+    /// Executes an external/private function call on a target contract.
+    /// This is a port of the TypeScript logic, with some placeholders and comments.
+    pub fn callPrivateFunction(
+        self: *Txe,
+        target_contract_address: AztecAddress,
+        function_selector: FunctionSelector,
+        args_hash: F,
+        side_effect_counter: u32,
+        is_static_call: bool,
+    ) !void {
+        _ = args_hash;
+        _ = side_effect_counter;
+        _ = is_static_call;
+        // Log the function call (verbose)
+        // TODO: Implement debug function name lookup and logging
+        // std.debug.print("Executing external function {}@{} isStaticCall={}\n", .{function_selector, target_contract_address, is_static_call});
+
+        // Store current environment
+        const current_contract_address = self.contract_address;
+        const current_msg_sender = self.msg_sender;
+        const current_function_selector = self.function_selector;
+
+        // Set up new environment for the call
+        self.msg_sender = self.contract_address;
+        self.contract_address = target_contract_address;
+        self.function_selector = function_selector;
+
+        // TODO: Fetch the contract artifact for the target contract/function
+        // let artifact = await this.contractDataProvider.getFunctionArtifact(targetContractAddress, functionSelector);
+        // if (!artifact) { throw ... }
+
+        // TODO: Prepare initial witness for circuit execution
+        // let initialWitness = await this.getInitialWitness(...);
+
+        // TODO: Set up callback/oracle and timer
+        // let acvmCallback = new Oracle(this);
+        // let timer = new Timer();
+
+        // TODO: Execute the user circuit (simulate contract execution)
+        // let acirExecutionResult = await this.simulator.executeUserCircuit(...);
+
+        // TODO: Extract public inputs from execution result
+        // let publicInputs = extractPrivateCircuitPublicInputs(...);
+
+        // TODO: Log execution stats (duration, input/output size, etc.)
+
+        // Apply side effects
+        // let endSideEffectCounter = publicInputs.endSideEffectCounter;
+        // self.side_effect_counter = endSideEffectCounter + 1;
+
+        // TODO: Add private logs
+        // await this.addPrivateLogs(...);
+
+        // Restore previous environment
+        self.contract_address = current_contract_address;
+        self.msg_sender = current_msg_sender;
+        self.function_selector = current_function_selector;
+
+        // TODO: Return result (endSideEffectCounter, returnsHash)
+        // return { endSideEffectCounter, returnsHash: publicInputs.returnsHash };
+    }
+    // ) !void {
+    // this.logger.verbose(
+    //   `Executing external function ${await this.getDebugFunctionName(
+    //     targetContractAddress,
+    //     functionSelector,
+    //   )}@${targetContractAddress} isStaticCall=${isStaticCall}`,
+    // );
+
+    // // Store and modify env
+    // const currentContractAddress = this.contractAddress;
+    // const currentMessageSender = this.msgSender;
+    // const currentFunctionSelector = FunctionSelector.fromField(this.functionSelector.toField());
+    // this.setMsgSender(this.contractAddress);
+    // this.setContractAddress(targetContractAddress);
+    // this.setFunctionSelector(functionSelector);
+
+    // const artifact = await this.contractDataProvider.getFunctionArtifact(targetContractAddress, functionSelector);
+    // if (!artifact) {
+    //   throw new Error(`Artifact not found when calling private function. Contract address: ${targetContractAddress}.`);
+    // }
+
+    // const initialWitness = await this.getInitialWitness(artifact, argsHash, sideEffectCounter, isStaticCall);
+    // const acvmCallback = new Oracle(this);
+    // const timer = new Timer();
+    // const acirExecutionResult = await this.simulator
+    //   .executeUserCircuit(initialWitness, artifact, acvmCallback.toACIRCallback())
+    //   .catch((err: Error) => {
+    //     err.message = resolveAssertionMessageFromError(err, artifact);
+
+    //     const execError = new ExecutionError(
+    //       err.message,
+    //       {
+    //         contractAddress: targetContractAddress,
+    //         functionSelector,
+    //       },
+    //       extractCallStack(err, artifact.debug),
+    //       { cause: err },
+    //     );
+    //     this.logger.debug(`Error executing private function ${targetContractAddress}:${functionSelector}`);
+    //     throw createSimulationError(execError);
+    //   });
+    // const duration = timer.ms();
+    // const publicInputs = extractPrivateCircuitPublicInputs(artifact, acirExecutionResult.partialWitness);
+
+    // const initialWitnessSize = witnessMapToFields(initialWitness).length * Fr.SIZE_IN_BYTES;
+    // this.logger.debug(`Ran external function ${targetContractAddress.toString()}:${functionSelector}`, {
+    //   circuitName: 'app-circuit',
+    //   duration,
+    //   eventName: 'circuit-witness-generation',
+    //   inputSize: initialWitnessSize,
+    //   outputSize: publicInputs.toBuffer().length,
+    //   appCircuitName: 'noname',
+    // } satisfies CircuitWitnessGenerationStats);
+
+    // // Apply side effects
+    // const endSideEffectCounter = publicInputs.endSideEffectCounter;
+    // this.sideEffectCounter = endSideEffectCounter.toNumber() + 1;
+
+    // await this.addPrivateLogs(
+    //   targetContractAddress,
+    //   publicInputs.privateLogs.getActiveItems().map(privateLog => privateLog.log),
+    // );
+
+    // this.setContractAddress(currentContractAddress);
+    // this.setMsgSender(currentMessageSender);
+    // this.setFunctionSelector(currentFunctionSelector);
+
+    // return { endSideEffectCounter, returnsHash: publicInputs.returnsHash };
+    // }
 };
