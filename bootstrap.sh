@@ -85,7 +85,145 @@ function build_contracts {
   ../../noir/noir-repo/target/release/nargo dump
 }
 
-export -f compile_and_execute nargo_dump build_protocol_circuits build_contracts
+function generate_constants {
+  local ts_file="aztec-packages/yarn-project/constants/src/constants.gen.ts"
+  local zig_file="src/protocol/constants.gen.zig"
+
+  if [ ! -f "$ts_file" ]; then
+    echo "Error: TypeScript constants file not found at $ts_file"
+    return 1
+  fi
+
+  echo "Generating Zig constants from $ts_file to $zig_file..."
+
+  cat > "$zig_file" << 'EOF'
+// GENERATED FILE - DO NOT EDIT, RUN ./bootstrap.sh generate_constants
+// Auto-generated from aztec-packages/yarn-project/constants/src/constants.gen.ts
+
+EOF
+
+  # Parse the TypeScript file and convert to Zig
+  awk '
+  BEGIN {
+    print "const std = @import(\"std\");"
+    print ""
+    in_enum = 0
+    enum_name = ""
+    in_multiline = 0
+    current_const = ""
+  }
+
+  # Skip comments and empty lines
+  /^\/\*/ || /^\s*\/\// || /^\s*$/ { next }
+
+  # Handle enum start
+  /^export enum/ {
+    in_enum = 1
+    match($0, /export enum ([A-Za-z_][A-Za-z0-9_]*)/, arr)
+    enum_name = arr[1]
+    print "pub const " enum_name " = enum(u32) {"
+    next
+  }
+
+  # Handle enum end
+  in_enum && /^}/ {
+    print "};"
+    print ""
+    in_enum = 0
+    enum_name = ""
+    next
+  }
+
+  # Handle enum members
+  in_enum && /=/ {
+    gsub(/,\s*$/, "")  # Remove trailing comma
+    gsub(/^\s+/, "")   # Remove leading whitespace
+    match($0, /([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([0-9]+)/, arr)
+    if (arr[1] && arr[2]) {
+      # Convert to snake_case and make lowercase
+      name = arr[1]
+      gsub(/([a-z])([A-Z])/, "\\1_\\2", name)
+      name = tolower(name)
+      print "    " name " = " arr[2] ","
+    }
+    next
+  }
+
+  # Handle multiline constants (start)
+  /^export const.*=\s*$/ && !in_enum {
+    in_multiline = 1
+    gsub(/^export const /, "")
+    gsub(/\s*=\s*$/, "")
+    current_const = $0
+    next
+  }
+
+  # Handle multiline constants (continuation and end)
+  in_multiline {
+    gsub(/^\s+/, "")  # Remove leading whitespace
+    gsub(/;$/, "")    # Remove trailing semicolon
+    gsub(/n$/, "")    # Remove 'n' suffix from BigInt
+
+    if ($0 != "") {
+      # Determine the type based on the value
+      type = "u64"
+      if (match($0, /^[0-9]+$/)) {
+        # Regular number
+        num = strtonum($0)
+        if (num <= 255) type = "u8"
+        else if (num <= 65535) type = "u16"
+        else if (num <= 4294967295) type = "u32"
+        else type = "u256"  # For very large numbers, use u256
+      }
+
+      print "pub const " current_const ": " type " = " $0 ";"
+    }
+
+    in_multiline = 0
+    current_const = ""
+    next
+  }
+
+  # Handle regular single-line constants
+  /^export const.*=.*[^=]$/ && !in_enum && !in_multiline {
+    gsub(/^export const /, "")
+    gsub(/;$/, "")
+
+    # Split on = to get name and value
+    split($0, parts, " = ")
+    name = parts[1]
+    value = parts[2]
+
+    # Determine the type based on the value
+    type = "u64"
+    if (match(value, /^[0-9]+n$/)) {
+      # BigInt literal - remove the 'n' suffix
+      gsub(/n$/, "", value)
+      type = "u256"
+    } else if (match(value, /^[0-9]+$/)) {
+      # Regular number
+      num = strtonum(value)
+      if (num <= 255) type = "u8"
+      else if (num <= 65535) type = "u16"
+      else if (num <= 4294967295) type = "u32"
+      else type = "u64"
+    }
+
+    print "pub const " name ": " type " = " value ";"
+  }
+
+  END {
+    if (in_enum) {
+      print "};"
+      print ""
+    }
+  }
+  ' "$ts_file" >> "$zig_file"
+
+  echo "Generated $zig_file successfully!"
+}
+
+export -f compile_and_execute nargo_dump build_protocol_circuits build_contracts generate_constants
 
 # Compiles and executes all noir execution_success test programs to generate witness data.
 # Uses nargo to dump out all noir_test_success test bytecode.
