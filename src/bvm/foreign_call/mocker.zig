@@ -1,6 +1,7 @@
 const std = @import("std");
 const Memory = @import("../memory.zig").Memory;
 const foreign_call = @import("./foreign_call.zig");
+const ForeignCallParam = @import("./param.zig").ForeignCallParam;
 const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
 const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
@@ -11,11 +12,11 @@ const MockedCall = struct {
     /// The oracle it's mocking
     name: []const u8,
     /// Optionally match the parameters
-    params: ?[]foreign_call.ForeignCallParam,
+    params: ?[]ForeignCallParam,
     /// The parameters with which the mock was last called
-    last_called_params: ?[]foreign_call.ForeignCallParam,
+    last_called_params: ?[]ForeignCallParam,
     /// The result to return when this mock is called
-    result: []foreign_call.ForeignCallParam,
+    result: []ForeignCallParam,
     /// How many times should this mock be called before it is removed
     times_left: ?u64,
     /// How many times this mock was actually called
@@ -48,18 +49,18 @@ pub const Mocker = struct {
         allocator: std.mem.Allocator,
         mem: *Memory,
         fc: *const io.ForeignCall,
-        params: []foreign_call.ForeignCallParam,
+        params: []ForeignCallParam,
     ) !bool {
         // If the foreign call has been mocked, handle the mock and return.
         for (self.mock_calls.items) |*maybe_call| {
             if (maybe_call.*) |*call| {
                 if (std.mem.eql(u8, call.name, fc.function) and
-                    (call.params == null or foreign_call.ForeignCallParam.sliceEql(call.params.?, params)))
+                    (call.params == null or ForeignCallParam.sliceEql(call.params.?, params)))
                 {
                     // std.debug.print("Calling mocked function: {s} with params: {any}\n", .{ fc.function, params });
                     std.debug.print("Calling mocked function: {s}\n", .{fc.function});
                     std.debug.print("Destination value types: {any}\n", .{fc.destination_value_types});
-                    call.last_called_params = try foreign_call.ForeignCallParam.sliceDeepCopy(params, self.allocator);
+                    call.last_called_params = try ForeignCallParam.sliceDeepCopy(params, self.allocator);
                     call.times_called += 1;
                     // _ = foreign_call.marshalOutput(&call.result, mem, fc.destinations);
                     // for (call.result) |*r_param| {
@@ -80,12 +81,12 @@ pub const Mocker = struct {
         if (std.mem.eql(u8, "set_mock_returns", fc.function)) {
             std.debug.print("Making foreign call to: set_mock_returns with params: {any}\n", .{params[1..]});
             const id: usize = @intCast(params[0].Single);
-            self.mock_calls.items[id].?.result = try foreign_call.ForeignCallParam.sliceDeepCopy(params[1..], self.allocator);
+            self.mock_calls.items[id].?.result = try ForeignCallParam.sliceDeepCopy(params[1..], self.allocator);
             return true;
         } else if (std.mem.eql(u8, "set_mock_params", fc.function)) {
             std.debug.print("Making foreign call to: set_mock_params\n", .{});
             const id: usize = @intCast(params[0].Single);
-            self.mock_calls.items[id].?.params = try foreign_call.ForeignCallParam.sliceDeepCopy(params[1..], self.allocator);
+            self.mock_calls.items[id].?.params = try ForeignCallParam.sliceDeepCopy(params[1..], self.allocator);
             return true;
         }
 
@@ -102,7 +103,7 @@ pub const Mocker = struct {
             .name = try self.allocator.dupe(u8, oracle_name),
             .params = null,
             .last_called_params = null,
-            .result = &[_]foreign_call.ForeignCallParam{},
+            .result = &[_]ForeignCallParam{},
             .times_left = null,
             .times_called = 0,
         });
@@ -114,7 +115,7 @@ pub const Mocker = struct {
     pub fn get_mock_last_params(
         self: *Mocker,
         id: u64,
-    ) ![]foreign_call.ForeignCallParam {
+    ) ![]ForeignCallParam {
         // std.debug.print("set_mock_returns: {any}\n", .{params});
         return self.mock_calls.items[id].?.last_called_params orelse error.MockNeverCalled;
     }

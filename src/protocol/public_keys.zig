@@ -13,7 +13,7 @@ pub const PublicKeys = struct {
     master_outgoing_viewing_public_key: G1.Element,
     master_tagging_public_key: G1.Element,
 
-    pub fn hash(self: PublicKeys) !Fr {
+    pub fn hash(self: PublicKeys) Fr {
         // Hash all public keys together
         const inputs = [_]Fr{
             Fr.from_int(@intFromEnum(constants.GeneratorIndex.public_keys_hash)),

@@ -33,7 +33,8 @@ test "pseudo random" {
     var prng = std.Random.DefaultPrng.init(seed);
 
     const r = Fq.pseudo_random(&prng);
-    const e = Fq.from_int(0x2cef8853c20c6dd015caa2fce6db8d693477f953796702a08d948a82def8a568);
+    // std.debug.print("{x}", .{r});
+    const e = Fq.from_int(0x0f846fb294b27433630f88fee63177e02d21c7422b9b2d11348d928bbaac6e54);
 
     try std.testing.expectEqual(e, r);
 }

@@ -1,12 +1,13 @@
 const std = @import("std");
 const Memory = @import("../memory.zig").Memory;
 const foreign_call = @import("./foreign_call.zig");
+const ForeignCallParam = @import("./param.zig").ForeignCallParam;
 const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
 const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
+const proto = @import("../../protocol/package.zig");
 
 const EthAddress = F;
-const AztecAddress = F;
 
 const Point = struct {
     x: F,
@@ -19,18 +20,18 @@ const IvpkM = Point;
 const OvpkM = Point;
 const TpkM = Point;
 
-const PublicKeys = struct {
-    npk_m: NpkM,
-    ivpk_m: IvpkM,
-    ovpk_m: OvpkM,
-    tpk_m: TpkM,
-};
+// const PublicKeys = struct {
+//     npk_m: NpkM,
+//     ivpk_m: IvpkM,
+//     ovpk_m: OvpkM,
+//     tpk_m: TpkM,
+// };
 
 const FunctionSelector = u32;
 
 const CallContext = struct {
-    msg_sender: AztecAddress = F.zero,
-    contract_address: AztecAddress = F.zero,
+    msg_sender: proto.AztecAddress = proto.AztecAddress.zero,
+    contract_address: proto.AztecAddress = proto.AztecAddress.zero,
     function_selector: FunctionSelector = 0,
     is_static_call: bool = false,
 };
@@ -84,7 +85,7 @@ const GlobalVariables = struct {
     /// Recipient of block reward.
     coinbase: EthAddress = F.zero,
     /// Address to receive fees.
-    fee_recipient: AztecAddress = F.zero,
+    fee_recipient: proto.AztecAddress = proto.AztecAddress.zero,
     /// Global gas prices for this block.
     gas_fees: GasFees = GasFees{},
 };
@@ -155,8 +156,8 @@ pub const Txe = struct {
     chain_id: F = F.one,
     block_number: u32 = 0,
     side_effect_counter: u32 = 0,
-    contract_address: AztecAddress,
-    msg_sender: AztecAddress,
+    contract_address: proto.AztecAddress,
+    msg_sender: proto.AztecAddress,
     function_selector: u32 = 0,
     is_static_call: bool = false,
     nested_call_returndata: []F,
@@ -170,8 +171,8 @@ pub const Txe = struct {
     pub fn init(allocator: std.mem.Allocator) Txe {
         return .{
             .allocator = allocator,
-            .contract_address = F.random(),
-            .msg_sender = F.max,
+            .contract_address = proto.AztecAddress.random(),
+            .msg_sender = proto.AztecAddress.init(F.max),
             .nested_call_returndata = &[_]F{},
         };
     }
@@ -185,7 +186,7 @@ pub const Txe = struct {
         allocator: std.mem.Allocator,
         mem: *Memory,
         fc: *const io.ForeignCall,
-        params: []foreign_call.ForeignCallParam,
+        params: []ForeignCallParam,
     ) !bool {
         return try structDispatcher(self, allocator, mem, fc, params);
     }
@@ -195,27 +196,26 @@ pub const Txe = struct {
     }
 
     pub fn createAccount(self: *Txe, secret: F) !struct {
-        address: AztecAddress,
-        public_keys: PublicKeys,
+        address: proto.AztecAddress,
+        public_keys: proto.PublicKeys,
     } {
         _ = self;
         std.debug.print("createAccount called: {x}\n", .{secret});
+
+        // TODO: Why do we use the secret for both args here?
+        const complete_address = proto.CompleteAddress.fromSecretKeyAndPartialAddress(secret, secret);
+
         return .{
-            .address = F.random(),
-            .public_keys = .{
-                .npk_m = .{ .x = F.from_int(1), .y = F.from_int(2), .i = false },
-                .ivpk_m = .{ .x = F.from_int(3), .y = F.from_int(4), .i = false },
-                .ovpk_m = .{ .x = F.from_int(5), .y = F.from_int(6), .i = false },
-                .tpk_m = .{ .x = F.from_int(7), .y = F.from_int(8), .i = false },
-            },
+            .address = complete_address.aztec_address,
+            .public_keys = complete_address.public_keys,
         };
     }
 
-    pub fn getContractAddress(self: *Txe) !AztecAddress {
+    pub fn getContractAddress(self: *Txe) !proto.AztecAddress {
         return self.contract_address;
     }
 
-    pub fn setContractAddress(self: *Txe, address: AztecAddress) !void {
+    pub fn setContractAddress(self: *Txe, address: proto.AztecAddress) !void {
         self.contract_address = address;
         std.debug.print("setContractAddress: {x}\n", .{self.contract_address});
     }
@@ -225,7 +225,7 @@ pub const Txe = struct {
         deployer: F,
         contract_class_id: F,
         initialization_hash: F,
-        public_keys: PublicKeys,
+        public_keys: proto.PublicKeys,
     };
 
     pub fn deploy(
@@ -284,7 +284,7 @@ pub const Txe = struct {
     /// This is a port of the TypeScript logic, with some placeholders and comments.
     pub fn callPrivateFunction(
         self: *Txe,
-        target_contract_address: AztecAddress,
+        target_contract_address: proto.AztecAddress,
         function_selector: FunctionSelector,
         args_hash: F,
         side_effect_counter: u32,
@@ -341,73 +341,4 @@ pub const Txe = struct {
         // TODO: Return result (endSideEffectCounter, returnsHash)
         // return { endSideEffectCounter, returnsHash: publicInputs.returnsHash };
     }
-    // ) !void {
-    // this.logger.verbose(
-    //   `Executing external function ${await this.getDebugFunctionName(
-    //     targetContractAddress,
-    //     functionSelector,
-    //   )}@${targetContractAddress} isStaticCall=${isStaticCall}`,
-    // );
-
-    // // Store and modify env
-    // const currentContractAddress = this.contractAddress;
-    // const currentMessageSender = this.msgSender;
-    // const currentFunctionSelector = FunctionSelector.fromField(this.functionSelector.toField());
-    // this.setMsgSender(this.contractAddress);
-    // this.setContractAddress(targetContractAddress);
-    // this.setFunctionSelector(functionSelector);
-
-    // const artifact = await this.contractDataProvider.getFunctionArtifact(targetContractAddress, functionSelector);
-    // if (!artifact) {
-    //   throw new Error(`Artifact not found when calling private function. Contract address: ${targetContractAddress}.`);
-    // }
-
-    // const initialWitness = await this.getInitialWitness(artifact, argsHash, sideEffectCounter, isStaticCall);
-    // const acvmCallback = new Oracle(this);
-    // const timer = new Timer();
-    // const acirExecutionResult = await this.simulator
-    //   .executeUserCircuit(initialWitness, artifact, acvmCallback.toACIRCallback())
-    //   .catch((err: Error) => {
-    //     err.message = resolveAssertionMessageFromError(err, artifact);
-
-    //     const execError = new ExecutionError(
-    //       err.message,
-    //       {
-    //         contractAddress: targetContractAddress,
-    //         functionSelector,
-    //       },
-    //       extractCallStack(err, artifact.debug),
-    //       { cause: err },
-    //     );
-    //     this.logger.debug(`Error executing private function ${targetContractAddress}:${functionSelector}`);
-    //     throw createSimulationError(execError);
-    //   });
-    // const duration = timer.ms();
-    // const publicInputs = extractPrivateCircuitPublicInputs(artifact, acirExecutionResult.partialWitness);
-
-    // const initialWitnessSize = witnessMapToFields(initialWitness).length * Fr.SIZE_IN_BYTES;
-    // this.logger.debug(`Ran external function ${targetContractAddress.toString()}:${functionSelector}`, {
-    //   circuitName: 'app-circuit',
-    //   duration,
-    //   eventName: 'circuit-witness-generation',
-    //   inputSize: initialWitnessSize,
-    //   outputSize: publicInputs.toBuffer().length,
-    //   appCircuitName: 'noname',
-    // } satisfies CircuitWitnessGenerationStats);
-
-    // // Apply side effects
-    // const endSideEffectCounter = publicInputs.endSideEffectCounter;
-    // this.sideEffectCounter = endSideEffectCounter.toNumber() + 1;
-
-    // await this.addPrivateLogs(
-    //   targetContractAddress,
-    //   publicInputs.privateLogs.getActiveItems().map(privateLog => privateLog.log),
-    // );
-
-    // this.setContractAddress(currentContractAddress);
-    // this.setMsgSender(currentMessageSender);
-    // this.setFunctionSelector(currentFunctionSelector);
-
-    // return { endSideEffectCounter, returnsHash: publicInputs.returnsHash };
-    // }
 };

@@ -250,7 +250,7 @@ function build_fixtures {
 # Defaults to ReleaseFast.
 # For debug: ./bootstrap.sh build Debug
 function build {
-  zig build -Doptimize=${1:-ReleaseFast}
+  zig build ${2:-} -Doptimize=${1:-ReleaseFast}
 }
 
 ########################################################################################################################
@@ -346,7 +346,9 @@ export -f check_witness_parity check_witness_parity_brillig proto_test run_progr
 ###
 function test {
   # Build debug version.
-  # build Debug
+  if [ -n "$BUILD" ]; then
+    build $BUILD
+  fi
 
   # Pipe through cat to disable status bar mode.
   {

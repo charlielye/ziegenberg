@@ -9,97 +9,7 @@ const io = @import("../io.zig");
 const F = @import("../../bn254/fr.zig").Fr;
 const fieldOps = @import("../../blackbox/field.zig");
 const handlePrint = @import("./print.zig").handlePrint;
-
-// Represents a single parameter in a foreign call.
-// Can be a single value, or an array of values.
-// When an array, it can represent plain array, or structured data types.
-pub const ForeignCallParam = union(enum) {
-    Single: u256,
-    Array: []ForeignCallParam,
-
-    pub fn eql(a: ForeignCallParam, b: ForeignCallParam) bool {
-        if (a == .Single and b == .Single) {
-            return a.Single == b.Single;
-        } else if (a == .Array and b == .Array) {
-            if (a.Array.len != b.Array.len) return false;
-            for (a.Array, b.Array) |ae, be| {
-                if (!ForeignCallParam.eql(ae, be)) return false;
-            }
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    pub fn sliceEql(a: []ForeignCallParam, b: []ForeignCallParam) bool {
-        if (a.len != b.len) return false;
-        for (a, b) |ae, be| {
-            if (!ForeignCallParam.eql(ae, be)) return false;
-        }
-        return true;
-    }
-
-    pub fn deepCopy(self: ForeignCallParam, allocator: std.mem.Allocator) !ForeignCallParam {
-        switch (self) {
-            .Single => return ForeignCallParam{ .Single = self.Single },
-            .Array => {
-                const len = self.Array.len;
-                var new_array = try allocator.alloc(ForeignCallParam, len);
-                for (self.Array, 0..) |elem, i| {
-                    new_array[i] = try elem.deepCopy(allocator);
-                }
-                return ForeignCallParam{ .Array = new_array };
-            },
-        }
-    }
-
-    pub fn sliceDeepCopy(slice: []ForeignCallParam, allocator: std.mem.Allocator) ![]ForeignCallParam {
-        const len = slice.len;
-        var new_slice = try allocator.alloc(ForeignCallParam, len);
-        for (slice, 0..) |elem, i| {
-            new_slice[i] = try elem.deepCopy(allocator);
-        }
-        return new_slice;
-    }
-
-    pub fn flatten(self: ForeignCallParam, allocator: std.mem.Allocator) ![]u256 {
-        const total_size: usize = self.countFlattenedElements();
-        const result = try allocator.alloc(u256, total_size);
-        var idx: usize = 0;
-        self.flattenParam(result, &idx);
-        return result;
-    }
-
-    fn countFlattenedElements(self: ForeignCallParam) usize {
-        switch (self) {
-            .Single => return 1,
-            .Array => |arr| {
-                var count: usize = 0;
-                for (arr) |elem| {
-                    count += elem.countFlattenedElements();
-                }
-                return count;
-            },
-        }
-    }
-
-    fn flattenParam(self: ForeignCallParam, out: []u256, idx: *usize) void {
-        switch (self) {
-            .Single => |val| {
-                out[idx.*] = val;
-                idx.* += 1;
-            },
-            .Array => |arr| {
-                for (arr) |elem| {
-                    flattenParam(elem, out, idx);
-                }
-            },
-        }
-    }
-
-    // pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-    // }
-};
+const ForeignCallParam = @import("./param.zig").ForeignCallParam;
 
 pub fn handleForeignCall(
     allocator: std.mem.Allocator,
@@ -139,6 +49,13 @@ pub fn marshalInput(
     param: ForeignCallParam,
 ) !void {
     const input_type = @TypeOf(input.*);
+    const type_info = @typeInfo(input_type);
+
+    // Check if type has fromForeignCallParam method
+    if (type_info == .@"struct" and @hasDecl(input_type, "fromForeignCallParam")) {
+        input.* = try input_type.fromForeignCallParam(param);
+        return;
+    }
 
     switch (input_type) {
         F => {
@@ -156,9 +73,10 @@ pub fn marshalInput(
     const info = @typeInfo(input_type);
     switch (info) {
         .@"struct" => |s| {
-            inline for (s.fields) |field| {
-                std.debug.assert(param == .Array);
-                marshalInput(field.type, allocator, param.Array);
+            std.debug.assert(param == .Array);
+            inline for (s.fields, 0..) |field, i| {
+                const field_ptr = &@field(input, field.name);
+                try marshalInput(field_ptr, allocator, param.Array[i]);
             }
         },
         .int => input.* = @intCast(param.Single),
@@ -323,8 +241,11 @@ fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]Fo
 
     switch (info) {
         .@"struct" => |s| {
-            // Check if this struct has a to_int method (like Field types)
-            if (@hasDecl(T, "to_int")) {
+            // Check if this struct has a toForeignCallParam method
+            if (@hasDecl(T, "toForeignCallParam")) {
+                try result.append(value.toForeignCallParam());
+            } else if (@hasDecl(T, "to_int")) {
+                // Check if this struct has a to_int method (like Field types)
                 try result.append(ForeignCallParam{ .Single = value.to_int() });
             } else {
                 inline for (s.fields) |field| {

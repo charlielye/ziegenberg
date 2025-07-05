@@ -21,8 +21,14 @@ pub fn Field(comptime Params: type) type {
             return field_arith.from_montgomery_form(Params, self.limbs);
         }
 
-        pub fn from_int(v: u256) Fe {
-            return Fe.from_limbs(@bitCast(v));
+        pub fn from_int(v: anytype) Fe {
+            const T = @TypeOf(v);
+            if (@typeInfo(T) == .int and @bitSizeOf(T) > 256) {
+                const reduced = @mod(v, Params.modulus_u256);
+                return Fe.from_limbs(@bitCast(@as(u256, @intCast(reduced))));
+            } else {
+                return Fe.from_limbs(@bitCast(@as(u256, v)));
+            }
         }
 
         pub fn to_int(self: Fe) u256 {
@@ -50,6 +56,12 @@ pub fn Field(comptime Params: type) type {
             return @bitCast(@byteSwap(a));
         }
 
+        pub fn into_slice(self: Fe, buf: []u8) void {
+            std.debug.assert(buf.len == 32);
+            const bytes = self.to_buf();
+            std.mem.copyForwards(u8, buf, &bytes);
+        }
+
         /// Returns the raw byte slice still in montgomery form.
         pub fn to_raw_buf(self: *const Fe) []const u8 {
             return std.mem.asBytes(&self.limbs);
@@ -63,15 +75,14 @@ pub fn Field(comptime Params: type) type {
             self.limbs = field_arith.from_montgomery_form(Params, self.limbs);
         }
 
+        /// Generate a field from a 512-bit random number.
         pub fn random() Fe {
-            // TODO: Should we be using std.posix.getrandom()?!
-            const data = std.crypto.random.int(u512);
-            return Fe.from_int(@truncate(data));
+            return Fe.from_int(std.crypto.random.int(u512));
         }
 
+        /// Generate a field from a 512-bit random number using the given prng.
         pub fn pseudo_random(engine: anytype) Fe {
-            const data = engine.random().int(u512);
-            return Fe.from_int(@truncate(data));
+            return Fe.from_int(engine.random().int(u512));
         }
 
         pub fn add(self: Fe, other: Fe) Fe {

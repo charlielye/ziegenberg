@@ -1,6 +1,7 @@
 const std = @import("std");
 const Memory = @import("../memory.zig").Memory;
 const foreign_call = @import("./foreign_call.zig");
+const ForeignCallParam = @import("./param.zig").ForeignCallParam;
 const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
 
@@ -13,7 +14,7 @@ pub fn structDispatcher(
     allocator: std.mem.Allocator,
     mem: *Memory,
     fc: *const io.ForeignCall,
-    params: []foreign_call.ForeignCallParam,
+    params: []ForeignCallParam,
 ) !bool {
     // Transient memory required only for this call.
     // var arena = std.heap.ArenaAllocator.init(allocator);
@@ -75,11 +76,11 @@ pub fn structDispatcher(
                     const param_type = field_info.@"fn".params[i].type.?;
                     if (@typeInfo(param_type) == .optional) {
                         // Optional parameter - create array from two consecutive params
-                        var opt_array = [_]foreign_call.ForeignCallParam{
+                        var opt_array = [_]ForeignCallParam{
                             params[param_idx], // is_some
                             params[param_idx + 1], // value
                         };
-                        const opt_param = foreign_call.ForeignCallParam{ .Array = &opt_array };
+                        const opt_param = ForeignCallParam{ .Array = &opt_array };
                         std.debug.print("Marshal into {s} arg {} (optional): {any}\n", .{ decl.name, i, opt_param });
                         foreign_call.marshalInput(&args[i], allocator, opt_param) catch |err| {
                             std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, opt_param });

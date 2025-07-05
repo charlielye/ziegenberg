@@ -1,6 +1,6 @@
 const std = @import("std");
 const Memory = @import("../memory.zig").Memory;
-const ForeignCallParam = @import("./foreign_call.zig").ForeignCallParam;
+const ForeignCallParam = @import("./param.zig").ForeignCallParam;
 
 fn every(comptime T: type, input: []const T, comptime f: fn (T) bool) bool {
     for (input) |e| if (!f(e)) return false;
