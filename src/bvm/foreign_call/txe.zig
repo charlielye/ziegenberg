@@ -26,11 +26,6 @@ const PublicKeys = struct {
     tpk_m: TpkM,
 };
 
-const CompleteAddress = struct {
-    address: AztecAddress,
-    public_keys: PublicKeys,
-};
-
 const FunctionSelector = u32;
 
 const CallContext = struct {
@@ -199,7 +194,10 @@ pub const Txe = struct {
         std.debug.print("reset called!\n", .{});
     }
 
-    pub fn createAccount(self: *Txe, secret: F) !CompleteAddress {
+    pub fn createAccount(self: *Txe, secret: F) !struct {
+        address: AztecAddress,
+        public_keys: PublicKeys,
+    } {
         _ = self;
         std.debug.print("createAccount called: {x}\n", .{secret});
         return .{
@@ -211,6 +209,10 @@ pub const Txe = struct {
                 .tpk_m = .{ .x = F.from_int(7), .y = F.from_int(8), .i = false },
             },
         };
+    }
+
+    pub fn getContractAddress(self: *Txe) !AztecAddress {
+        return self.contract_address;
     }
 
     pub fn setContractAddress(self: *Txe, address: AztecAddress) !void {
@@ -229,19 +231,19 @@ pub const Txe = struct {
     pub fn deploy(
         self: *Txe,
         path: []u8,
-        name: []u8,
+        contract_name: []u8,
         initializer: []u8,
         args_len: u32,
         args: []F,
-        public_keys_hash: F,
+        secret: F,
     ) ![16]F {
         std.debug.print("deploy: {s} {s} {s} {} {short} {short}\n", .{
             path,
-            name,
+            contract_name,
             initializer,
             args_len,
             args,
-            public_keys_hash,
+            secret,
         });
         var r: [16]F = undefined;
         for (&r) |*e| e.* = F.random();
@@ -276,10 +278,6 @@ pub const Txe = struct {
             .start_side_effect_counter = self.side_effect_counter,
         };
         return result;
-    }
-
-    pub fn getContractAddress(self: *Txe) !AztecAddress {
-        return self.contract_address;
     }
 
     /// Executes an external/private function call on a target contract.
