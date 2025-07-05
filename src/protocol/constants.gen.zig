@@ -522,4 +522,3 @@ pub const GeneratorIndex = enum(u32) {
     event_commitment = 59,
     public_bytecode = 60,
 };
-

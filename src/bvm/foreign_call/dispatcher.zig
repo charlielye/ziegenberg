@@ -15,7 +15,7 @@ pub const Dispatcher = struct {
     pub fn init(allocator: std.mem.Allocator) Dispatcher {
         return .{
             .allocator = allocator,
-            .txe = Txe.init(allocator),
+            .txe = Txe.init(allocator, "data/contracts"),
             .mocker = Mocker.init(allocator),
         };
     }

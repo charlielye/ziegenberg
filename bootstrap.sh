@@ -40,10 +40,11 @@ exclusions=(
 )
 exclude_pattern="!($(IFS="|"; echo "${exclusions[*]}"))"
 
+contracts_target_dir="aztec-packages/noir-projects/noir-contracts/target"
 export test_programs_dir="aztec-packages/noir/noir-repo/test_programs/execution_success"
 export test_tests_dir="aztec-packages/noir/noir-repo/test_programs/noir_test_success"
 export test_protocol_dir="aztec-packages/noir-projects/noir-protocol-circuits/target/tests"
-export test_contracts_dir="aztec-packages/noir-projects/noir-contracts/target/tests"
+export test_contracts_dir="$contracts_target_dir/tests"
 
 ########################################################################################################################
 # BUILD COMMANDS
@@ -223,7 +224,22 @@ EOF
   echo "Generated $zig_file successfully!"
 }
 
-export -f compile_and_execute nargo_dump build_protocol_circuits build_contracts generate_constants
+function build_data {
+  echo "Building data directory with contract symlinks..."
+  rm -rf data
+  mkdir -p data/contracts
+
+  # Create symlinks for each JSON file, renaming to keep only the part after the last dash.
+  for json_file in $contracts_target_dir/*.json; do
+    local basename=$(basename $json_file)
+    # Extract the part after the last dash (before .json)
+    local new_name=${basename##*-}
+    local source=$(realpath $json_file --relative-to data/contracts)
+    ln -s $source data/contracts/$new_name
+  done
+}
+
+export -f compile_and_execute nargo_dump build_protocol_circuits build_contracts generate_constants build_data
 
 # Compiles and executes all noir execution_success test programs to generate witness data.
 # Uses nargo to dump out all noir_test_success test bytecode.
@@ -338,6 +354,8 @@ export -f check_witness_parity check_witness_parity_brillig proto_test run_progr
 # TEST ENTRYPOINT
 # ---------------
 # Runs tests with debug build.
+#   BUILD=Debug ./bootstrap.sh test
+#   BUILD=ReleaseFast ./bootstrap.sh test
 #   ./bootstrap.sh test
 #   ./bootstrap.sh test unit [filter]
 #   ./bootstrap.sh test programs [filter]
@@ -345,7 +363,7 @@ export -f check_witness_parity check_witness_parity_brillig proto_test run_progr
 #   ./bootstrap.sh test contracts [filter]
 ###
 function test {
-  # Build debug version.
+  # Build if requested.
   if [ -n "$BUILD" ]; then
     build $BUILD
   fi
@@ -391,6 +409,11 @@ case "$cmd" in
     build ${1:-}
     ;;
   *)
-    $cmd "$@"
+    if [ "${WATCH:-0}" -eq 1 ]; then
+      export WATCH=0
+      watchexec -e zig,sh -- ./bootstrap.sh "$cmd" "$@"
+    else
+      $cmd "$@"
+    fi
     ;;
 esac

@@ -13,6 +13,27 @@ pub const PublicKeys = struct {
     master_outgoing_viewing_public_key: G1.Element,
     master_tagging_public_key: G1.Element,
 
+    pub fn default() PublicKeys {
+        return .{
+            .master_nullifier_public_key = G1.Element.from_xy(
+                Fr.from_int(constants.DEFAULT_NPK_M_X),
+                Fr.from_int(constants.DEFAULT_NPK_M_Y),
+            ),
+            .master_incoming_viewing_public_key = G1.Element.from_xy(
+                Fr.from_int(constants.DEFAULT_IVPK_M_X),
+                Fr.from_int(constants.DEFAULT_IVPK_M_Y),
+            ),
+            .master_outgoing_viewing_public_key = G1.Element.from_xy(
+                Fr.from_int(constants.DEFAULT_OVPK_M_X),
+                Fr.from_int(constants.DEFAULT_OVPK_M_Y),
+            ),
+            .master_tagging_public_key = G1.Element.from_xy(
+                Fr.from_int(constants.DEFAULT_TPK_M_X),
+                Fr.from_int(constants.DEFAULT_TPK_M_Y),
+            ),
+        };
+    }
+
     pub fn hash(self: PublicKeys) Fr {
         // Hash all public keys together
         const inputs = [_]Fr{

@@ -6,6 +6,7 @@ const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
 const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
 const proto = @import("../../protocol/package.zig");
+const loadContract = @import("../../nargo/contract.zig").load;
 
 const EthAddress = F;
 
@@ -150,6 +151,29 @@ const PrivateContextInputs = struct {
     start_side_effect_counter: u32 = 0,
 };
 
+/// Computes a fast hash (SHA-1) of a file at the given path.
+/// Returns the hash as a hex string.
+pub fn fastHashFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    // TODO: SHA1 is considered cryptographically broken?
+    var sha1 = std.crypto.hash.Sha1.init(.{});
+    var buf: [4096]u8 = undefined;
+
+    while (true) {
+        const n = try file.read(&buf);
+        if (n == 0) break;
+        sha1.update(buf[0..n]);
+    }
+
+    var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+    sha1.final(&digest);
+
+    // Convert digest to hex string
+    return std.fmt.allocPrint(allocator, "{s}", .{std.fmt.fmtSliceHexLower(&digest)});
+}
+
 pub const Txe = struct {
     allocator: std.mem.Allocator,
     version: F = F.one,
@@ -161,6 +185,7 @@ pub const Txe = struct {
     function_selector: u32 = 0,
     is_static_call: bool = false,
     nested_call_returndata: []F,
+    contracts_artifacts_path: []const u8,
     //   private contractDataOracle: ContractDataOracle;
 
     const CHAIN_ID = 1;
@@ -168,12 +193,13 @@ pub const Txe = struct {
     const GENESIS_TIMESTAMP = 1767225600;
     const AZTEC_SLOT_DURATION = 36;
 
-    pub fn init(allocator: std.mem.Allocator) Txe {
+    pub fn init(allocator: std.mem.Allocator, contract_artifacts_path: []const u8) Txe {
         return .{
             .allocator = allocator,
             .contract_address = proto.AztecAddress.random(),
             .msg_sender = proto.AztecAddress.init(F.max),
             .nested_call_returndata = &[_]F{},
+            .contracts_artifacts_path = contract_artifacts_path,
         };
     }
 
@@ -203,6 +229,7 @@ pub const Txe = struct {
         std.debug.print("createAccount called: {x}\n", .{secret});
 
         // TODO: Why do we use the secret for both args here?
+        // TS code unhelpfully just says "Footgun!"...
         const complete_address = proto.CompleteAddress.fromSecretKeyAndPartialAddress(secret, secret);
 
         return .{
@@ -245,6 +272,19 @@ pub const Txe = struct {
             args,
             secret,
         });
+
+        const public_keys = if (secret.is_zero()) proto.PublicKeys.default() else proto.deriveKeys(secret).public_keys;
+        const public_keys_hash = public_keys.hash();
+        _ = public_keys_hash;
+
+        if (std.mem.eql(u8, path, "")) {
+            const contract_path = try std.fmt.allocPrint(self.allocator, "data/contracts/{s}.json", .{contract_name});
+            const contract_abi = try loadContract(self.allocator, contract_path);
+            _ = contract_abi;
+        } else {
+            return error.Unimplemented;
+        }
+
         var r: [16]F = undefined;
         for (&r) |*e| e.* = F.random();
         self.block_number += 1;

@@ -407,7 +407,7 @@ test "merkle tree db/mem consistency" {
     const depth = 40;
     const num = 1024;
     const threads = @min(try std.Thread.getCpuCount(), 64);
-    const data_dir = "./merkle_tree_consistency";
+    const data_dir = "./data/merkle_tree_consistency";
     defer std.fs.cwd().deleteTree(data_dir) catch unreachable;
 
     var pool = ThreadPool.init(.{ .max_threads = threads });

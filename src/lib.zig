@@ -10,7 +10,7 @@ usingnamespace @import("cvm/execute.zig");
 usingnamespace @import("merkle_tree/package.zig");
 usingnamespace @import("thread/thread_pool.zig");
 usingnamespace @import("poseidon2/poseidon2.zig");
-usingnamespace @import("contract/contract.zig");
+usingnamespace @import("protocol/package.zig");
 usingnamespace @import("nargo/package.zig");
 
 // test {
