@@ -280,7 +280,13 @@ pub const Txe = struct {
         if (std.mem.eql(u8, path, "")) {
             const contract_path = try std.fmt.allocPrint(self.allocator, "data/contracts/{s}.json", .{contract_name});
             const contract_abi = try loadContract(self.allocator, contract_path);
-            _ = contract_abi;
+            const contract_instance = proto.ContractInstance.fromDeployParams(contract_abi, .{
+                .constructor_name = initializer,
+                .constructor_args = args,
+                .salt = F.one,
+                .public_keys = public_keys,
+            });
+            _ = contract_instance;
         } else {
             return error.Unimplemented;
         }

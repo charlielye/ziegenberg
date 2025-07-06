@@ -3,6 +3,7 @@ const pretty = @import("../fmt/pretty.zig");
 const poseidon2 = @import("../poseidon2/poseidon2.zig");
 const F = @import("../bn254/fr.zig").Fr;
 const mt = @import("../merkle_tree/package.zig");
+const constants = @import("constants.gen.zig");
 
 var VERSION: u8 = 1;
 
@@ -21,12 +22,44 @@ const Abi = struct {
     parameters: []const Parameter,
 };
 
+const FunctionSelector = u32;
+
 pub const Function = struct {
     name: []const u8,
     is_unconstrained: bool,
     custom_attributes: []const []const u8,
     abi: Abi,
+    bytecode: []const u8,
+    verification_key: ?[]const u8,
     selector: FunctionSelector = 0,
+
+    pub fn computeSelector(self: *Function) FunctionSelector {
+        var buf: [256]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        var writer = stream.writer();
+        writer.print("{s}(", .{self.name}) catch unreachable;
+        for (self.abi.parameters, 0..) |p, i| {
+            if (i > 0) writer.writeByte(',') catch unreachable;
+            writer.print("{s}", .{p.type.kind}) catch unreachable;
+        }
+        writer.writeByte(')') catch unreachable;
+        // std.debug.print("{s}\n", .{buf[0..stream.pos]});
+        const hash = poseidon2.hashBytes(buf[0..stream.pos]);
+        return std.mem.bytesToValue(FunctionSelector, hash.to_buf()[28..32]);
+    }
+
+    /// Base 64 decode, gunzip, and return the bytecode.
+    pub fn getBytecode(self: *const Function, allocator: std.mem.Allocator) ![]const u8 {
+        const decoder = std.base64.standard.Decoder;
+        const buf = try allocator.alloc(u8, try decoder.calcSizeUpperBound(self.bytecode.len));
+        defer allocator.free(buf);
+        try decoder.decode(buf, self.bytecode);
+        var reader_stream = std.io.fixedBufferStream(buf);
+        var buffer = std.ArrayList(u8).init(allocator);
+        defer buffer.deinit();
+        try std.compress.gzip.decompress(reader_stream.reader(), buffer.writer());
+        return buffer.toOwnedSlice();
+    }
 
     pub fn cmp(_: void, a: Function, b: Function) bool {
         return a.selector < b.selector;
@@ -37,30 +70,81 @@ pub const ContractAbi = struct {
     noir_version: []const u8,
     name: []const u8,
     functions: []Function,
-};
+    // Following are computed at load time.
+    public_function: Function,
+    private_functions: []Function,
+    unconstrained_functions: []Function,
+    initializer_functions: []Function,
+    private_function_tree_root: F,
+    unconstrained_function_tree_root: F,
+    public_bytecode_commitment: F,
+    artifact_hash: F,
+    default_initializer: ?Function,
 
-const FunctionSelector = u32;
+    /// Load the contract abi from the json file.
+    /// Compute all the function selectors.
+    pub fn load(allocator: std.mem.Allocator, contract_path: []const u8) !ContractAbi {
+        var file = try std.fs.cwd().openFile(contract_path, .{});
+        defer file.close();
+        var json_reader = std.json.reader(allocator, file.reader());
+        const parsed = try std.json.parseFromTokenSource(
+            ContractAbi,
+            allocator,
+            &json_reader,
+            .{ .ignore_unknown_fields = true },
+        );
+        const abi = parsed.value;
+        for (abi.functions) |*f| {
+            f.selector = f.computeFunctionSelector();
+            if (std.mem.eql(f.name, "public_dispatch")) {
+                abi.public_function = f;
+            }
+        }
 
-pub fn computeFunctionSelector(function: Function) FunctionSelector {
-    var buf: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    var writer = stream.writer();
-    writer.print("{s}(", .{function.name}) catch unreachable;
-    for (function.abi.parameters, 0..) |p, i| {
-        if (i > 0) writer.writeByte(',') catch unreachable;
-        writer.print("{s}", .{p.type.kind}) catch unreachable;
+        abi.private_functions = try filterFunctions(allocator, abi.functions, "private");
+        abi.unconstrained_functions = try filterFunctions(allocator, abi.functions, "unconstrained");
+        abi.initializer_functions = try filterFunctions(allocator, abi.functions, "initializer");
+        abi.private_function_tree_root = computeFunctionTreeRoot(allocator, abi.private_functions);
+        abi.unconstrained_function_tree_root = computeFunctionTreeRoot(allocator, abi.unconstrained_functions);
+        abi.artifact_hash = abi.computeArtifactHash(allocator);
+        abi.public_bytecode_commitment = computePublicBytecodeCommitment(abi.public_function.getBytecode(allocator));
+        abi.default_initializer = abi.findDefaultInitializer();
+
+        return abi;
     }
-    writer.writeByte(')') catch unreachable;
-    // std.debug.print("{s}\n", .{buf[0..stream.pos]});
-    const hash = poseidon2.hashBytes(buf[0..stream.pos]);
-    return std.mem.bytesToValue(FunctionSelector, hash.to_buf()[28..32]);
-}
 
-fn computeMetadataHash(contract: ContractAbi) F {
-    var buf: [256]u8 = undefined;
-    var allocator = std.heap.FixedBufferAllocator.init(&buf);
-    return shaHashTuple(allocator.allocator(), .{ "{\"name\":\"", contract.name, "\"}" }) catch unreachable;
-}
+    fn findDefaultInitializer(self: *ContractAbi) ?Function {
+        if (self.initializer_functions.len == 0) return;
+
+        for (self.initializer_functions) |f| {
+            if (std.mem.eql(u8, f.name, "initializer")) return f;
+        }
+        for (self.initializer_functions) |f| {
+            if (std.mem.eql(u8, f.name, "constructor")) return f;
+        }
+        for (self.initializer_functions) |f| {
+            if (f.abi.parameters.len == 0) return f;
+        }
+        for (self.initializer_functions) |f| {
+            if (containsString(f.custom_attributes, "private")) return f;
+        }
+        return self.initializer_functions[0];
+    }
+
+    fn computeArtifactHash(self: *ContractAbi, allocator: std.mem.Allocator) !F {
+        return try shaHashTuple(allocator, .{
+            self.private_function_tree_root.to_buf(),
+            self.unconstrained_function_tree_root.to_buf(),
+            self.computeMetadataHash().to_buf(),
+        });
+    }
+
+    fn computeMetadataHash(contract: *ContractAbi) F {
+        var buf: [256]u8 = undefined;
+        var allocator = std.heap.FixedBufferAllocator.init(&buf);
+        return shaHashTuple(allocator.allocator(), .{ "{\"name\":\"", contract.name, "\"}" }) catch unreachable;
+    }
+};
 
 inline fn containsString(strings: []const []const u8, target: []const u8) bool {
     for (strings) |s| if (std.mem.eql(u8, s, target)) return true;
@@ -88,7 +172,7 @@ fn shaHashTuple(allocator: std.mem.Allocator, input: anytype) !F {
     return F.from_buf(h);
 }
 
-pub fn filterFunctions(allocator: std.mem.Allocator, functions: []const Function, attr: []const u8) ![]Function {
+fn filterFunctions(allocator: std.mem.Allocator, functions: []const Function, attr: []const u8) ![]Function {
     var result = try std.ArrayList(Function).initCapacity(allocator, functions.len);
     for (functions) |f| {
         if (containsString(f.custom_attributes, attr)) {
@@ -97,18 +181,6 @@ pub fn filterFunctions(allocator: std.mem.Allocator, functions: []const Function
     }
     std.mem.sort(Function, result.items, {}, Function.cmp);
     return result.toOwnedSlice();
-}
-
-pub fn computePrivateFunctionTreeRoot(allocator: std.mem.Allocator, functions: []const Function) !F {
-    return computeFunctionTreeRoot(allocator, try filterFunctions(allocator, functions, "private"));
-}
-
-pub fn computePublicFunctionTreeRoot(allocator: std.mem.Allocator, functions: []const Function) !F {
-    return computeFunctionTreeRoot(allocator, try filterFunctions(allocator, functions, "public"));
-}
-
-pub fn computeUnconstrainedFunctionTreeRoot(allocator: std.mem.Allocator, functions: []const Function) !F {
-    return computeFunctionTreeRoot(allocator, try filterFunctions(allocator, functions, "unconstrained"));
 }
 
 /// So this differs from how our TS does it.
@@ -128,29 +200,32 @@ pub fn computeFunctionTreeRoot(allocator: std.mem.Allocator, functions: []const 
     return tree.root();
 }
 
-pub fn computeContractArtifactHash(allocator: std.mem.Allocator, contract: ContractAbi) !F {
-    const private_root = try computePrivateFunctionTreeRoot(allocator, contract.functions);
-    // const public_root = try computePublicFunctionTreeRoot(allocator, contract.functions);
-    const unconstrained_root = try computeUnconstrainedFunctionTreeRoot(allocator, contract.functions);
-    const md_hash = computeMetadataHash(contract);
-    return try shaHashTuple(allocator, .{ private_root.to_buf(), unconstrained_root.to_buf(), md_hash.to_buf() });
-}
+fn computePublicBytecodeCommitment(bytecode: []const u8) ![]F {
+    if (bytecode.len > constants.MAX_PACKED_PUBLIC_BYTECODE_SIZE_IN_FIELDS * 31) {
+        return error.PublicBytecodeTooLong;
+    }
 
-/// Load the contract abi from the json file.
-/// Compute all the function selectors.
-pub fn load(allocator: std.mem.Allocator, contract_path: []const u8) !ContractAbi {
-    var file = try std.fs.cwd().openFile(contract_path, .{});
-    defer file.close();
-    var json_reader = std.json.reader(allocator, file.reader());
-    const parsed = try std.json.parseFromTokenSource(
-        ContractAbi,
-        allocator,
-        &json_reader,
-        .{ .ignore_unknown_fields = true },
-    );
-    const abi = parsed.value;
-    for (abi.functions) |*f| f.selector = computeFunctionSelector(f.*);
-    return abi;
+    // +1 for domain separator.
+    const fields = [_]F{F.zero} ** (constants.MAX_PACKED_PUBLIC_BYTECODE_SIZE_IN_FIELDS + 1);
+    fields[0] = constants.GeneratorIndex.public_bytecode;
+
+    // TODO: There seem to be 2 ways to hash bytes. Unify?
+    // This way is:
+    // [0,b0,b1,b2,...]
+    // The poseidon2.hashBytes way is:
+    // [0,...,b2,b1,b0]
+    for (fields[1..], 0..) |*field, i| {
+        const start = i * 31;
+        if (start >= bytecode.len) {
+            break;
+        }
+        const end = @min(start + 31, bytecode.len);
+        var chunk: [32]u8 = [_]u8{0} ** 32;
+        std.mem.copyForward(u8, chunk[1 .. end - start], bytecode[start..end]);
+        field.* = F.from_buf(chunk);
+    }
+
+    return poseidon2.hash(fields);
 }
 
 const token_contract_abi_path = "aztec-packages/noir-projects/noir-contracts/target/token_contract-Token.json";
@@ -158,9 +233,10 @@ const token_contract_abi_path = "aztec-packages/noir-projects/noir-contracts/tar
 test "parse contract abi" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const abi = try load(arena.allocator(), token_contract_abi_path);
+    const abi = try ContractAbi.load(arena.allocator(), token_contract_abi_path);
     try std.testing.expectEqualDeep("Token", abi.name);
     try std.testing.expectEqual(37, abi.functions.len);
+    try std.testing.expectEqual(1, abi.initializer_functions.len);
 }
 
 const func_fixture = Function{
@@ -176,13 +252,13 @@ const func_fixture = Function{
 test "compute metadata hash" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const abi = try load(arena.allocator(), token_contract_abi_path);
-    const h = computeMetadataHash(abi);
+    const abi = try ContractAbi.load(arena.allocator(), token_contract_abi_path);
+    const h = abi.computeMetadataHash();
     std.debug.print("metadata hash: {x}\n", .{h});
 }
 
 test "compute function selector" {
-    const selector = computeFunctionSelector(func_fixture);
+    const selector = func_fixture.computeFunctionSelector();
     std.debug.print("function selector: {x}\n", .{selector});
 }
 
@@ -193,14 +269,13 @@ test "compute private function tree root" {
     f2.name = "my_function2";
     var f3 = func_fixture;
     f3.name = "my_function3";
-    const root = try computePrivateFunctionTreeRoot(arena.allocator(), &[_]Function{ func_fixture, f2, f3 });
+    const root = try computeFunctionTreeRoot(arena.allocator(), &[_]Function{ func_fixture, f2, f3 });
     std.debug.print("private function tree root: {x}\n", .{root});
 }
 
 test "compute artifact hash" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const abi = try load(arena.allocator(), token_contract_abi_path);
-    const h = try computeContractArtifactHash(arena.allocator(), abi);
-    std.debug.print("artifact hash: {x}\n", .{h});
+    const abi = try ContractAbi.load(arena.allocator(), token_contract_abi_path);
+    std.debug.print("artifact hash: {x}\n", .{abi.artifact_hash});
 }

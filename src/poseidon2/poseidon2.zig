@@ -7,6 +7,7 @@ pub fn hash(input: []const Fr) Fr {
     return Poseidon2Sponge.hash_fixed_length(1, input)[0];
 }
 
+/// Hashes bytes by chunking into 31 bytes.
 pub fn hashBytes(input: []const u8) Fr {
     const num_fields = input.len / 31 + (@intFromBool(input.len % 31 != 0));
     std.debug.assert(num_fields <= 128);
