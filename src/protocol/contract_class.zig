@@ -16,13 +16,13 @@ pub const ContractClass = struct {
     version: u8 = CONTRACT_CLASS_VERSION,
     artifact_hash: Fr,
     private_functions: []nargo.Function,
-    public_bytecode: []u8,
+    public_bytecode: []const u8,
     id: Fr,
     private_functions_root: Fr,
     public_bytecode_commitment: Fr,
 
     pub fn fromContractAbi(contract: nargo.ContractAbi) ContractClass {
-        const id = poseidon2.hash([_]Fr{
+        const id = poseidon2.hash(&[_]Fr{
             Fr.from_int(constants.GeneratorIndex.contract_leaf),
             contract.artifact_hash,
             contract.private_function_tree_root,

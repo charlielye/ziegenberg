@@ -166,18 +166,7 @@ EOF
     gsub(/n$/, "")    # Remove 'n' suffix from BigInt
 
     if ($0 != "") {
-      # Determine the type based on the value
-      type = "u64"
-      if (match($0, /^[0-9]+$/)) {
-        # Regular number
-        num = strtonum($0)
-        if (num <= 255) type = "u8"
-        else if (num <= 65535) type = "u16"
-        else if (num <= 4294967295) type = "u32"
-        else type = "u256"  # For very large numbers, use u256
-      }
-
-      print "pub const " current_const ": " type " = " $0 ";"
+      print "pub const " current_const " = " $0 ";"
     }
 
     in_multiline = 0
@@ -195,22 +184,12 @@ EOF
     name = parts[1]
     value = parts[2]
 
-    # Determine the type based on the value
-    type = "u64"
     if (match(value, /^[0-9]+n$/)) {
       # BigInt literal - remove the 'n' suffix
       gsub(/n$/, "", value)
-      type = "u256"
-    } else if (match(value, /^[0-9]+$/)) {
-      # Regular number
-      num = strtonum(value)
-      if (num <= 255) type = "u8"
-      else if (num <= 65535) type = "u16"
-      else if (num <= 4294967295) type = "u32"
-      else type = "u64"
     }
 
-    print "pub const " name ": " type " = " value ";"
+    print "pub const " name " = " value ";"
   }
 
   END {

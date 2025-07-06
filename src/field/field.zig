@@ -23,7 +23,13 @@ pub fn Field(comptime Params: type) type {
 
         pub fn from_int(v: anytype) Fe {
             const T = @TypeOf(v);
-            if (@typeInfo(T) == .int and @bitSizeOf(T) > 256) {
+            const info = @typeInfo(T);
+
+            if (info == .@"enum") {
+                return Fe.from_int(@intFromEnum(v));
+            }
+
+            if (info == .int and @bitSizeOf(T) > 256) {
                 const reduced = @mod(v, Params.modulus_u256);
                 return Fe.from_limbs(@bitCast(@as(u256, @intCast(reduced))));
             } else {

@@ -63,12 +63,12 @@ pub const ContractInstance = struct {
         }
 
         // Compute initialization hash.
-        const initialization_hash = if (ctor)
-            computeInitializationHash(allocator, ctor, params.constructor_args)
+        const initialization_hash = if (ctor) |c|
+            computeInitializationHash(allocator, c, params.constructor_args)
         else
             Fr.zero;
 
-        const instance = ContractInstance{
+        var instance = ContractInstance{
             .salt = salt,
             .deployer = deployer,
             .current_contract_class_id = contract_class.id,
@@ -87,7 +87,7 @@ pub const ContractInstance = struct {
         ctor: nargo.Function,
         args: []const Fr,
     ) Fr {
-        const args_fields = std.ArrayList(Fr).initCapacity(allocator, args.len + 1);
+        var args_fields = std.ArrayList(Fr).initCapacity(allocator, args.len + 1) catch unreachable;
         defer args_fields.deinit();
         args_fields.append(Fr.from_int(constants.GeneratorIndex.function_args)) catch unreachable;
         for (args) |arg| args_fields.append(arg) catch unreachable;

@@ -6,7 +6,7 @@ const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
 const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
 const proto = @import("../../protocol/package.zig");
-const loadContract = @import("../../nargo/contract.zig").load;
+const ContractAbi = @import("../../nargo/contract.zig").ContractAbi;
 
 const EthAddress = F;
 
@@ -279,8 +279,8 @@ pub const Txe = struct {
 
         if (std.mem.eql(u8, path, "")) {
             const contract_path = try std.fmt.allocPrint(self.allocator, "data/contracts/{s}.json", .{contract_name});
-            const contract_abi = try loadContract(self.allocator, contract_path);
-            const contract_instance = proto.ContractInstance.fromDeployParams(contract_abi, .{
+            const contract_abi = try ContractAbi.load(self.allocator, contract_path);
+            const contract_instance = proto.ContractInstance.fromDeployParams(self.allocator, contract_abi, .{
                 .constructor_name = initializer,
                 .constructor_args = args,
                 .salt = F.one,

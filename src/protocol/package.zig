@@ -1,4 +1,3 @@
-pub usingnamespace @import("./argument_encoder.zig");
 pub usingnamespace @import("./aztec_address.zig");
 pub usingnamespace @import("./complete_address.zig");
 pub usingnamespace @import("./constants.gen.zig");

@@ -156,13 +156,13 @@ pub fn execute(options: ExecuteOptions) !void {
         program = try io.load(allocator, path);
 
         if (options.calldata_path) |calldata_path| {
-            const artifact = try nargo_artifact.load(allocator, artifact_path);
+            const artifact = try nargo_artifact.ArtifactAbi.load(allocator, artifact_path);
             const pt_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_path, calldata_path });
             calldata = try loadCalldataFromProverToml(allocator, &artifact, pt_path);
         }
     } else {
         // Otherwise, load the bytecode from the artifact, and calldata from Prover.toml (unless overridden).
-        const artifact = try nargo_artifact.load(allocator, artifact_path);
+        const artifact = try nargo_artifact.ArtifactAbi.load(allocator, artifact_path);
         const bytecode = try artifact.getBytecode(allocator);
         program = try io.deserialize(allocator, bytecode);
 

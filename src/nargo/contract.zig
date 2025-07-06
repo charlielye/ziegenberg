@@ -3,7 +3,7 @@ const pretty = @import("../fmt/pretty.zig");
 const poseidon2 = @import("../poseidon2/poseidon2.zig");
 const F = @import("../bn254/fr.zig").Fr;
 const mt = @import("../merkle_tree/package.zig");
-const constants = @import("constants.gen.zig");
+const constants = @import("../protocol/constants.gen.zig");
 
 var VERSION: u8 = 1;
 
@@ -93,28 +93,28 @@ pub const ContractAbi = struct {
             &json_reader,
             .{ .ignore_unknown_fields = true },
         );
-        const abi = parsed.value;
+        var abi = parsed.value;
         for (abi.functions) |*f| {
-            f.selector = f.computeFunctionSelector();
-            if (std.mem.eql(f.name, "public_dispatch")) {
-                abi.public_function = f;
+            f.selector = f.computeSelector();
+            if (std.mem.eql(u8, f.name, "public_dispatch")) {
+                abi.public_function = f.*;
             }
         }
 
         abi.private_functions = try filterFunctions(allocator, abi.functions, "private");
         abi.unconstrained_functions = try filterFunctions(allocator, abi.functions, "unconstrained");
         abi.initializer_functions = try filterFunctions(allocator, abi.functions, "initializer");
-        abi.private_function_tree_root = computeFunctionTreeRoot(allocator, abi.private_functions);
-        abi.unconstrained_function_tree_root = computeFunctionTreeRoot(allocator, abi.unconstrained_functions);
-        abi.artifact_hash = abi.computeArtifactHash(allocator);
-        abi.public_bytecode_commitment = computePublicBytecodeCommitment(abi.public_function.getBytecode(allocator));
+        abi.private_function_tree_root = try computeFunctionTreeRoot(allocator, abi.private_functions);
+        abi.unconstrained_function_tree_root = try computeFunctionTreeRoot(allocator, abi.unconstrained_functions);
+        abi.artifact_hash = try abi.computeArtifactHash(allocator);
+        abi.public_bytecode_commitment = try computePublicBytecodeCommitment(try abi.public_function.getBytecode(allocator));
         abi.default_initializer = abi.findDefaultInitializer();
 
         return abi;
     }
 
     fn findDefaultInitializer(self: *ContractAbi) ?Function {
-        if (self.initializer_functions.len == 0) return;
+        if (self.initializer_functions.len == 0) return null;
 
         for (self.initializer_functions) |f| {
             if (std.mem.eql(u8, f.name, "initializer")) return f;
@@ -200,14 +200,14 @@ pub fn computeFunctionTreeRoot(allocator: std.mem.Allocator, functions: []const 
     return tree.root();
 }
 
-fn computePublicBytecodeCommitment(bytecode: []const u8) ![]F {
+fn computePublicBytecodeCommitment(bytecode: []const u8) !F {
     if (bytecode.len > constants.MAX_PACKED_PUBLIC_BYTECODE_SIZE_IN_FIELDS * 31) {
         return error.PublicBytecodeTooLong;
     }
 
     // +1 for domain separator.
-    const fields = [_]F{F.zero} ** (constants.MAX_PACKED_PUBLIC_BYTECODE_SIZE_IN_FIELDS + 1);
-    fields[0] = constants.GeneratorIndex.public_bytecode;
+    var fields = [_]F{F.zero} ** (constants.MAX_PACKED_PUBLIC_BYTECODE_SIZE_IN_FIELDS + 1);
+    fields[0] = F.from_int(constants.GeneratorIndex.public_bytecode);
 
     // TODO: There seem to be 2 ways to hash bytes. Unify?
     // This way is:
@@ -221,11 +221,11 @@ fn computePublicBytecodeCommitment(bytecode: []const u8) ![]F {
         }
         const end = @min(start + 31, bytecode.len);
         var chunk: [32]u8 = [_]u8{0} ** 32;
-        std.mem.copyForward(u8, chunk[1 .. end - start], bytecode[start..end]);
+        std.mem.copyForwards(u8, chunk[1 .. end - start], bytecode[start..end]);
         field.* = F.from_buf(chunk);
     }
 
-    return poseidon2.hash(fields);
+    return poseidon2.hash(&fields);
 }
 
 const token_contract_abi_path = "aztec-packages/noir-projects/noir-contracts/target/token_contract-Token.json";
