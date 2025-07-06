@@ -15,7 +15,7 @@ pub const CONTRACT_INSTANCE_VERSION: u8 = 1;
 /// address that acts as its identifier. It can be called into. It may have encryption and nullifying public keys.
 pub const ContractInstance = struct {
     /// Version identifier. Initially one, bumped for any changes to the contract instance struct.
-    version: u8,
+    version: u8 = CONTRACT_INSTANCE_VERSION,
     /// User-generated pseudorandom value for uniqueness.
     salt: Fr,
     /// Optional deployer address or zero if this was a universal deploy.
@@ -31,25 +31,6 @@ pub const ContractInstance = struct {
     /// Optional address.
     address: ?AztecAddress,
 
-    pub fn init(
-        salt: Fr,
-        deployer: AztecAddress,
-        contract_class_id: Fr,
-        initialization_hash: Fr,
-        public_keys: PublicKeys,
-    ) ContractInstance {
-        return .{
-            .version = CONTRACT_INSTANCE_VERSION,
-            .salt = salt,
-            .deployer = deployer,
-            .current_contract_class_id = contract_class_id,
-            .original_contract_class_id = contract_class_id,
-            .initialization_hash = initialization_hash,
-            .public_keys = public_keys,
-            .address = null,
-        };
-    }
-
     /// Options for creating a contract instance from deployment parameters.
     pub const DeployParams = struct {
         constructor_name: ?[]const u8 = null,
@@ -61,6 +42,7 @@ pub const ContractInstance = struct {
 
     /// Creates a contract instance from deployment parameters.
     pub fn fromDeployParams(
+        allocator: std.mem.Allocator,
         contract_abi: nargo.ContractAbi,
         params: DeployParams,
     ) ContractInstance {
@@ -80,53 +62,41 @@ pub const ContractInstance = struct {
             }
         }
 
-        // Compute initialization hash
-        const initialization_hash = computeInitializationHash(
-            params.constructor_name,
-            params.constructor_args,
-        );
+        // Compute initialization hash.
+        const initialization_hash = if (ctor)
+            computeInitializationHash(allocator, ctor, params.constructor_args)
+        else
+            Fr.zero;
 
-        // Create the instance
-        var instance = init(
-            salt,
-            deployer,
-            contract_class_id,
-            initialization_hash,
-            public_keys,
-        );
-
-        // Compute and set the address
+        const instance = ContractInstance{
+            .salt = salt,
+            .deployer = deployer,
+            .current_contract_class_id = contract_class.id,
+            .original_contract_class_id = contract_class.id,
+            .initialization_hash = initialization_hash,
+            .public_keys = public_keys,
+            .address = null,
+        };
         instance.address = instance.computeAddress();
-
         return instance;
     }
 
     /// Computes the initialization hash for a constructor.
     fn computeInitializationHash(
-        constructor_name: ?[]const u8,
+        allocator: std.mem.Allocator,
+        ctor: nargo.Function,
         args: []const Fr,
     ) Fr {
-        // If no constructor, return zero
-        if (constructor_name == null) {
-            return Fr.zero;
-        }
-
-        // TODO: For now, we'll use a simplified version.
-        // The full implementation would need:
-        // 1. Compute function selector from constructor name
-        // 2. Compute args hash using computeVarArgsHash
-        // 3. Hash [selector, argsHash] with CONSTRUCTOR generator
-
-        // Simplified: just hash the args if any
-        if (args.len == 0) {
-            return Fr.zero;
-        }
-
-        // Hash the constructor arguments
-        return poseidon2.hashWithSeparator(
-            args,
-            @intFromEnum(constants.GeneratorIndex.function_args),
-        );
+        const args_fields = std.ArrayList(Fr).initCapacity(allocator, args.len + 1);
+        defer args_fields.deinit();
+        args_fields.append(Fr.from_int(constants.GeneratorIndex.function_args)) catch unreachable;
+        for (args) |arg| args_fields.append(arg) catch unreachable;
+        const args_hash = poseidon2.hash(args_fields.items);
+        return poseidon2.hash(&[_]Fr{
+            Fr.from_int(constants.GeneratorIndex.constructor),
+            Fr.from_int(ctor.selector),
+            args_hash,
+        });
     }
 
     // /// Computes the hash of the contract instance.
@@ -148,25 +118,22 @@ pub const ContractInstance = struct {
     //     );
     // }
 
-    // /// Computes the address for this contract instance.
-    // pub fn computeAddress(self: ContractInstance) AztecAddress {
-    //     // Contract address is computed from public keys hash and partial address
-    //     const partial_address = self.computePartialAddress();
-    //     return key_derivation.computeAddress(self.public_keys, partial_address);
-    // }
+    /// Computes the address for this contract instance.
+    pub fn computeAddress(self: *ContractInstance) AztecAddress {
+        // Contract address is computed from public keys hash and partial address
+        const partial_address = self.computePartialAddress();
+        return key_derivation.computeAddress(self.public_keys, partial_address);
+    }
 
-    // /// Computes the partial address (a component of the full address computation).
-    // pub fn computePartialAddress(self: ContractInstance) Fr {
-    //     const inputs = [_]Fr{
-    //         self.current_contract_class_id,
-    //         self.salt,
-    //     };
-
-    //     return poseidon2.hashWithSeparator(
-    //         &inputs,
-    //         @intFromEnum(constants.GeneratorIndex.partial_address),
-    //     );
-    // }
+    /// Computes the partial address (a component of the full address computation).
+    pub fn computePartialAddress(self: *ContractInstance) Fr {
+        const inputs = [_]Fr{
+            Fr.from_int(constants.GeneratorIndex.partial_address),
+            self.current_contract_class_id,
+            self.salt,
+        };
+        return poseidon2.hash(&inputs);
+    }
 
     // /// Returns whether this instance was universally deployed (no specific deployer).
     // pub fn isUniversalDeploy(self: ContractInstance) bool {
