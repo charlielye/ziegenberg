@@ -50,7 +50,7 @@ pub const ContractInstance = struct {
         const salt = params.salt orelse Fr.random();
         const public_keys = params.public_keys orelse PublicKeys.default();
         const deployer = params.deployer orelse AztecAddress.zero;
-        const contract_class = ContractClass.fromContractAbi(contract_abi);
+        // const contract_class = ContractClass.fromContractAbi(contract_abi);
 
         // Get the constructor.
         var ctor = contract_abi.default_initializer;
@@ -71,8 +71,8 @@ pub const ContractInstance = struct {
         var instance = ContractInstance{
             .salt = salt,
             .deployer = deployer,
-            .current_contract_class_id = contract_class.id,
-            .original_contract_class_id = contract_class.id,
+            .current_contract_class_id = contract_abi.class_id,
+            .original_contract_class_id = contract_abi.class_id,
             .initialization_hash = initialization_hash,
             .public_keys = public_keys,
             .address = null,
@@ -100,14 +100,14 @@ pub const ContractInstance = struct {
     }
 
     /// Computes the address for this contract instance.
-    pub fn computeAddress(self: *ContractInstance) AztecAddress {
+    fn computeAddress(self: *ContractInstance) AztecAddress {
         // Contract address is computed from public keys hash and partial address
         const partial_address = self.computePartialAddress();
         return key_derivation.computeAddress(self.public_keys, partial_address);
     }
 
     /// Computes the partial address (a component of the full address computation).
-    pub fn computePartialAddress(self: *ContractInstance) Fr {
+    fn computePartialAddress(self: *ContractInstance) Fr {
         const inputs = [_]Fr{
             Fr.from_int(constants.GeneratorIndex.partial_address),
             self.current_contract_class_id,

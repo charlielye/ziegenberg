@@ -60,9 +60,9 @@ pub const ForeignCallParam = union(enum) {
         _ = fmt;
         _ = options;
         switch (self) {
-            .Single => |value| try writer.print("Single({})", .{value}),
+            .Single => |value| try writer.print("0x{x}", .{value}),
             .Array => |array| {
-                try writer.writeAll("Array[");
+                try writer.writeAll("[");
                 for (array, 0..) |elem, i| {
                     if (i > 0) try writer.writeAll(", ");
                     try elem.format("", .{}, writer);

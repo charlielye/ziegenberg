@@ -95,6 +95,7 @@ pub const Mocker = struct {
 
     pub fn create_mock(
         self: *Mocker,
+        _: std.mem.Allocator,
         oracle_name: []const u8,
     ) !F {
         std.debug.print("create_mock: {s}\n", .{oracle_name});
@@ -114,6 +115,7 @@ pub const Mocker = struct {
 
     pub fn get_mock_last_params(
         self: *Mocker,
+        _: std.mem.Allocator,
         id: u64,
     ) ![]ForeignCallParam {
         // std.debug.print("set_mock_returns: {any}\n", .{params});
@@ -122,6 +124,7 @@ pub const Mocker = struct {
 
     pub fn set_mock_times(
         self: *Mocker,
+        _: std.mem.Allocator,
         id: u64,
         times_left: u64,
     ) !void {
@@ -130,6 +133,7 @@ pub const Mocker = struct {
 
     pub fn clear_mock(
         self: *Mocker,
+        _: std.mem.Allocator,
         id: u64,
     ) !void {
         self.mock_calls.items[id] = null;
@@ -137,6 +141,7 @@ pub const Mocker = struct {
 
     pub fn get_times_called(
         self: *Mocker,
+        _: std.mem.Allocator,
         id: u64,
     ) !u32 {
         return self.mock_calls.items[id].?.times_called;

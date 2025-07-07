@@ -293,8 +293,6 @@ pub fn marshalOutput(
     const info = @typeInfo(output_type);
     switch (info) {
         .@"struct" => {
-            // std.debug.assert(destinations.len == 1);
-
             // Structs need to be flattened into ForeignCallParams for marshaling
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();

@@ -40,8 +40,8 @@ pub fn structDispatcher(
         const field_info = @typeInfo(field_type);
         // Compile time check:
         // - This field is a function.
-        // - With at least one arg (self).
-        if (field_info == .@"fn" and field_info.@"fn".params.len >= 1) {
+        // - With at least two args (self, allocator).
+        if (field_info == .@"fn" and field_info.@"fn".params.len >= 2) {
             // Runtime check for matching function name.
             if (std.mem.eql(u8, decl.name, fc.function)) {
                 // There is a function name matching the call on ourself.
@@ -51,7 +51,7 @@ pub fn structDispatcher(
                 // Check that the number of parameters matches the number of arguments in the foreign call.
                 // For functions with optional parameters, each optional is represented as 2 values
                 var expected_param_count: usize = 0;
-                inline for (field_info.@"fn".params[1..]) |param_info| {
+                inline for (field_info.@"fn".params[2..]) |param_info| {
                     if (@typeInfo(param_info.type.?) == .optional) {
                         expected_param_count += 2; // Optional params are [is_some, value]
                     } else {
@@ -69,10 +69,11 @@ pub fn structDispatcher(
                 }
                 // First arg should be this Txe struct.
                 args[0] = target;
+                args[1] = allocator;
 
                 // Marshal each parameter
                 var param_idx: usize = 0;
-                inline for (1..args.len) |i| {
+                inline for (2..args.len) |i| {
                     const param_type = field_info.@"fn".params[i].type.?;
                     if (@typeInfo(param_type) == .optional) {
                         // Optional parameter - create array from two consecutive params

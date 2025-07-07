@@ -80,6 +80,7 @@ pub const ContractAbi = struct {
     public_bytecode_commitment: F = F.zero,
     artifact_hash: F = F.zero,
     default_initializer: ?Function = null,
+    class_id: F = F.zero,
 
     /// Load the contract abi from the json file.
     /// Compute all the function selectors.
@@ -109,6 +110,12 @@ pub const ContractAbi = struct {
         abi.unconstrained_function_tree_root = try computeFunctionTreeRoot(allocator, abi.unconstrained_functions);
         abi.artifact_hash = try abi.computeArtifactHash(allocator);
         abi.default_initializer = abi.findDefaultInitializer();
+        abi.class_id = poseidon2.hash(&[_]F{
+            F.from_int(constants.GeneratorIndex.contract_leaf),
+            abi.artifact_hash,
+            abi.private_function_tree_root,
+            abi.public_bytecode_commitment,
+        });
 
         return abi;
     }

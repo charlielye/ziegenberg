@@ -180,13 +180,14 @@ pub const Txe = struct {
     chain_id: F = F.one,
     block_number: u32 = 0,
     side_effect_counter: u32 = 0,
-    contract_address: proto.AztecAddress,
+    contract_address: proto.AztecAddress = proto.AztecAddress.zero,
     msg_sender: proto.AztecAddress,
     function_selector: u32 = 0,
     is_static_call: bool = false,
     nested_call_returndata: []F,
     contracts_artifacts_path: []const u8,
-    contract_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
+    contract_artifact_cache: std.AutoHashMap(F, ContractAbi),
+    contract_instance_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
     //   private contractDataOracle: ContractDataOracle;
 
     const CHAIN_ID = 1;
@@ -197,16 +198,17 @@ pub const Txe = struct {
     pub fn init(allocator: std.mem.Allocator, contract_artifacts_path: []const u8) Txe {
         return .{
             .allocator = allocator,
-            .contract_address = proto.AztecAddress.random(),
             .msg_sender = proto.AztecAddress.init(F.max),
             .nested_call_returndata = &[_]F{},
             .contracts_artifacts_path = contract_artifacts_path,
-            .contract_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
+            .contract_artifact_cache = std.AutoHashMap(F, ContractAbi).init(allocator),
+            .contract_instance_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
         };
     }
 
     pub fn deinit(self: *Txe) void {
-        self.contract_cache.deinit();
+        self.contract_instance_cache.deinit();
+        self.contract_artifact_cache.deinit();
     }
 
     /// Dispatch function for foreign calls.
@@ -221,11 +223,11 @@ pub const Txe = struct {
         return try structDispatcher(self, allocator, mem, fc, params);
     }
 
-    pub fn reset(_: *Txe) !void {
+    pub fn reset(_: *Txe, _: std.mem.Allocator) !void {
         std.debug.print("reset called!\n", .{});
     }
 
-    pub fn createAccount(self: *Txe, secret: F) !struct {
+    pub fn createAccount(self: *Txe, _: std.mem.Allocator, secret: F) !struct {
         address: proto.AztecAddress,
         public_keys: proto.PublicKeys,
     } {
@@ -242,32 +244,25 @@ pub const Txe = struct {
         };
     }
 
-    pub fn getContractAddress(self: *Txe) !proto.AztecAddress {
+    pub fn getContractAddress(self: *Txe, _: std.mem.Allocator) !proto.AztecAddress {
         return self.contract_address;
     }
 
-    pub fn setContractAddress(self: *Txe, address: proto.AztecAddress) !void {
+    pub fn setContractAddress(self: *Txe, _: std.mem.Allocator, address: proto.AztecAddress) !void {
         self.contract_address = address;
         std.debug.print("setContractAddress: {x}\n", .{self.contract_address});
     }
 
-    const DeployResponse = struct {
-        salt: F,
-        deployer: proto.AztecAddress,
-        contract_class_id: F,
-        initialization_hash: F,
-        public_keys: proto.PublicKeys,
-    };
-
     pub fn deploy(
         self: *Txe,
+        tmp_allocator: std.mem.Allocator,
         path: []u8,
         contract_name: []u8,
         initializer: []u8,
         args_len: u32,
         args: []F,
         secret: F,
-    ) !DeployResponse {
+    ) ![16]F {
         std.debug.print("deploy: {s} {s} {s} {} {short} {short}\n", .{
             path,
             contract_name,
@@ -285,40 +280,57 @@ pub const Txe = struct {
             return error.Unimplemented;
         }
 
-        const contract_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.json", .{
+        const contract_path = try std.fmt.allocPrint(tmp_allocator, "{s}/{s}.json", .{
             self.contracts_artifacts_path,
             contract_name,
         });
+        // Note use of long lived allocator.
         const contract_abi = try ContractAbi.load(self.allocator, contract_path);
-        const contract_instance = proto.ContractInstance.fromDeployParams(self.allocator, contract_abi, .{
+        const contract_instance = proto.ContractInstance.fromDeployParams(tmp_allocator, contract_abi, .{
             .constructor_name = initializer,
             .constructor_args = args,
             .salt = F.one,
             .public_keys = public_keys,
         });
-        try self.contract_cache.put(contract_instance.address.?, contract_instance);
-        std.debug.print("Deployed contract: {s} at address {x}\n", .{
+
+        try self.contract_artifact_cache.put(contract_abi.class_id, contract_abi);
+        try self.contract_instance_cache.put(contract_instance.address.?, contract_instance);
+
+        std.debug.print("Deployed contract {s} with class id {x} at address {x}\n", .{
             contract_name,
+            contract_abi.class_id,
             contract_instance.address.?,
         });
 
         self.block_number += 1;
 
-        return DeployResponse{
-            .salt = contract_instance.salt,
-            .deployer = contract_instance.deployer,
-            .contract_class_id = contract_instance.current_contract_class_id,
-            .initialization_hash = contract_instance.initialization_hash,
-            .public_keys = public_keys,
+        return [16]F{
+            contract_instance.salt,
+            contract_instance.deployer.value,
+            contract_instance.current_contract_class_id,
+            contract_instance.initialization_hash,
+            public_keys.master_nullifier_public_key.x,
+            public_keys.master_nullifier_public_key.y,
+            F.zero,
+            public_keys.master_incoming_viewing_public_key.x,
+            public_keys.master_incoming_viewing_public_key.y,
+            F.zero,
+            public_keys.master_outgoing_viewing_public_key.x,
+            public_keys.master_outgoing_viewing_public_key.y,
+            F.zero,
+            public_keys.master_tagging_public_key.x,
+            public_keys.master_tagging_public_key.y,
+            F.zero,
         };
     }
 
-    pub fn getBlockNumber(self: *Txe) !u64 {
+    pub fn getBlockNumber(self: *Txe, _: std.mem.Allocator) !u64 {
         return self.block_number;
     }
 
     pub fn getPrivateContextInputs(
         self: *Txe,
+        _: std.mem.Allocator,
         block_number: ?u32,
         timestamp: ?u64,
     ) !PrivateContextInputs {
@@ -346,18 +358,23 @@ pub const Txe = struct {
     /// This is a port of the TypeScript logic, with some placeholders and comments.
     pub fn callPrivateFunction(
         self: *Txe,
+        _: std.mem.Allocator,
         target_contract_address: proto.AztecAddress,
         function_selector: FunctionSelector,
         args_hash: F,
         side_effect_counter: u32,
         is_static_call: bool,
-    ) !void {
+    ) ![2]F {
         _ = args_hash;
         _ = side_effect_counter;
-        _ = is_static_call;
+        // _ = is_static_call;
         // Log the function call (verbose)
         // TODO: Implement debug function name lookup and logging
-        // std.debug.print("Executing external function {}@{} isStaticCall={}\n", .{function_selector, target_contract_address, is_static_call});
+        std.debug.print("Executing external function: {x}@{x} (static: {})\n", .{
+            function_selector,
+            target_contract_address,
+            is_static_call,
+        });
 
         // Store current environment
         const current_contract_address = self.contract_address;
@@ -401,6 +418,6 @@ pub const Txe = struct {
         self.function_selector = current_function_selector;
 
         // TODO: Return result (endSideEffectCounter, returnsHash)
-        // return { endSideEffectCounter, returnsHash: publicInputs.returnsHash };
+        return [2]F{ F.zero, F.zero };
     }
 };
