@@ -210,5 +210,9 @@ pub fn Field(comptime Params: type) type {
         pub fn print(self: Fe) void {
             std.debug.print("0x{x:0>64}\n", .{self.to_int()});
         }
+
+        pub fn hash(self: Fe) u64 {
+            return std.hash.Wyhash.hash(0, std.mem.asBytes(&self.limbs));
+        }
     };
 }

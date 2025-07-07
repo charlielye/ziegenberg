@@ -99,25 +99,6 @@ pub const ContractInstance = struct {
         });
     }
 
-    // /// Computes the hash of the contract instance.
-    // /// This hash is used for various purposes including address computation.
-    // pub fn hash(self: ContractInstance) Fr {
-    //     const inputs = [_]Fr{
-    //         Fr.from_int(self.version),
-    //         self.salt,
-    //         self.deployer.value,
-    //         self.current_contract_class_id,
-    //         self.original_contract_class_id,
-    //         self.initialization_hash,
-    //         self.public_keys.hash(),
-    //     };
-
-    //     return poseidon2.hashWithSeparator(
-    //         &inputs,
-    //         @intFromEnum(constants.GeneratorIndex.contract_leaf),
-    //     );
-    // }
-
     /// Computes the address for this contract instance.
     pub fn computeAddress(self: *ContractInstance) AztecAddress {
         // Contract address is computed from public keys hash and partial address
@@ -134,25 +115,4 @@ pub const ContractInstance = struct {
         };
         return poseidon2.hash(&inputs);
     }
-
-    // /// Returns whether this instance was universally deployed (no specific deployer).
-    // pub fn isUniversalDeploy(self: ContractInstance) bool {
-    //     return self.deployer.value.eql(Fr.zero);
-    // }
-
-    // /// Creates a contract instance for a universal deploy.
-    // pub fn universal(
-    //     salt: Fr,
-    //     contract_class_id: Fr,
-    //     initialization_hash: Fr,
-    //     public_keys: PublicKeys,
-    // ) ContractInstance {
-    //     return init(
-    //         salt,
-    //         AztecAddress.zero,
-    //         contract_class_id,
-    //         initialization_hash,
-    //         public_keys,
-    //     );
-    // }
 };

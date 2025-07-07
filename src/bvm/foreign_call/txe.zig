@@ -186,6 +186,7 @@ pub const Txe = struct {
     is_static_call: bool = false,
     nested_call_returndata: []F,
     contracts_artifacts_path: []const u8,
+    contract_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
     //   private contractDataOracle: ContractDataOracle;
 
     const CHAIN_ID = 1;
@@ -200,10 +201,13 @@ pub const Txe = struct {
             .msg_sender = proto.AztecAddress.init(F.max),
             .nested_call_returndata = &[_]F{},
             .contracts_artifacts_path = contract_artifacts_path,
+            .contract_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
         };
     }
 
-    pub fn deinit(_: *Txe) void {}
+    pub fn deinit(self: *Txe) void {
+        self.contract_cache.deinit();
+    }
 
     /// Dispatch function for foreign calls.
     /// The given allocator is used for transient data and is freed by the caller.
@@ -249,7 +253,7 @@ pub const Txe = struct {
 
     const DeployResponse = struct {
         salt: F,
-        deployer: F,
+        deployer: proto.AztecAddress,
         contract_class_id: F,
         initialization_hash: F,
         public_keys: proto.PublicKeys,
@@ -263,7 +267,7 @@ pub const Txe = struct {
         args_len: u32,
         args: []F,
         secret: F,
-    ) ![16]F {
+    ) !DeployResponse {
         std.debug.print("deploy: {s} {s} {s} {} {short} {short}\n", .{
             path,
             contract_name,
@@ -277,24 +281,36 @@ pub const Txe = struct {
         const public_keys_hash = public_keys.hash();
         _ = public_keys_hash;
 
-        if (std.mem.eql(u8, path, "")) {
-            const contract_path = try std.fmt.allocPrint(self.allocator, "data/contracts/{s}.json", .{contract_name});
-            const contract_abi = try ContractAbi.load(self.allocator, contract_path);
-            const contract_instance = proto.ContractInstance.fromDeployParams(self.allocator, contract_abi, .{
-                .constructor_name = initializer,
-                .constructor_args = args,
-                .salt = F.one,
-                .public_keys = public_keys,
-            });
-            _ = contract_instance;
-        } else {
+        if (!std.mem.eql(u8, path, "")) {
             return error.Unimplemented;
         }
 
-        var r: [16]F = undefined;
-        for (&r) |*e| e.* = F.random();
+        const contract_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.json", .{
+            self.contracts_artifacts_path,
+            contract_name,
+        });
+        const contract_abi = try ContractAbi.load(self.allocator, contract_path);
+        const contract_instance = proto.ContractInstance.fromDeployParams(self.allocator, contract_abi, .{
+            .constructor_name = initializer,
+            .constructor_args = args,
+            .salt = F.one,
+            .public_keys = public_keys,
+        });
+        try self.contract_cache.put(contract_instance.address.?, contract_instance);
+        std.debug.print("Deployed contract: {s} at address {x}\n", .{
+            contract_name,
+            contract_instance.address.?,
+        });
+
         self.block_number += 1;
-        return r;
+
+        return DeployResponse{
+            .salt = contract_instance.salt,
+            .deployer = contract_instance.deployer,
+            .contract_class_id = contract_instance.current_contract_class_id,
+            .initialization_hash = contract_instance.initialization_hash,
+            .public_keys = public_keys,
+        };
     }
 
     pub fn getBlockNumber(self: *Txe) !u64 {

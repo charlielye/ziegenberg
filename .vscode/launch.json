@@ -13,7 +13,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "stopOnEntry": false,
-      "preLaunchTask": "build-zb"
+      "preLaunchTask": "build-exe"
     }
   ]
 }

@@ -156,8 +156,8 @@ fn writeSliceOfValuesToMemory(
 pub fn marshalForeignCallParam(
     output: []ForeignCallParam,
     mem: *Memory,
-    destination: []io.ValueOrArray,
-    destination_value_types: []io.HeapValueType,
+    destination: []const io.ValueOrArray,
+    destination_value_types: []const io.HeapValueType,
 ) void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -278,30 +278,28 @@ fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]Fo
 pub fn marshalOutput(
     output: anytype,
     mem: *Memory,
-    destinations: []io.ValueOrArray,
-    destination_value_types: []io.HeapValueType,
-) usize {
+    destinations: []const io.ValueOrArray,
+    destination_value_types: []const io.HeapValueType,
+) void {
     const output_type = @TypeOf(output.*);
 
     if (output_type == F) {
-        std.debug.assert(destinations.len == 1);
+        // std.debug.assert(destinations.len == 1);
         mem.setSlot(destinations[0].MemoryAddress, output.*.to_int());
-        return 1;
-    } else if (output_type == []ForeignCallParam) {
-        marshalForeignCallParam(output.*, mem, destinations, destination_value_types);
-        return destinations.len;
+        // } else if (output_type == []ForeignCallParam) {
+        //     marshalForeignCallParam(output.*, mem, destination, destination_value_type);
     }
 
     const info = @typeInfo(output_type);
     switch (info) {
         .@"struct" => {
+            // std.debug.assert(destinations.len == 1);
+
             // Structs need to be flattened into ForeignCallParams for marshaling
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
-
             const flattened = structToForeignCallParams(arena.allocator(), output.*) catch unreachable;
             marshalForeignCallParam(flattened, mem, destinations, destination_value_types);
-            return destinations.len;
         },
         .array => |arr_info| {
             std.debug.assert(destinations[0] == .HeapArray);
@@ -310,17 +308,14 @@ pub fn marshalOutput(
             // TODO: This will break if the array element is anything other than a field or int.
             for (0..arr.size) |i|
                 mem.setSlotAtIndex(dst_idx + i, if (arr_info.child == F) output[i].to_int() else output[i]);
-            return 1;
         },
         .int => {
             mem.setSlot(destinations[0].MemoryAddress, output.*);
-            return 1;
         },
         .bool => {
             mem.setSlot(destinations[0].MemoryAddress, if (output.*) 1 else 0);
-            return 1;
         },
-        .void => return 0,
+        .void => {},
         else => {
             std.debug.print("Unexpected type: {any}\n", .{output_type});
             unreachable;

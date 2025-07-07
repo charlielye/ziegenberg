@@ -100,9 +100,7 @@ pub fn structDispatcher(
                 // Make the function call.
                 std.debug.print("Making foreign call to: {s}\n", .{decl.name});
                 const r = try @call(.auto, field, args);
-                // Marshall the result back into the VM memory.
-                _ = foreign_call.marshalOutput(&r, mem, fc.destinations, fc.destination_value_types);
-                // std.debug.assert(written == fc.destinations.len);
+                foreign_call.marshalOutput(&r, mem, fc.destinations, fc.destination_value_types);
                 return true;
             }
         }

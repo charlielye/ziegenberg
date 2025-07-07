@@ -40,4 +40,12 @@ pub const AztecAddress = struct {
     ) !void {
         return self.value.format(fmt, options, writer);
     }
+
+    pub fn eql(self: AztecAddress, other: AztecAddress) bool {
+        return self.value.eql(other.value);
+    }
+
+    pub fn hash(self: AztecAddress) u64 {
+        return std.hash.Wyhash.hash(0, std.mem.asBytes(&self.limbs));
+    }
 };

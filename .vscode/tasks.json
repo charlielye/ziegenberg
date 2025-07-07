@@ -11,6 +11,17 @@
         "isDefault": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "build-exe",
+      "type": "shell",
+      "command": "zig",
+      "args": ["build", "build-exe"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
     }
   ]
 }

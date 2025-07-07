@@ -64,7 +64,7 @@ pub const Mocker = struct {
                     call.times_called += 1;
                     // _ = foreign_call.marshalOutput(&call.result, mem, fc.destinations);
                     // for (call.result) |*r_param| {
-                    _ = foreign_call.marshalOutput(&call.result, mem, fc.destinations, fc.destination_value_types);
+                    foreign_call.marshalForeignCallParam(call.result, mem, fc.destinations, fc.destination_value_types);
                     // }
                     if (call.times_left) |*left| {
                         left.* -= 1;

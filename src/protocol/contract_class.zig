@@ -31,7 +31,7 @@ pub const ContractClass = struct {
         return .{
             .artifact_hash = contract.artifact_hash,
             .private_functions = contract.private_functions,
-            .public_bytecode = contract.public_function.bytecode,
+            .public_bytecode = contract.public_function.?.bytecode,
             .private_functions_root = contract.private_function_tree_root,
             .public_bytecode_commitment = contract.public_bytecode_commitment,
             .id = id,
