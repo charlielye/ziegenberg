@@ -72,27 +72,6 @@ pub fn deriveSigningKey(secret_key: Fr) GrumpkinScalar {
     return deriveKey(secret_key, constants.GeneratorIndex.ivsk_m);
 }
 
-pub fn computePreaddress(public_keys_hash: Fr, partial_address: Fr) Fr {
-    const inputs = [_]Fr{
-        Fr.from_int(@intFromEnum(constants.GeneratorIndex.contract_address_v1)),
-        public_keys_hash,
-        partial_address,
-    };
-    return poseidon2.hash(&inputs);
-}
-
-pub fn computeAddress(public_keys: PublicKeys, partial_address: Fr) AztecAddress {
-    // Given public keys and a partial address, we can compute our address in the following steps.
-    // 1. preaddress = poseidon2([publicKeysHash, partialAddress], GeneratorIndex.CONTRACT_ADDRESS_V1);
-    // 2. addressPoint = (preaddress * G) + ivpk_m
-    // 3. address = addressPoint.x
-    const preaddress = computePreaddress(public_keys.hash(), partial_address);
-    const preaddress_point = derivePublicKeyFromSecretKey(GrumpkinScalar.from_int(preaddress.to_int()));
-    const address_point = preaddress_point.add(public_keys.master_incoming_viewing_public_key);
-    const normalized = address_point.normalize();
-    return AztecAddress.init(normalized.x);
-}
-
 pub fn computeAddressSecret(preaddress: Fr, ivsk: Fq) Fq {
     // TLDR; P1 = (h + ivsk) * G
     // if P1.y is pos
@@ -158,24 +137,24 @@ pub fn deriveKeys(secret_key: Fr) DerivedKeys {
 }
 
 // Returns shared tagging secret computed with Diffie-Hellman key exchange.
-fn computeTaggingSecretPoint(known_address: CompleteAddress, ivsk: Fq, external_address: AztecAddress) G1.Element {
-    const known_preaddress = computePreaddress(known_address.public_keys.hash(), known_address.partial_address);
-    // TODO: #8970 - Computation of address point from x coordinate might fail
-    const external_address_point = external_address.toAddressPoint();
-    // Given A (known complete address) -> B (external address) and h == preaddress
-    // Compute shared secret as S = (h_A + ivsk_A) * Addr_Point_B
-    const address_secret = computeAddressSecret(known_preaddress, ivsk);
-    return external_address_point.mul(address_secret);
-}
+// fn computeTaggingSecretPoint(known_address: CompleteAddress, ivsk: Fq, external_address: AztecAddress) G1.Element {
+//     const known_preaddress = computePreaddress(known_address.public_keys.hash(), known_address.partial_address);
+//     // TODO: #8970 - Computation of address point from x coordinate might fail
+//     const external_address_point = external_address.toAddressPoint();
+//     // Given A (known complete address) -> B (external address) and h == preaddress
+//     // Compute shared secret as S = (h_A + ivsk_A) * Addr_Point_B
+//     const address_secret = computeAddressSecret(known_preaddress, ivsk);
+//     return external_address_point.mul(address_secret);
+// }
 
-pub fn computeAppTaggingSecret(
-    known_address: CompleteAddress,
-    ivsk: Fq,
-    external_address: AztecAddress,
-    app: AztecAddress,
-) Fr {
-    const tagging_secret_point = computeTaggingSecretPoint(known_address, ivsk, external_address);
-    const normalized = tagging_secret_point.normalize();
-    const inputs = [_]Fr{ normalized.x, normalized.y, app.value };
-    return poseidon2.hash(&inputs);
-}
+// pub fn computeAppTaggingSecret(
+//     known_address: CompleteAddress,
+//     ivsk: Fq,
+//     external_address: AztecAddress,
+//     app: AztecAddress,
+// ) Fr {
+//     const tagging_secret_point = computeTaggingSecretPoint(known_address, ivsk, external_address);
+//     const normalized = tagging_secret_point.normalize();
+//     const inputs = [_]Fr{ normalized.x, normalized.y, app.value };
+//     return poseidon2.hash(&inputs);
+// }

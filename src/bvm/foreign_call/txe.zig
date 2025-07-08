@@ -236,7 +236,10 @@ pub const Txe = struct {
 
         // TODO: Why do we use the secret for both args here?
         // TS code unhelpfully just says "Footgun!"...
-        const complete_address = proto.CompleteAddress.fromSecretKeyAndPartialAddress(secret, secret);
+        const complete_address = proto.CompleteAddress.fromSecretKeyAndPartialAddress(
+            secret,
+            proto.PartialAddress.init(secret),
+        );
 
         return .{
             .address = complete_address.aztec_address,
@@ -294,12 +297,12 @@ pub const Txe = struct {
         });
 
         try self.contract_artifact_cache.put(contract_abi.class_id, contract_abi);
-        try self.contract_instance_cache.put(contract_instance.address.?, contract_instance);
+        try self.contract_instance_cache.put(contract_instance.address, contract_instance);
 
         std.debug.print("Deployed contract {s} with class id {x} at address {x}\n", .{
             contract_name,
             contract_abi.class_id,
-            contract_instance.address.?,
+            contract_instance.address,
         });
 
         self.block_number += 1;

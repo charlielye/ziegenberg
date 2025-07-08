@@ -7,7 +7,57 @@ pub fn hash(input: []const Fr) Fr {
     return Poseidon2Sponge.hash_fixed_length(1, input)[0];
 }
 
-/// Hashes bytes by chunking into 31 bytes.
+pub fn hashTuple(input: anytype) Fr {
+    const T = @TypeOf(input);
+
+    // If it's already an Fr, return it
+    if (T == Fr) {
+        return input;
+    }
+
+    const info = @typeInfo(T);
+
+    // Handle integers
+    if (info == .int or info == .comptime_int) {
+        return Fr.from_int(input);
+    }
+
+    if (info == .bool) {
+        return Fr.from_int(@intFromBool(input));
+    }
+
+    // Handle enums
+    if (info == .@"enum") {
+        return Fr.from_int(@intFromEnum(input));
+    }
+
+    // Handle structs (anonymous tuples)
+    if (info == .@"struct") {
+        var child_hashes = std.ArrayList(Fr).init(std.heap.page_allocator);
+        defer child_hashes.deinit();
+
+        inline for (std.meta.fields(T)) |field| {
+            child_hashes.append(hashTuple(@field(input, field.name))) catch unreachable;
+        }
+
+        return hash(child_hashes.items);
+    }
+
+    // Handle arrays
+    if (info == .array) {
+        var child_hashes = std.ArrayList(Fr).init(std.heap.page_allocator);
+        defer child_hashes.deinit();
+
+        inline for (input) |item| {
+            child_hashes.append(hashTuple(item)) catch unreachable;
+        }
+
+        return hash(child_hashes.items);
+    }
+
+    @compileError("Unsupported type for hashTuple");
+}
+
 pub fn hashBytes(input: []const u8) Fr {
     const num_fields = input.len / 31 + (@intFromBool(input.len % 31 != 0));
     std.debug.assert(num_fields <= 128);
@@ -60,6 +110,23 @@ test "poseidon2 hash consistency" {
 test "hash bytes" {
     const h = hashBytes("i would like to hash somewhere between 32 and 64 bytes");
     std.debug.print("{x}\n", .{h});
+}
+
+test "hash tuple" {
+    const a = Fr.from_int(1);
+    const b = Fr.from_int(2);
+    const c = Fr.from_int(3);
+    const d = Fr.from_int(4);
+
+    // Create tree using array notation: [[a,[b,c]],d]
+    const result = hashTuple(.{ .{ a, .{ b, c } }, d });
+
+    // Manually compute the expected hash
+    const inner_hash = hash(&[_]Fr{ b, c });
+    const left_hash = hash(&[_]Fr{ a, inner_hash });
+    const expected = hash(&[_]Fr{ left_hash, d });
+
+    try std.testing.expect(result.eql(expected));
 }
 
 test "poseidon2 bench" {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const Fr = @import("../bn254/fr.zig").Fr;
 const AztecAddress = @import("aztec_address.zig").AztecAddress;
+const PartialAddress = @import("partial_address.zig").PartialAddress;
 const PublicKeys = @import("public_keys.zig").PublicKeys;
 const ContractClass = @import("contract_class.zig").ContractClass;
 const poseidon2 = @import("../poseidon2/poseidon2.zig");
@@ -29,7 +30,7 @@ pub const ContractInstance = struct {
     /// Public keys associated with this instance.
     public_keys: PublicKeys,
     /// Optional address.
-    address: ?AztecAddress,
+    address: AztecAddress,
 
     /// Options for creating a contract instance from deployment parameters.
     pub const DeployParams = struct {
@@ -68,17 +69,21 @@ pub const ContractInstance = struct {
         else
             Fr.zero;
 
-        var instance = ContractInstance{
+        return ContractInstance{
             .salt = salt,
             .deployer = deployer,
             .current_contract_class_id = contract_abi.class_id,
             .original_contract_class_id = contract_abi.class_id,
             .initialization_hash = initialization_hash,
             .public_keys = public_keys,
-            .address = null,
+            .address = AztecAddress.compute(
+                public_keys,
+                PartialAddress.computeFromSaltedInitializationHash(
+                    contract_abi.class_id,
+                    PartialAddress.computeSaltedInitializationHash(salt, initialization_hash, deployer),
+                ),
+            ),
         };
-        instance.address = instance.computeAddress();
-        return instance;
     }
 
     /// Computes the initialization hash for a constructor.
@@ -97,22 +102,5 @@ pub const ContractInstance = struct {
             Fr.from_int(ctor.selector),
             args_hash,
         });
-    }
-
-    /// Computes the address for this contract instance.
-    fn computeAddress(self: *ContractInstance) AztecAddress {
-        // Contract address is computed from public keys hash and partial address
-        const partial_address = self.computePartialAddress();
-        return key_derivation.computeAddress(self.public_keys, partial_address);
-    }
-
-    /// Computes the partial address (a component of the full address computation).
-    fn computePartialAddress(self: *ContractInstance) Fr {
-        const inputs = [_]Fr{
-            Fr.from_int(constants.GeneratorIndex.partial_address),
-            self.current_contract_class_id,
-            self.salt,
-        };
-        return poseidon2.hash(&inputs);
     }
 };
