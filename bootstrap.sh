@@ -17,6 +17,9 @@ export MEMSUSPEND=0
 # With no redis for logs, we want to be sure to dump failure logs to terminal.
 export DUMP_FAIL=1
 
+# Don't print log headers.
+export NO_HEADER=1
+
 # Noir test program exclusions.
 exclusions=(
   # TOML parser can't deal with empty array.
@@ -342,7 +345,7 @@ export -f check_witness_parity check_witness_parity_brillig proto_test run_progr
 ###
 function test {
   # Build if requested.
-  if [ -n "$BUILD" ]; then
+  if [ -n "${BUILD:-}" ]; then
     build $BUILD
   fi
 

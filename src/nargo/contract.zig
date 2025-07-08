@@ -78,7 +78,7 @@ pub const Function = struct {
         for (self.abi.parameters) |p| {
             // Skip context inputs parameter (hidden from user perspective)
             if (p.type.path != null and std.mem.endsWith(u8, p.type.path.?, "ContextInputs")) continue;
-            
+
             if (!first_param) try writer.writeByte(',');
             try encodeType(writer, p.type);
             first_param = false;
@@ -89,9 +89,9 @@ pub const Function = struct {
     pub fn computeSelector(self: *const Function) FunctionSelector {
         var buf: [1024]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
-        
+
         self.computeSignature(stream.writer()) catch unreachable;
-        
+
         const signature = buf[0..stream.pos];
         const hash = poseidon2.hashBytes(signature);
         const hash_buf = hash.to_buf();
@@ -99,7 +99,6 @@ pub const Function = struct {
         // Take the last 4 bytes of the hash as big-endian u32.
         const selector_bytes = hash_buf[28..32];
         const selector = std.mem.readInt(u32, selector_bytes[0..4], .big);
-        std.debug.print("Function signature: {s} => {x}\n", .{ signature, selector });
         return selector;
     }
 
@@ -335,7 +334,8 @@ const func_fixture = Function{
 
 test "compute function selector" {
     const selector = func_fixture.computeSelector();
-    std.debug.print("function selector: {x}\n", .{selector});
+    // my_function(Field)
+    try std.testing.expectEqual(@as(u32, 0x3790121c), selector);
 }
 
 test "compute private function tree root" {
@@ -346,14 +346,16 @@ test "compute private function tree root" {
     var f3 = func_fixture;
     f3.name = "my_function3";
     const root = try computeFunctionTreeRoot(arena.allocator(), &[_]Function{ func_fixture, f2, f3 });
-    std.debug.print("private function tree root: {x}\n", .{root});
+    const expected = F.from_int(0x27258ba088b442cfa9bdde43b7ce3841e8eefd07e3205eb41686900cdf74caef);
+    try std.testing.expect(root.eql(expected));
 }
 
 test "compute artifact hash" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const abi = try ContractAbi.load(arena.allocator(), token_contract_abi_path);
-    std.debug.print("artifact hash: {x}\n", .{abi.artifact_hash});
+    const expected = F.from_int(0x14dd5bbb04fd97e8e199754740aaa700cfcfbb7d753ac584b7e2ff815ae6b0df);
+    try std.testing.expect(abi.artifact_hash.eql(expected));
 }
 
 test "function signature encoding" {
@@ -460,18 +462,15 @@ test "function signature encoding" {
         },
     };
 
-    // Test signature generation
+    // Test signature generation.
     var buf: [1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
-    
     try test_func.computeSignature(stream.writer());
-    
     const signature = buf[0..stream.pos];
     const expected_signature = "testCodeGen(Field,bool,u32,[Field;2],(Field,Field),(Field,bool,(Field,Field),[(Field,Field);3]))";
-    
     try std.testing.expectEqualStrings(expected_signature, signature);
-    
-    // Compute and verify selector
+
+    // Compute and verify selector.
     const selector = test_func.computeSelector();
     try std.testing.expectEqual(@as(u32, 0x6c94d8e4), selector);
 }
