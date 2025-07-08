@@ -10,7 +10,13 @@ var VERSION: u8 = 1;
 const Type = struct {
     kind: []const u8,
     path: ?[]const u8 = null,
-    fields: ?[]Parameter = null,
+    fields: ?[]const Parameter = null,
+    // For arrays
+    length: ?u32 = null,
+    type: ?*const Type = null,
+    // For integers
+    sign: ?[]const u8 = null,
+    width: ?u32 = null,
 };
 
 pub const Parameter = struct {
@@ -31,21 +37,63 @@ pub const Function = struct {
     abi: Abi,
     bytecode: []const u8 = &[_]u8{},
     verification_key: ?[]const u8 = null,
+    // Computed at load time.
     selector: FunctionSelector = 0,
 
+    fn encodeType(writer: anytype, t: Type) !void {
+        if (std.mem.eql(u8, t.kind, "field")) {
+            try writer.writeAll("Field");
+        } else if (std.mem.eql(u8, t.kind, "boolean")) {
+            try writer.writeAll("bool");
+        } else if (std.mem.eql(u8, t.kind, "integer")) {
+            if (t.sign) |sign| {
+                if (std.mem.eql(u8, sign, "signed")) {
+                    return error.UnsupportedSignedInteger;
+                }
+            }
+            try writer.print("u{}", .{t.width.?});
+        } else if (std.mem.eql(u8, t.kind, "array")) {
+            try writer.writeByte('[');
+            try encodeType(writer, t.type.?.*);
+            try writer.print(";{}]", .{t.length.?});
+        } else if (std.mem.eql(u8, t.kind, "string")) {
+            try writer.print("str<{}>", .{t.length.?});
+        } else if (std.mem.eql(u8, t.kind, "struct")) {
+            try writer.writeByte('(');
+            if (t.fields) |fields| {
+                for (fields, 0..) |field, i| {
+                    if (i > 0) try writer.writeByte(',');
+                    try encodeType(writer, field.type);
+                }
+            }
+            try writer.writeByte(')');
+        } else {
+            return error.UnsupportedType;
+        }
+    }
+
     pub fn computeSelector(self: *const Function) FunctionSelector {
-        var buf: [256]u8 = undefined;
+        var buf: [1024]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
         var writer = stream.writer();
+
         writer.print("{s}(", .{self.name}) catch unreachable;
         for (self.abi.parameters, 0..) |p, i| {
-            if (i > 0) writer.writeByte(',') catch unreachable;
-            writer.print("{s}", .{p.type.kind}) catch unreachable;
+            if (p.type.path != null and std.mem.endsWith(u8, p.type.path.?, "PrivateContextInputs")) continue;
+            if (i > 1) writer.writeByte(',') catch unreachable;
+            encodeType(writer, p.type) catch unreachable;
         }
         writer.writeByte(')') catch unreachable;
-        std.debug.print("{s}\n", .{buf[0..stream.pos]});
-        const hash = poseidon2.hashBytes(buf[0..stream.pos]);
-        return std.mem.bytesToValue(FunctionSelector, hash.to_buf()[28..32]);
+
+        const signature = buf[0..stream.pos];
+        const hash = poseidon2.hashBytes(signature);
+        const hash_buf = hash.to_buf();
+
+        // Take the last 4 bytes of the hash as big-endian u32.
+        const selector_bytes = hash_buf[28..32];
+        const selector = std.mem.readInt(u32, selector_bytes[0..4], .big);
+        std.debug.print("Function signature: {s} => {x}\n", .{ signature, selector });
+        return selector;
     }
 
     /// Base 64 decode, gunzip, and return the bytecode.
@@ -97,7 +145,6 @@ pub const ContractAbi = struct {
         var abi = parsed.value;
         for (abi.functions) |*f| {
             f.selector = f.computeSelector();
-            std.debug.print("Function: {s} {x}\n", .{ f.name, f.selector });
             if (std.mem.eql(u8, f.name, "public_dispatch")) {
                 abi.public_function = f.*;
                 abi.public_bytecode_commitment = try computePublicBytecodeCommitment(f.bytecode);
@@ -267,7 +314,7 @@ const func_fixture = Function{
     .custom_attributes = &[_][]const u8{"private"},
     .abi = Abi{ .parameters = &[_]Parameter{.{
         .name = "my_arg",
-        .type = .{ .kind = "my_arg_type" },
+        .type = .{ .kind = "field" },
     }} },
 };
 
@@ -300,4 +347,130 @@ test "compute artifact hash" {
     defer arena.deinit();
     const abi = try ContractAbi.load(arena.allocator(), token_contract_abi_path);
     std.debug.print("artifact hash: {x}\n", .{abi.artifact_hash});
+}
+
+test "function signature encoding" {
+    // Test case from decoder.test.ts
+    const test_func = Function{
+        .name = "testCodeGen",
+        .is_unconstrained = false,
+        .custom_attributes = &[_][]const u8{},
+        .abi = Abi{
+            .parameters = &[_]Parameter{
+                Parameter{
+                    .name = "aField",
+                    .type = Type{ .kind = "field" },
+                },
+                Parameter{
+                    .name = "aBool",
+                    .type = Type{ .kind = "boolean" },
+                },
+                Parameter{
+                    .name = "aNumber",
+                    .type = Type{
+                        .kind = "integer",
+                        .sign = "unsigned",
+                        .width = 32,
+                    },
+                },
+                Parameter{
+                    .name = "anArray",
+                    .type = Type{
+                        .kind = "array",
+                        .length = 2,
+                        .type = &Type{ .kind = "field" },
+                    },
+                },
+                Parameter{
+                    .name = "aStruct",
+                    .type = Type{
+                        .kind = "struct",
+                        .fields = &[_]Parameter{
+                            Parameter{
+                                .name = "amount",
+                                .type = Type{ .kind = "field" },
+                            },
+                            Parameter{
+                                .name = "secretHash",
+                                .type = Type{ .kind = "field" },
+                            },
+                        },
+                    },
+                },
+                Parameter{
+                    .name = "aDeepStruct",
+                    .type = Type{
+                        .kind = "struct",
+                        .fields = &[_]Parameter{
+                            Parameter{
+                                .name = "aField",
+                                .type = Type{ .kind = "field" },
+                            },
+                            Parameter{
+                                .name = "aBool",
+                                .type = Type{ .kind = "boolean" },
+                            },
+                            Parameter{
+                                .name = "aNote",
+                                .type = Type{
+                                    .kind = "struct",
+                                    .fields = &[_]Parameter{
+                                        Parameter{
+                                            .name = "amount",
+                                            .type = Type{ .kind = "field" },
+                                        },
+                                        Parameter{
+                                            .name = "secretHash",
+                                            .type = Type{ .kind = "field" },
+                                        },
+                                    },
+                                },
+                            },
+                            Parameter{
+                                .name = "manyNotes",
+                                .type = Type{
+                                    .kind = "array",
+                                    .length = 3,
+                                    .type = &Type{
+                                        .kind = "struct",
+                                        .fields = &[_]Parameter{
+                                            Parameter{
+                                                .name = "amount",
+                                                .type = Type{ .kind = "field" },
+                                            },
+                                            Parameter{
+                                                .name = "secretHash",
+                                                .type = Type{ .kind = "field" },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    };
+
+    // Build the expected signature
+    var buf: [1024]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    var writer = stream.writer();
+
+    try writer.print("{s}(", .{test_func.name});
+    for (test_func.abi.parameters, 0..) |p, i| {
+        if (i > 0) try writer.writeByte(',');
+        try Function.encodeType(writer, p.type);
+    }
+    try writer.writeByte(')');
+
+    const signature = buf[0..stream.pos];
+    const expected_signature = "testCodeGen(Field,bool,u32,[Field;2],(Field,Field),(Field,bool,(Field,Field),[(Field,Field);3]))";
+
+    try std.testing.expectEqualStrings(expected_signature, signature);
+
+    // Compute and verify selector
+    const selector = test_func.computeSelector();
+    std.debug.print("Computed selector: 0x{x:0>8}\n", .{selector});
 }

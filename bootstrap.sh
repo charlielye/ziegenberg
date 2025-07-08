@@ -213,8 +213,7 @@ function build_data {
     local basename=$(basename $json_file)
     # Extract the part after the last dash (before .json)
     local new_name=${basename##*-}
-    local source=$(realpath $json_file --relative-to data/contracts)
-    ln -s $source data/contracts/$new_name
+    cat $json_file | jq . > data/contracts/$new_name
   done
 }
 
