@@ -72,19 +72,26 @@ pub const Function = struct {
         }
     }
 
+    pub fn computeSignature(self: *const Function, writer: anytype) !void {
+        try writer.print("{s}(", .{self.name});
+        var first_param = true;
+        for (self.abi.parameters) |p| {
+            // Skip context inputs parameter (hidden from user perspective)
+            if (p.type.path != null and std.mem.endsWith(u8, p.type.path.?, "ContextInputs")) continue;
+            
+            if (!first_param) try writer.writeByte(',');
+            try encodeType(writer, p.type);
+            first_param = false;
+        }
+        try writer.writeByte(')');
+    }
+
     pub fn computeSelector(self: *const Function) FunctionSelector {
         var buf: [1024]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
-        var writer = stream.writer();
-
-        writer.print("{s}(", .{self.name}) catch unreachable;
-        for (self.abi.parameters, 0..) |p, i| {
-            if (p.type.path != null and std.mem.endsWith(u8, p.type.path.?, "PrivateContextInputs")) continue;
-            if (i > 1) writer.writeByte(',') catch unreachable;
-            encodeType(writer, p.type) catch unreachable;
-        }
-        writer.writeByte(')') catch unreachable;
-
+        
+        self.computeSignature(stream.writer()) catch unreachable;
+        
         const signature = buf[0..stream.pos];
         const hash = poseidon2.hashBytes(signature);
         const hash_buf = hash.to_buf();
@@ -453,24 +460,18 @@ test "function signature encoding" {
         },
     };
 
-    // Build the expected signature
+    // Test signature generation
     var buf: [1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
-    var writer = stream.writer();
-
-    try writer.print("{s}(", .{test_func.name});
-    for (test_func.abi.parameters, 0..) |p, i| {
-        if (i > 0) try writer.writeByte(',');
-        try Function.encodeType(writer, p.type);
-    }
-    try writer.writeByte(')');
-
+    
+    try test_func.computeSignature(stream.writer());
+    
     const signature = buf[0..stream.pos];
     const expected_signature = "testCodeGen(Field,bool,u32,[Field;2],(Field,Field),(Field,bool,(Field,Field),[(Field,Field);3]))";
-
+    
     try std.testing.expectEqualStrings(expected_signature, signature);
-
+    
     // Compute and verify selector
     const selector = test_func.computeSelector();
-    std.debug.print("Computed selector: 0x{x:0>8}\n", .{selector});
+    try std.testing.expectEqual(@as(u32, 0x6c94d8e4), selector);
 }
