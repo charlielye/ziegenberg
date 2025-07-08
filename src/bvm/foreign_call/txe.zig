@@ -358,7 +358,6 @@ pub const Txe = struct {
     }
 
     /// Executes an external/private function call on a target contract.
-    /// This is a port of the TypeScript logic, with some placeholders and comments.
     pub fn callPrivateFunction(
         self: *Txe,
         _: std.mem.Allocator,
@@ -389,6 +388,12 @@ pub const Txe = struct {
         self.contract_address = target_contract_address;
         self.function_selector = function_selector;
 
+        const contract_instance = self.contract_instance_cache.get(target_contract_address);
+        if (contract_instance == null) {
+            return error.ContractInstanceNotFound;
+        }
+        const function = try contract_instance.?.abi.getFunctionBySelector(function_selector);
+        _ = function;
         // TODO: Fetch the contract artifact for the target contract/function
         // let artifact = await this.contractDataProvider.getFunctionArtifact(targetContractAddress, functionSelector);
         // if (!artifact) { throw ... }

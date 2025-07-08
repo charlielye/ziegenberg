@@ -43,7 +43,7 @@ pub const Function = struct {
             writer.print("{s}", .{p.type.kind}) catch unreachable;
         }
         writer.writeByte(')') catch unreachable;
-        // std.debug.print("{s}\n", .{buf[0..stream.pos]});
+        std.debug.print("{s}\n", .{buf[0..stream.pos]});
         const hash = poseidon2.hashBytes(buf[0..stream.pos]);
         return std.mem.bytesToValue(FunctionSelector, hash.to_buf()[28..32]);
     }
@@ -97,6 +97,7 @@ pub const ContractAbi = struct {
         var abi = parsed.value;
         for (abi.functions) |*f| {
             f.selector = f.computeSelector();
+            std.debug.print("Function: {s} {x}\n", .{ f.name, f.selector });
             if (std.mem.eql(u8, f.name, "public_dispatch")) {
                 abi.public_function = f.*;
                 abi.public_bytecode_commitment = try computePublicBytecodeCommitment(f.bytecode);
@@ -118,6 +119,18 @@ pub const ContractAbi = struct {
         });
 
         return abi;
+    }
+
+    pub fn getFunctionBySelector(
+        self: *const ContractAbi,
+        selector: FunctionSelector,
+    ) !Function {
+        for (self.functions) |f| {
+            if (f.selector == selector) {
+                return f;
+            }
+        }
+        return error.FunctionNotFound;
     }
 
     fn findDefaultInitializer(self: *ContractAbi) ?Function {

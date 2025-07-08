@@ -31,6 +31,7 @@ pub const ContractInstance = struct {
     public_keys: PublicKeys,
     /// Optional address.
     address: AztecAddress,
+    abi: nargo.ContractAbi,
 
     /// Options for creating a contract instance from deployment parameters.
     pub const DeployParams = struct {
@@ -83,6 +84,7 @@ pub const ContractInstance = struct {
                     PartialAddress.computeSaltedInitializationHash(salt, initialization_hash, deployer),
                 ),
             ),
+            .abi = contract_abi,
         };
     }
 
