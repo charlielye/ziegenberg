@@ -53,6 +53,28 @@ pub const WitnessMap = struct {
         try writeWitnesses(self, binary, stdout);
     }
 
+    pub fn getWitnessesRange(self: *const WitnessMap, allocator: std.mem.Allocator, start: u64, end: u64) ![]Fr {
+        var keys = try allocator.alloc(u32, self.inner.count());
+        defer allocator.free(keys);
+
+        var index: usize = 0;
+        var it = self.inner.iterator();
+        while (it.next()) |entry| {
+            keys[index] = entry.key_ptr.*;
+            index += 1;
+        }
+
+        std.mem.sort(u32, keys, {}, std.sort.asc(u32));
+
+        var witnesses = try std.ArrayList(Fr).initCapacity(allocator, keys.len);
+        defer witnesses.deinit();
+        for (keys[start..end]) |key| {
+            const value = self.inner.get(key) orelse unreachable;
+            try witnesses.append(value);
+        }
+        return witnesses.toOwnedSlice();
+    }
+
     pub fn writeWitnesses(self: *const WitnessMap, binary: bool, writer: anytype) !void {
         var keys = try self.allocator.alloc(u32, self.inner.count());
         defer self.allocator.free(keys);

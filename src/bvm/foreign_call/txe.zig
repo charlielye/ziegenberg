@@ -9,6 +9,7 @@ const proto = @import("../../protocol/package.zig");
 const ContractAbi = @import("../../nargo/contract.zig").ContractAbi;
 const flattenToFields = @import("./flatten_to_fields.zig").flattenToFields;
 const cvm = @import("../../cvm/package.zig");
+const ForeignCallDispatcher = @import("dispatcher.zig").Dispatcher;
 
 const EthAddress = F;
 
@@ -179,6 +180,7 @@ pub const Txe = struct {
     contract_artifact_cache: std.AutoHashMap(F, ContractAbi),
     contract_instance_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
     args_hash_map: std.AutoHashMap(F, []F),
+    fc_handler: *ForeignCallDispatcher = undefined,
     //   private contractDataOracle: ContractDataOracle;
 
     const CHAIN_ID = 1;
@@ -212,7 +214,10 @@ pub const Txe = struct {
         mem: *Memory,
         fc: *const io.ForeignCall,
         params: []ForeignCallParam,
+        fc_handler: *ForeignCallDispatcher,
     ) !bool {
+        // We save the handler like this so we don't have to pass it to every handler function.
+        self.fc_handler = fc_handler;
         return try structDispatcher(self, allocator, mem, fc, params);
     }
 
@@ -429,17 +434,21 @@ pub const Txe = struct {
         std.debug.print("calldata: {x}\n", .{calldata.items});
 
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
-        
-        // Create a foreign call dispatcher for the circuit VM
-        const ForeignCallDispatcher = @import("./dispatcher.zig").Dispatcher;
-        var fc_handler = ForeignCallDispatcher.init(allocator);
-        defer fc_handler.deinit();
-        
-        var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items, &fc_handler);
+
+        var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items, self.fc_handler);
+        std.debug.print("entering vm", .{});
         try circuit_vm.executeVm(0, false);
+        std.debug.print("exiting vm", .{});
 
         // TODO: Extract public inputs from execution result
         // let publicInputs = extractPrivateCircuitPublicInputs(...);
+        const start = function.sizeInFields();
+        const public_inputs = try circuit_vm.witnesses.getWitnessesRange(
+            allocator,
+            start,
+            start + proto.constants.PRIVATE_CIRCUIT_PUBLIC_INPUTS_LENGTH,
+        );
+        std.debug.print("Public inputs: {x}\n", .{public_inputs});
 
         // Apply side effects
         // let endSideEffectCounter = publicInputs.endSideEffectCounter;

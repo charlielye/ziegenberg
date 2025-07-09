@@ -40,7 +40,7 @@ pub const Dispatcher = struct {
         }
 
         // Otherwise attempt to dispatch on txe.
-        if (try self.txe.handleForeignCall(arena.allocator(), mem, fc, params)) {
+        if (try self.txe.handleForeignCall(arena.allocator(), mem, fc, params, self)) {
             return;
         }
 

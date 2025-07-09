@@ -1,12 +1,13 @@
 const std = @import("std");
 const aztec_address = @import("./aztec_address.zig");
 const complete_address = @import("./complete_address.zig");
-const constants = @import("./constants.gen.zig");
 const contract_class = @import("./contract_class.zig");
 const contract_instance = @import("./contract_instance.zig");
 const key_derivation = @import("./key_derivation.zig");
 const partial_address = @import("./partial_address.zig");
 const public_keys = @import("./public_keys.zig");
+
+pub const constants = @import("./constants.gen.zig");
 
 // Export types that are used externally
 pub const AztecAddress = aztec_address.AztecAddress;

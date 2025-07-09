@@ -17,6 +17,30 @@ const Type = struct {
     // For integers
     sign: ?[]const u8 = null,
     width: ?u32 = null,
+
+    /// Returns the size of the type in "field elements".
+    pub fn sizeInFields(t: *const Type) usize {
+        if (std.mem.eql(u8, t.kind, "field") or
+            std.mem.eql(u8, t.kind, "boolean") or
+            std.mem.eql(u8, t.kind, "integer"))
+        {
+            return 1;
+        } else if (std.mem.eql(u8, t.kind, "string")) {
+            return t.length.?;
+        } else if (std.mem.eql(u8, t.kind, "array")) {
+            return t.length.? * t.type.?.sizeInFields();
+        } else if (std.mem.eql(u8, t.kind, "struct") or std.mem.eql(u8, t.kind, "tuple")) {
+            var total: usize = 0;
+            if (t.fields) |fields| {
+                for (fields) |field| {
+                    total += field.type.sizeInFields();
+                }
+            }
+            return total;
+        } else {
+            @panic("Unhandled abi type in typeSize");
+        }
+    }
 };
 
 pub const Parameter = struct {
@@ -117,6 +141,17 @@ pub const Function = struct {
 
     pub fn cmp(_: void, a: Function, b: Function) bool {
         return a.selector < b.selector;
+    }
+
+    /// Computes the total size in fields for all parameters of the function.
+    pub fn sizeInFields(self: *const Function) usize {
+        var total: usize = 0;
+        for (self.abi.parameters) |p| {
+            // Skip context inputs parameter (hidden from user perspective)
+            if (p.type.path != null and std.mem.endsWith(u8, p.type.path.?, "ContextInputs")) continue;
+            total += Type.sizeInFields(&p.type);
+        }
+        return total;
     }
 };
 

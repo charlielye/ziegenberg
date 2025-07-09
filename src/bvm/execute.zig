@@ -7,9 +7,9 @@ const Bn254Fr = @import("../bn254/fr.zig").Fr;
 const fieldOps = @import("../blackbox/field.zig");
 const blackbox = @import("../blackbox/blackbox.zig");
 const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
-// const handleForeignCall = @import("./foreign_call/foreign_call.zig").handleForeignCall;
 const Memory = @import("./memory.zig").Memory;
 const ForeignCallDispatcher = @import("../bvm/foreign_call/dispatcher.zig").Dispatcher;
+const Txe = @import("./foreign_call/txe.zig").Txe;
 
 pub const ExecuteOptions = struct {
     file_path: ?[]const u8 = null,
