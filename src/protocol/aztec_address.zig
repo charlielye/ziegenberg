@@ -84,6 +84,10 @@ pub const AztecAddress = struct {
     pub fn hash(self: AztecAddress) u64 {
         return std.hash.Wyhash.hash(0, std.mem.asBytes(&self.limbs));
     }
+
+    pub fn toField(self: AztecAddress) Fr {
+        return self.value;
+    }
 };
 
 test "compute address from partial and public keys" {

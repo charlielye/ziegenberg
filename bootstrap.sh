@@ -357,7 +357,7 @@ function test {
       test_cmds_protocol_circuits
       # test_cmds_contracts
     else
-      "test_cmds_$1" ${2:-}
+      "test_cmds_$1" "${2:-}"
     fi
   } | parallelise ${JOBS:-} | cat
 }

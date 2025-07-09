@@ -7,6 +7,8 @@ const io = @import("../io.zig");
 const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
 const proto = @import("../../protocol/package.zig");
 const ContractAbi = @import("../../nargo/contract.zig").ContractAbi;
+const flattenToFields = @import("./flatten_to_fields.zig").flattenToFields;
+const cvm = @import("../../cvm/package.zig");
 
 const EthAddress = F;
 
@@ -15,18 +17,6 @@ const Point = struct {
     y: F,
     i: bool,
 };
-
-const NpkM = Point;
-const IvpkM = Point;
-const OvpkM = Point;
-const TpkM = Point;
-
-// const PublicKeys = struct {
-//     npk_m: NpkM,
-//     ivpk_m: IvpkM,
-//     ovpk_m: OvpkM,
-//     tpk_m: TpkM,
-// };
 
 const FunctionSelector = u32;
 
@@ -153,26 +143,26 @@ const PrivateContextInputs = struct {
 
 /// Computes a fast hash (SHA-1) of a file at the given path.
 /// Returns the hash as a hex string.
-pub fn fastHashFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+// pub fn fastHashFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+//     var file = try std.fs.cwd().openFile(path, .{});
+//     defer file.close();
 
-    // TODO: SHA1 is considered cryptographically broken?
-    var sha1 = std.crypto.hash.Sha1.init(.{});
-    var buf: [4096]u8 = undefined;
+//     // TODO: SHA1 is considered cryptographically broken?
+//     var sha1 = std.crypto.hash.Sha1.init(.{});
+//     var buf: [4096]u8 = undefined;
 
-    while (true) {
-        const n = try file.read(&buf);
-        if (n == 0) break;
-        sha1.update(buf[0..n]);
-    }
+//     while (true) {
+//         const n = try file.read(&buf);
+//         if (n == 0) break;
+//         sha1.update(buf[0..n]);
+//     }
 
-    var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
-    sha1.final(&digest);
+//     var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+//     sha1.final(&digest);
 
-    // Convert digest to hex string
-    return std.fmt.allocPrint(allocator, "{s}", .{std.fmt.fmtSliceHexLower(&digest)});
-}
+//     // Convert digest to hex string
+//     return std.fmt.allocPrint(allocator, "{s}", .{std.fmt.fmtSliceHexLower(&digest)});
+// }
 
 pub const Txe = struct {
     allocator: std.mem.Allocator,
@@ -188,6 +178,7 @@ pub const Txe = struct {
     contracts_artifacts_path: []const u8,
     contract_artifact_cache: std.AutoHashMap(F, ContractAbi),
     contract_instance_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
+    args_hash_map: std.AutoHashMap(F, []F),
     //   private contractDataOracle: ContractDataOracle;
 
     const CHAIN_ID = 1;
@@ -203,10 +194,12 @@ pub const Txe = struct {
             .contracts_artifacts_path = contract_artifacts_path,
             .contract_artifact_cache = std.AutoHashMap(F, ContractAbi).init(allocator),
             .contract_instance_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
+            .args_hash_map = std.AutoHashMap(F, []F).init(allocator),
         };
     }
 
     pub fn deinit(self: *Txe) void {
+        self.args_hash_map.deinit();
         self.contract_instance_cache.deinit();
         self.contract_artifact_cache.deinit();
     }
@@ -333,9 +326,20 @@ pub const Txe = struct {
 
     pub fn getPrivateContextInputs(
         self: *Txe,
+        allocator: std.mem.Allocator,
+        block_number: ?u32,
+        timestamp: ?u64,
+    ) !PrivateContextInputs {
+        return self.getPrivateContextInputsInternal(allocator, block_number, timestamp, self.side_effect_counter, false);
+    }
+
+    fn getPrivateContextInputsInternal(
+        self: *Txe,
         _: std.mem.Allocator,
         block_number: ?u32,
         timestamp: ?u64,
+        side_effect_counter: u32,
+        is_static_call: bool,
     ) !PrivateContextInputs {
         const result = PrivateContextInputs{
             .tx_context = .{
@@ -350,28 +354,38 @@ pub const Txe = struct {
                 .msg_sender = self.msg_sender,
                 .contract_address = self.contract_address,
                 .function_selector = self.function_selector,
-                .is_static_call = false,
+                .is_static_call = is_static_call,
             },
-            .start_side_effect_counter = self.side_effect_counter,
+            .start_side_effect_counter = side_effect_counter,
         };
         return result;
+    }
+
+    // Since the argument is a slice, noir automatically adds a length field to oracle call.
+    pub fn storeInExecutionCache(
+        self: *Txe,
+        _: std.mem.Allocator,
+        _: F,
+        args: []F,
+        hash: F,
+    ) !void {
+        std.debug.print("storeInExecutionCache called with args: {x} and hash: {x}\n", .{
+            args,
+            hash,
+        });
+        try self.args_hash_map.put(hash, args);
     }
 
     /// Executes an external/private function call on a target contract.
     pub fn callPrivateFunction(
         self: *Txe,
-        _: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         target_contract_address: proto.AztecAddress,
         function_selector: FunctionSelector,
         args_hash: F,
         side_effect_counter: u32,
         is_static_call: bool,
     ) ![2]F {
-        _ = args_hash;
-        _ = side_effect_counter;
-        // _ = is_static_call;
-        // Log the function call (verbose)
-        // TODO: Implement debug function name lookup and logging
         std.debug.print("Executing external function: {x}@{x} (static: {})\n", .{
             function_selector,
             target_contract_address,
@@ -388,30 +402,38 @@ pub const Txe = struct {
         self.contract_address = target_contract_address;
         self.function_selector = function_selector;
 
-        const contract_instance = self.contract_instance_cache.get(target_contract_address);
-        if (contract_instance == null) {
+        const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {
             return error.ContractInstanceNotFound;
+        };
+        const function = try contract_instance.abi.getFunctionBySelector(function_selector);
+
+        const args = self.args_hash_map.get(args_hash) orelse {
+            std.debug.print("No args found for hash {x}\n", .{args_hash});
+            return error.ArgsNotFound;
+        };
+
+        const private_context_inputs = try self.getPrivateContextInputsInternal(
+            self.allocator,
+            self.block_number - 1,
+            Txe.GENESIS_TIMESTAMP - Txe.AZTEC_SLOT_DURATION,
+            side_effect_counter,
+            is_static_call,
+        );
+
+        var calldata = std.ArrayList(F).init(allocator);
+        try flattenToFields(PrivateContextInputs, private_context_inputs, &calldata);
+        for (args) |arg| {
+            try calldata.append(arg);
         }
-        const function = try contract_instance.?.abi.getFunctionBySelector(function_selector);
-        _ = function;
-        // TODO: Fetch the contract artifact for the target contract/function
-        // let artifact = await this.contractDataProvider.getFunctionArtifact(targetContractAddress, functionSelector);
-        // if (!artifact) { throw ... }
 
-        // TODO: Prepare initial witness for circuit execution
-        // let initialWitness = await this.getInitialWitness(...);
+        std.debug.print("calldata: {x}\n", .{calldata.items});
 
-        // TODO: Set up callback/oracle and timer
-        // let acvmCallback = new Oracle(this);
-        // let timer = new Timer();
-
-        // TODO: Execute the user circuit (simulate contract execution)
-        // let acirExecutionResult = await this.simulator.executeUserCircuit(...);
+        const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
+        var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items);
+        try circuit_vm.executeVm(0, false);
 
         // TODO: Extract public inputs from execution result
         // let publicInputs = extractPrivateCircuitPublicInputs(...);
-
-        // TODO: Log execution stats (duration, input/output size, etc.)
 
         // Apply side effects
         // let endSideEffectCounter = publicInputs.endSideEffectCounter;
@@ -427,5 +449,30 @@ pub const Txe = struct {
 
         // TODO: Return result (endSideEffectCounter, returnsHash)
         return [2]F{ F.zero, F.zero };
+    }
+
+    pub fn getContractInstance(
+        self: *Txe,
+        _: std.mem.Allocator,
+        address: proto.AztecAddress,
+    ) !struct {
+        salt: F,
+        deployer: proto.AztecAddress,
+        contract_class_id: F,
+        initialization_hash: F,
+        public_keys: proto.PublicKeys,
+    } {
+        const instance = self.contract_instance_cache.get(address);
+        if (instance) |i| {
+            return .{
+                .salt = i.salt,
+                .deployer = i.deployer,
+                .contract_class_id = i.current_contract_class_id,
+                .initialization_hash = i.initialization_hash,
+                .public_keys = i.public_keys,
+            };
+        } else {
+            return error.ContractInstanceNotFound;
+        }
     }
 };

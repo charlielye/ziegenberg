@@ -49,7 +49,7 @@ pub fn structDispatcher(
                 const Args = std.meta.ArgsTuple(@TypeOf(field));
                 var args: Args = undefined;
                 // Check that the number of parameters matches the number of arguments in the foreign call.
-                // For functions with optional parameters, each optional is represented as 2 values
+                // For functions with optional parameters, each optional is represented as 2 values.
                 var expected_param_count: usize = 0;
                 inline for (field_info.@"fn".params[2..]) |param_info| {
                     if (@typeInfo(param_info.type.?) == .optional) {

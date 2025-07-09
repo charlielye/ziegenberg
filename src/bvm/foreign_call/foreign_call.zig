@@ -22,6 +22,7 @@ pub fn handleForeignCall(
     } else if (std.mem.eql(u8, "noOp", fc.function)) {
         std.debug.print("noop\n", .{});
     } else {
+        // We allow silently ignoring foreign calls that return no values.
         if (fc.destination_value_types.len > 0) {
             std.debug.print("Unimplemented foreign call: {s}\n", .{fc.function});
             return error.Unimplemented;

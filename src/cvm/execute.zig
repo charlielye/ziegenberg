@@ -214,14 +214,19 @@ pub fn execute(options: ExecuteOptions) !void {
     }
 }
 
-const CircuitVm = struct {
+pub const CircuitVm = struct {
     allocator: std.mem.Allocator,
     program: *const io.Program,
     witnesses: WitnessMap,
     memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
     fc_handler: ForeignCallDispatcher,
 
-    pub fn init(allocator: std.mem.Allocator, program: *const io.Program, calldata: []Fr) !CircuitVm {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        program: *const io.Program,
+        calldata: []Fr,
+        fc_handler: *ForeignCallDispatcher,
+    ) !CircuitVm {
         var witnesses = WitnessMap.init(allocator);
         // Load our calldata into first elements of the witness map.
         for (calldata, 0..) |e, i| {
@@ -232,7 +237,7 @@ const CircuitVm = struct {
             .program = program,
             .witnesses = witnesses,
             .memory_solvers = std.AutoHashMap(u32, MemoryOpSolver).init(allocator),
-            .fc_handler = ForeignCallDispatcher.init(allocator),
+            .fc_handler = fc_handler,
         };
     }
 
@@ -242,10 +247,6 @@ const CircuitVm = struct {
     }
 
     pub fn executeVm(self: *CircuitVm, function_index: usize, show_trace: bool) !void {
-        // const buf = try self.allocator.alloc(u8, 1024 * 1024);
-        // defer self.allocator.free(buf);
-        // var a = std.heap.FixedBufferAllocator.init(buf);
-
         for (self.program.functions[function_index].opcodes, 0..) |opcode, i| {
             if (show_trace) {
                 const stdout = std.io.getStdOut().writer();
