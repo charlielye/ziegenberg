@@ -55,6 +55,13 @@ pub fn execute(options: ExecuteOptions) !void {
 
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
 
+pub const ErrorContext = struct {
+    pc: usize,
+    callstack: []const usize,
+    ops_executed: u64,
+    return_data: []const u256,
+};
+
 pub const BrilligVm = struct {
     const mem_size = 1024 * 1024 * 8;
     // const mem_size = 1024 * 1024 * 32;
@@ -125,6 +132,15 @@ pub const BrilligVm = struct {
 
     pub fn deinit(self: *BrilligVm) void {
         self.mem.deinit();
+    }
+
+    pub fn getErrorContext(self: *const BrilligVm, allocator: std.mem.Allocator) !ErrorContext {
+        return ErrorContext{
+            .pc = self.pc,
+            .callstack = try allocator.dupe(usize, self.callstack.items),
+            .ops_executed = self.ops_executed,
+            .return_data = try allocator.dupe(u256, self.return_data),
+        };
     }
 
     pub fn executeVm(self: *BrilligVm, opcodes: []BrilligOpcode, show_trace: bool, sample_rate: u64) !void {
@@ -481,7 +497,15 @@ pub const BrilligVm = struct {
         const slot = self.mem.resolveSlot(op.revert_data.pointer);
         const size = self.mem.resolveSlot(op.revert_data.size);
         self.return_data = self.mem.memory[slot .. slot + size];
-        std.debug.print("Trap!\n", .{});
+        std.debug.print("Trap! PC: {}, Ops executed: {}\n", .{ self.pc, self.ops_executed });
+        std.debug.print("Callstack depth: {}\n", .{self.callstack.items.len});
+        if (self.callstack.items.len > 0) {
+            std.debug.print("Callstack: ", .{});
+            for (self.callstack.items) |addr| {
+                std.debug.print("{} ", .{addr});
+            }
+            std.debug.print("\n", .{});
+        }
     }
 
     pub fn dumpStats(self: *BrilligVm) void {

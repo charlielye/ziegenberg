@@ -5,6 +5,7 @@ const GrumpkinFr = @import("../grumpkin/fr.zig").Fr;
 const solve = @import("./expression_solver.zig").solve;
 const evaluate = @import("./expression_solver.zig").evaluate;
 const BrilligVm = @import("../bvm/execute.zig").BrilligVm;
+const ErrorContext = @import("../bvm/execute.zig").ErrorContext;
 const sha256 = @import("../blackbox/sha256_compress.zig");
 const aes = @import("../aes/encrypt_cbc.zig");
 const WitnessMap = @import("./witness_map.zig").WitnessMap;
@@ -223,6 +224,7 @@ pub const CircuitVm = struct {
     witnesses: WitnessMap,
     memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
     fc_handler: ForeignCallDispatcher,
+    brillig_error_context: ?ErrorContext = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -247,6 +249,38 @@ pub const CircuitVm = struct {
     pub fn deinit(self: *CircuitVm) void {
         self.witnesses.deinit();
         self.fc_handler.deinit();
+    }
+
+    /// Print detailed error information when a Brillig VM trap occurs
+    pub fn printBrilligTrapError(
+        self: *const CircuitVm,
+        function_name: []const u8,
+        function_selector: u32,
+        contract_artifact_path: ?[]const u8,
+    ) void {
+        if (self.brillig_error_context) |error_ctx| {
+            std.debug.print("\n=== Nested VM Trap ===\n", .{});
+            std.debug.print("Function: {s} (selector: 0x{x})\n", .{ function_name, function_selector });
+            std.debug.print("Brillig PC: {}\n", .{error_ctx.pc});
+            std.debug.print("Operations executed: {}\n", .{error_ctx.ops_executed});
+            if (error_ctx.callstack.len > 0) {
+                std.debug.print("Callstack: ", .{});
+                for (error_ctx.callstack) |addr| {
+                    std.debug.print("{} ", .{addr});
+                }
+                std.debug.print("\n", .{});
+            }
+
+            // Try to look up source location
+            if (contract_artifact_path) |artifact_path| {
+                std.debug.print("\nSource location:\n", .{});
+                const debug_info = @import("../bvm/debug_info.zig");
+                debug_info.lookupSourceLocation(self.allocator, artifact_path, function_name, error_ctx.pc) catch |lookup_err| {
+                    std.debug.print("  Could not resolve source location: {}\n", .{lookup_err});
+                };
+            }
+            std.debug.print("======================\n\n", .{});
+        }
     }
 
     pub fn executeVm(self: *CircuitVm, function_index: usize, show_trace: bool) !void {
@@ -305,7 +339,13 @@ pub const CircuitVm = struct {
                     defer arena.deinit();
                     var brillig_vm = try BrilligVm.init(arena.allocator(), calldata.items, &self.fc_handler);
                     defer brillig_vm.deinit();
-                    try brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0);
+                    brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0) catch |err| {
+                        if (err == error.Trapped) {
+                            self.brillig_error_context = try brillig_vm.getErrorContext(self.allocator);
+                            std.debug.print("BrilligVm error context captured - PC: {}, Ops: {}\n", .{ self.brillig_error_context.?.pc, self.brillig_error_context.?.ops_executed });
+                        }
+                        return err;
+                    };
                     var return_data_idx: u32 = 0;
                     for (op.outputs) |o| {
                         const witnesses = switch (o) {

@@ -437,7 +437,17 @@ pub const Txe = struct {
 
         var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items, self.fc_handler);
         std.debug.print("entering vm", .{});
-        try circuit_vm.executeVm(0, false);
+        circuit_vm.executeVm(0, false) catch |err| {
+            if (err == error.Trapped) {
+                // Print detailed error information
+                circuit_vm.printBrilligTrapError(
+                    function.name,
+                    function_selector,
+                    "data/contracts/Counter.json"  // TODO: Get actual artifact path
+                );
+            }
+            return err;
+        };
         std.debug.print("exiting vm", .{});
 
         // TODO: Extract public inputs from execution result

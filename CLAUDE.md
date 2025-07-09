@@ -33,3 +33,6 @@ contracts
 The VERBOSE flag is only needed if you need to see log output.
 The final argument is a test name filter.
 The unit tests are named as per zigs test name.
+
+When writing code:
+* avoid rightward drift with optionals by using assigments with "orelse" style syntax and early returns.
