@@ -429,7 +429,13 @@ pub const Txe = struct {
         std.debug.print("calldata: {x}\n", .{calldata.items});
 
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
-        var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items);
+        
+        // Create a foreign call dispatcher for the circuit VM
+        const ForeignCallDispatcher = @import("./dispatcher.zig").Dispatcher;
+        var fc_handler = ForeignCallDispatcher.init(allocator);
+        defer fc_handler.deinit();
+        
+        var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items, &fc_handler);
         try circuit_vm.executeVm(0, false);
 
         // TODO: Extract public inputs from execution result

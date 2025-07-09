@@ -1,7 +1,11 @@
-pub const FileSrs = @import("file_srs.zig").FileSrs;
+const std = @import("std");
+const file_srs = @import("file_srs.zig");
+
+pub const FileSrs = file_srs.FileSrs;
 // This really slows down compilation times for some reason.
 // pub const NetSrs = @import("net_srs.zig").NetSrs;
 
-// test {
-//     @import("std").testing.refAllDecls(@This());
-// }
+test {
+    std.testing.refAllDecls(@This());
+    _ = file_srs;
+}

@@ -18,10 +18,14 @@ testing
 benchmarking
 
 To ensure you get a rebuild when running tests provide the build type to BUILD env var.
+
+Example to run all unit tests:
+BUILD=Debug VERBOSE=1 ./bootstrap.sh test unit
+
 Example to run a subset of unit tests:
 BUILD=Debug VERBOSE=1 ./bootstrap.sh test unit "nargo.contract"
 
-There are also tests for:
+"unit" is a test catagory. There are also tests for:
 programs
 protocol_circuits
 contracts

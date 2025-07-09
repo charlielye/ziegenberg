@@ -182,9 +182,12 @@ pub fn execute(options: ExecuteOptions) !void {
     std.debug.assert(program.functions.len == 1);
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
+    var fc_handler = ForeignCallDispatcher.init(allocator);
+    defer fc_handler.deinit();
+
     var t = try std.time.Timer.start();
     std.debug.print("Initing...\n", .{});
-    var vm = try CircuitVm.init(allocator, &program, calldata);
+    var vm = try CircuitVm.init(allocator, &program, calldata, &fc_handler);
     defer vm.deinit();
     std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
@@ -237,7 +240,7 @@ pub const CircuitVm = struct {
             .program = program,
             .witnesses = witnesses,
             .memory_solvers = std.AutoHashMap(u32, MemoryOpSolver).init(allocator),
-            .fc_handler = fc_handler,
+            .fc_handler = fc_handler.*,
         };
     }
 
