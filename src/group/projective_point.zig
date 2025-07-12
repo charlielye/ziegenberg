@@ -1,5 +1,6 @@
 const std = @import("std");
 const group_arith = @import("group_arith.zig");
+const ForeignCallParam = @import("../bvm/foreign_call/param.zig").ForeignCallParam;
 
 pub fn ProjectivePoint(comptime GroupParams: type) type {
     return struct {
@@ -155,6 +156,19 @@ pub fn ProjectivePoint(comptime GroupParams: type) type {
             const zz_inv = z_inv.sqr();
             const zzz_inv = zz_inv.mul(z_inv);
             return PP.from_xyz(self.x.mul(zz_inv), self.y.mul(zzz_inv), Fq.one);
+        }
+
+        pub fn toForeignCallParams(self: PP, allocator: std.mem.Allocator) ![]ForeignCallParam {
+            // Normalize the point first to get affine coordinates
+            const normalized = self.normalize();
+            
+            // Create array with x, y, and infinity flag
+            const params = try allocator.alloc(ForeignCallParam, 3);
+            params[0] = ForeignCallParam{ .Single = normalized.x.to_int() };
+            params[1] = ForeignCallParam{ .Single = normalized.y.to_int() };
+            params[2] = ForeignCallParam{ .Single = if (self.is_infinity()) 1 else 0 };
+            
+            return params;
         }
     };
 }

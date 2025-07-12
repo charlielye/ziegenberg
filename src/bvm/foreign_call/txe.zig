@@ -305,6 +305,11 @@ pub const Txe = struct {
 
         self.block_number += 1;
 
+        const mnpk_inf: u256 = if (public_keys.master_nullifier_public_key.is_infinity()) 1 else 0;
+        const mivpk_inf: u256 = if (public_keys.master_incoming_viewing_public_key.is_infinity()) 1 else 0;
+        const movpk_inf: u256 = if (public_keys.master_outgoing_viewing_public_key.is_infinity()) 1 else 0;
+        const mtpk_inf: u256 = if (public_keys.master_tagging_public_key.is_infinity()) 1 else 0;
+        
         return [16]F{
             contract_instance.salt,
             contract_instance.deployer.value,
@@ -312,16 +317,16 @@ pub const Txe = struct {
             contract_instance.initialization_hash,
             public_keys.master_nullifier_public_key.x,
             public_keys.master_nullifier_public_key.y,
-            F.zero,
+            F.from_int(mnpk_inf),
             public_keys.master_incoming_viewing_public_key.x,
             public_keys.master_incoming_viewing_public_key.y,
-            F.zero,
+            F.from_int(mivpk_inf),
             public_keys.master_outgoing_viewing_public_key.x,
             public_keys.master_outgoing_viewing_public_key.y,
-            F.zero,
+            F.from_int(movpk_inf),
             public_keys.master_tagging_public_key.x,
             public_keys.master_tagging_public_key.y,
-            F.zero,
+            F.from_int(mtpk_inf),
         };
     }
 

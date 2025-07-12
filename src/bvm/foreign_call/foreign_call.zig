@@ -242,8 +242,12 @@ fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]Fo
 
     switch (info) {
         .@"struct" => |s| {
-            // Check if this struct has a toForeignCallParam method
-            if (@hasDecl(T, "toForeignCallParam")) {
+            // Check if this struct has a toForeignCallParams method (returns multiple params)
+            if (@hasDecl(T, "toForeignCallParams")) {
+                const params = try value.toForeignCallParams(allocator);
+                try result.appendSlice(params);
+            } else if (@hasDecl(T, "toForeignCallParam")) {
+                // Check if this struct has a toForeignCallParam method (returns single param)
                 try result.append(value.toForeignCallParam());
             } else if (@hasDecl(T, "to_int")) {
                 // Check if this struct has a to_int method (like Field types)
