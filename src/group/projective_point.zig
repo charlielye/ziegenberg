@@ -158,17 +158,16 @@ pub fn ProjectivePoint(comptime GroupParams: type) type {
             return PP.from_xyz(self.x.mul(zz_inv), self.y.mul(zzz_inv), Fq.one);
         }
 
-        pub fn toForeignCallParams(self: PP, allocator: std.mem.Allocator) ![]ForeignCallParam {
+        pub fn toForeignCallParams(self: PP) [3]ForeignCallParam {
             // Normalize the point first to get affine coordinates
             const normalized = self.normalize();
             
-            // Create array with x, y, and infinity flag
-            const params = try allocator.alloc(ForeignCallParam, 3);
-            params[0] = ForeignCallParam{ .Single = normalized.x.to_int() };
-            params[1] = ForeignCallParam{ .Single = normalized.y.to_int() };
-            params[2] = ForeignCallParam{ .Single = if (self.is_infinity()) 1 else 0 };
-            
-            return params;
+            // Return array with x, y, and infinity flag
+            return [3]ForeignCallParam{
+                ForeignCallParam{ .Single = normalized.x.to_int() },
+                ForeignCallParam{ .Single = normalized.y.to_int() },
+                ForeignCallParam{ .Single = if (self.is_infinity()) 1 else 0 },
+            };
         }
     };
 }
