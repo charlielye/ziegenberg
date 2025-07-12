@@ -62,7 +62,7 @@ pub fn lookupSourceLocation(
 
         // Look up PC in debug info
         for (debug_infos.array.items) |info| {
-            try lookupPcInDebugInfo(allocator, info, pc, root);
+            if (try lookupPcInDebugInfo(allocator, info, pc, root)) return;
         }
 
         std.debug.print("  PC {} not found in debug symbols\n", .{pc});
@@ -77,25 +77,25 @@ fn lookupPcInDebugInfo(
     info: std.json.Value,
     pc: usize,
     root: std.json.ObjectMap,
-) !void {
-    const locations = info.object.get("brillig_locations") orelse return;
-    const inner_locations = locations.object.get("0") orelse return;
+) !bool {
+    const locations = info.object.get("brillig_locations") orelse return false;
+    const inner_locations = locations.object.get("0") orelse return false;
 
     var pc_key_buf: [32]u8 = undefined;
     const pc_key = try std.fmt.bufPrint(&pc_key_buf, "{}", .{pc});
 
-    const location_idx_val = inner_locations.object.get(pc_key) orelse return;
+    const location_idx_val = inner_locations.object.get(pc_key) orelse return false;
     const location_idx = location_idx_val.integer;
 
-    const tree = info.object.get("location_tree") orelse return;
-    const locations_array = tree.object.get("locations") orelse return;
+    const tree = info.object.get("location_tree") orelse return false;
+    const locations_array = tree.object.get("locations") orelse return false;
     const locs = locations_array.array.items;
 
-    if (location_idx < 0 or location_idx >= locs.len) return;
+    if (location_idx < 0 or location_idx >= locs.len) return false;
 
     const loc = locs[@intCast(location_idx)];
-    const value = loc.object.get("value") orelse return;
-    const file_id_val = value.object.get("file") orelse return;
+    const value = loc.object.get("value") orelse return false;
+    const file_id_val = value.object.get("file") orelse return false;
     const file_id = file_id_val.integer;
 
     // Get span for line calculation
@@ -107,13 +107,13 @@ fn lookupPcInDebugInfo(
     }
 
     // Look up file
-    const file_map = root.get("file_map") orelse return;
+    const file_map = root.get("file_map") orelse return false;
     var file_key_buf: [32]u8 = undefined;
     const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{file_id});
 
-    const file_info = file_map.object.get(file_key) orelse return;
-    const path = file_info.object.get("path") orelse return;
-    const source = file_info.object.get("source") orelse return;
+    const file_info = file_map.object.get(file_key) orelse return false;
+    const path = file_info.object.get("path") orelse return false;
+    const source = file_info.object.get("source") orelse return false;
 
     // Find line and column from character position
     const src = source.string;
@@ -154,4 +154,6 @@ fn lookupPcInDebugInfo(
         }
         std.debug.print("^\n", .{});
     }
+
+    return true;
 }
