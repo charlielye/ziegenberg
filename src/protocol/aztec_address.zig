@@ -82,7 +82,7 @@ pub const AztecAddress = struct {
     }
 
     pub fn hash(self: AztecAddress) u64 {
-        return std.hash.Wyhash.hash(0, std.mem.asBytes(&self.limbs));
+        return self.value.hash();
     }
 
     pub fn toField(self: AztecAddress) Fr {

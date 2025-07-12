@@ -26,6 +26,8 @@ pub fn handleForeignCall(
         if (fc.destination_value_types.len > 0) {
             std.debug.print("Unimplemented foreign call: {s}\n", .{fc.function});
             return error.Unimplemented;
+        } else {
+            std.debug.print("Ignoring unimplemented foreign call (void return): {s}\n", .{fc.function});
         }
     }
 }
@@ -317,6 +319,40 @@ pub fn marshalOutput(
         },
         .bool => {
             mem.setSlot(destinations[0].MemoryAddress, if (output.*) 1 else 0);
+        },
+        .optional => |opt| {
+            // Optional values are marshalled as [is_some, value]
+            if (output.*) |value| {
+                // Has value
+                if (destinations[0] == .HeapArray) {
+                    const arr = destinations[0].HeapArray;
+                    const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+
+                    // Set is_some = 1
+                    mem.setSlotAtIndex(dst_idx, 1);
+
+                    // Marshal the value based on its type
+                    if (opt.child == []F) {
+                        // Special handling for []F
+                        const slice = value;
+                        for (0..slice.len) |i| {
+                            mem.setSlotAtIndex(dst_idx + 1 + i, slice[i].to_int());
+                        }
+                    } else {
+                        // For other types, use existing marshaling
+                        var temp_value = value;
+                        var temp_destinations = [_]io.ValueOrArray{io.ValueOrArray{ .MemoryAddress = destinations[0].HeapArray.pointer + 1 }};
+                        marshalOutput(&temp_value, mem, &temp_destinations, destination_value_types);
+                    }
+                }
+            } else {
+                // No value - set is_some = 0
+                if (destinations[0] == .HeapArray) {
+                    const arr = destinations[0].HeapArray;
+                    const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+                    mem.setSlotAtIndex(dst_idx, 0);
+                }
+            }
         },
         .void => {},
         else => {

@@ -181,6 +181,8 @@ pub const Txe = struct {
     contract_instance_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
     args_hash_map: std.AutoHashMap(F, []F),
     fc_handler: *ForeignCallDispatcher = undefined,
+    // Capsule storage: key is "address:slot", value is array of F elements
+    capsule_storage: std.StringHashMap([]F),
     //   private contractDataOracle: ContractDataOracle;
 
     const CHAIN_ID = 1;
@@ -197,10 +199,18 @@ pub const Txe = struct {
             .contract_artifact_cache = std.AutoHashMap(F, ContractAbi).init(allocator),
             .contract_instance_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
             .args_hash_map = std.AutoHashMap(F, []F).init(allocator),
+            .capsule_storage = std.StringHashMap([]F).init(allocator),
         };
     }
 
     pub fn deinit(self: *Txe) void {
+        // Free all capsule data
+        var iter = self.capsule_storage.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.capsule_storage.deinit();
         self.args_hash_map.deinit();
         self.contract_instance_cache.deinit();
         self.contract_artifact_cache.deinit();
@@ -309,7 +319,7 @@ pub const Txe = struct {
         const mivpk_inf: u256 = if (public_keys.master_incoming_viewing_public_key.is_infinity()) 1 else 0;
         const movpk_inf: u256 = if (public_keys.master_outgoing_viewing_public_key.is_infinity()) 1 else 0;
         const mtpk_inf: u256 = if (public_keys.master_tagging_public_key.is_infinity()) 1 else 0;
-        
+
         return [16]F{
             contract_instance.salt,
             contract_instance.deployer.value,
@@ -491,14 +501,6 @@ pub const Txe = struct {
     } {
         const instance = self.contract_instance_cache.get(address);
         if (instance) |i| {
-            std.debug.print("getContractInstance: {x} -> (salt: {x}, deployer: {x}, current_class_id: {x}, init hash: {x}, public keys: {x})\n", .{
-                address,
-                i.salt,
-                i.deployer,
-                i.current_contract_class_id,
-                i.initialization_hash,
-                i.public_keys,
-            });
             return .{
                 .salt = i.salt,
                 .deployer = i.deployer,
@@ -508,6 +510,104 @@ pub const Txe = struct {
             };
         } else {
             return error.ContractInstanceNotFound;
+        }
+    }
+
+    fn makeCapsuleKey(allocator: std.mem.Allocator, contract_address: proto.AztecAddress, slot: F) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{x}:{x}", .{ contract_address.value.to_int(), slot.to_int() });
+    }
+
+    pub fn storeCapsule(
+        self: *Txe,
+        _: std.mem.Allocator,
+        contract_address: proto.AztecAddress,
+        slot: F,
+        capsule: []F,
+    ) !void {
+        // Check if contract is allowed to access this storage.
+        if (!contract_address.eql(self.contract_address)) {
+            std.debug.print("Contract {x} is not allowed to access {x}'s storage\n", .{
+                contract_address,
+                self.contract_address,
+            });
+            return error.UnauthorizedCapsuleAccess;
+        }
+
+        const key = try makeCapsuleKey(self.allocator, contract_address, slot);
+
+        // If there's existing data, free it.
+        if (self.capsule_storage.get(key)) |existing| {
+            self.allocator.free(existing);
+        }
+
+        // Store new data.
+        const capsule_copy = try self.allocator.alloc(F, capsule.len);
+        @memcpy(capsule_copy, capsule);
+
+        try self.capsule_storage.put(key, capsule_copy);
+
+        std.debug.print("storeCapsule: stored {} elements at slot {x} for contract {x}\n", .{
+            capsule.len,
+            slot,
+            contract_address,
+        });
+    }
+
+    pub fn loadCapsule(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        contract_address: proto.AztecAddress,
+        slot: F,
+        _: u32, // response array length.
+    ) !?[]F {
+        // Check if contract is allowed to access this storage.
+        if (!contract_address.eql(self.contract_address)) {
+            std.debug.print("Contract {x} is not allowed to access {x}'s storage\n", .{
+                contract_address,
+                self.contract_address,
+            });
+            return error.UnauthorizedCapsuleAccess;
+        }
+
+        const key = try makeCapsuleKey(allocator, contract_address, slot);
+        defer allocator.free(key);
+
+        if (self.capsule_storage.get(key)) |capsule| {
+            // Return a copy of the data
+            const result = try allocator.alloc(F, capsule.len);
+            @memcpy(result, capsule);
+
+            std.debug.print("loadCapsule: loaded {} elements from slot {x} for contract {x}\n", .{
+                capsule.len,
+                slot,
+                contract_address.value.to_int(),
+            });
+
+            return result;
+        }
+
+        std.debug.print("loadCapsule: no data at slot {x} for contract {x}\n", .{
+            slot,
+            contract_address,
+        });
+
+        return null;
+    }
+
+    pub fn debugLog(
+        _: *Txe,
+        _: std.mem.Allocator,
+        msg: []const u8,
+        _: F,
+        fields: []F,
+    ) !void {
+        std.debug.print("Debug Log: {s}\n", .{msg});
+        if (fields.len > 0) {
+            std.debug.print("Fields: ", .{});
+            for (fields) |field| {
+                std.debug.print("{x} ", .{field});
+            }
+            std.debug.print("\n", .{});
         }
     }
 };
