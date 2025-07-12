@@ -264,6 +264,7 @@ pub const CircuitVm = struct {
         std.debug.print("Function: {s} (selector: 0x{x})\n", .{ function_name, function_selector });
         std.debug.print("Brillig PC: {}\n", .{error_ctx.pc});
         std.debug.print("Operations executed: {}\n", .{error_ctx.ops_executed});
+        std.debug.print("Return data: {x}\n", .{error_ctx.return_data});
         if (error_ctx.callstack.len > 0) {
             std.debug.print("Callstack: ", .{});
             for (error_ctx.callstack) |addr| {

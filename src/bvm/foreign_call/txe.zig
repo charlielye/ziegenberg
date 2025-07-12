@@ -285,7 +285,7 @@ pub const Txe = struct {
             self.contracts_artifacts_path,
             contract_name,
         });
-        // Note use of long lived allocator.
+        // Note use of long lived allocator as we will cache it.
         const contract_abi = try ContractAbi.load(self.allocator, contract_path);
         const contract_instance = proto.ContractInstance.fromDeployParams(tmp_allocator, contract_abi, .{
             .constructor_name = initializer,
@@ -440,10 +440,7 @@ pub const Txe = struct {
         circuit_vm.executeVm(0, false) catch |err| {
             if (err == error.Trapped) {
                 // Print detailed error information
-                circuit_vm.printBrilligTrapError(
-                    function.name,
-                    function_selector,
-                    "data/contracts/Counter.json"  // TODO: Get actual artifact path
+                circuit_vm.printBrilligTrapError(function.name, function_selector, "data/contracts/Counter.json" // TODO: Get actual artifact path
                 );
             }
             return err;
@@ -489,6 +486,14 @@ pub const Txe = struct {
     } {
         const instance = self.contract_instance_cache.get(address);
         if (instance) |i| {
+            std.debug.print("getContractInstance: {x} -> (salt: {x}, deployer: {x}, current_class_id: {x}, init hash: {x}, public keys: {x})\n", .{
+                address,
+                i.salt,
+                i.deployer,
+                i.current_contract_class_id,
+                i.initialization_hash,
+                i.public_keys,
+            });
             return .{
                 .salt = i.salt,
                 .deployer = i.deployer,

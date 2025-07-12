@@ -52,6 +52,24 @@ pub const PublicKeys = struct {
         };
         return poseidon2.hashTuple(inputs);
     }
+
+    pub fn format(
+        self: *const PublicKeys,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = options;
+        try writer.print(
+            "PublicKeys {{\n master_nullifier_public_key: {" ++ fmt ++ "}\n master_incoming_viewing_public_key: {" ++ fmt ++ "}\n master_outgoing_viewing_public_key: {" ++ fmt ++ "}\n master_tagging_public_key: {" ++ fmt ++ "}\n}}",
+            .{
+                self.master_nullifier_public_key,
+                self.master_incoming_viewing_public_key,
+                self.master_outgoing_viewing_public_key,
+                self.master_tagging_public_key,
+            },
+        );
+    }
 };
 
 test "compute public keys hash" {

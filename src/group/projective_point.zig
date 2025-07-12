@@ -115,7 +115,7 @@ pub fn ProjectivePoint(comptime GroupParams: type) type {
         ) !void {
             _ = fmt;
             _ = options;
-            try writer.print("{{\n x: {any}\n y: {any}\n z: {any}\n}}", .{ self.x, self.y, self.z });
+            try writer.print("{{\n x: {x}\n y: {x}\n z: {x}\n}}", .{ self.x, self.y, self.z });
         }
 
         pub fn print(self: PP) void {

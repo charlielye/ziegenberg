@@ -497,6 +497,7 @@ pub const BrilligVm = struct {
         const slot = self.mem.resolveSlot(op.revert_data.pointer);
         const size = self.mem.resolveSlot(op.revert_data.size);
         self.return_data = self.mem.memory[slot .. slot + size];
+        for (self.return_data) |*v| fieldOps.bn254_fr_normalize(@ptrCast(v));
         std.debug.print("Trap! PC: {}, Ops executed: {}\n", .{ self.pc, self.ops_executed });
         std.debug.print("Callstack depth: {}\n", .{self.callstack.items.len});
         if (self.callstack.items.len > 0) {

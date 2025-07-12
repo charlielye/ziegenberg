@@ -44,6 +44,8 @@ pub fn structDispatcher(
         if (field_info == .@"fn" and field_info.@"fn".params.len >= 2) {
             // Runtime check for matching function name.
             if (std.mem.eql(u8, decl.name, fc.function)) {
+                std.debug.print("\nMaking foreign call to: {s}\n", .{decl.name});
+
                 // There is a function name matching the call on ourself.
                 // Get a tuple to hold the values of the argument types for the function.
                 const Args = std.meta.ArgsTuple(@TypeOf(field));
@@ -99,7 +101,6 @@ pub fn structDispatcher(
                     }
                 }
                 // Make the function call.
-                std.debug.print("Making foreign call to: {s}\n", .{decl.name});
                 const r = try @call(.auto, field, args);
                 foreign_call.marshalOutput(&r, mem, fc.destinations, fc.destination_value_types);
                 return true;
