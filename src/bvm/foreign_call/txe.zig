@@ -537,12 +537,6 @@ pub const Txe = struct {
         side_effect_counter: u32,
         is_static_call: bool,
     ) ![2]F {
-        std.debug.print("Executing external function: {x}@{x} (static: {})\n", .{
-            function_selector,
-            target_contract_address,
-            is_static_call,
-        });
-
         // Store current environment
         const current_contract_address = self.contract_address;
         const current_msg_sender = self.msg_sender;
@@ -557,6 +551,12 @@ pub const Txe = struct {
             return error.ContractInstanceNotFound;
         };
         const function = try contract_instance.abi.getFunctionBySelector(function_selector);
+
+        std.debug.print("Executing external function: {s}@{x} (static: {})\n", .{
+            function.name,
+            target_contract_address,
+            is_static_call,
+        });
 
         const args = self.args_hash_map.get(args_hash) orelse {
             std.debug.print("No args found for hash {x}\n", .{args_hash});
