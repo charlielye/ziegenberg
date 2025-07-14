@@ -102,7 +102,6 @@ pub const Function = struct {
         for (self.abi.parameters) |p| {
             // Skip context inputs parameter (hidden from user perspective)
             if (p.type.path != null and std.mem.endsWith(u8, p.type.path.?, "ContextInputs")) continue;
-
             if (!first_param) try writer.writeByte(',');
             try encodeType(writer, p.type);
             first_param = false;

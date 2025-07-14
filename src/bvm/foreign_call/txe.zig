@@ -9,9 +9,10 @@ const proto = @import("../../protocol/package.zig");
 const constants = @import("../../protocol/package.zig").constants;
 const ContractAbi = @import("../../nargo/contract.zig").ContractAbi;
 const structToFields = @import("./struct_field_conversion.zig").structToFields;
-const fieldsToStructHelper = @import("./struct_field_conversion.zig").fieldsToStructHelper;
+const fieldsToStruct = @import("./struct_field_conversion.zig").fieldsToStruct;
 const cvm = @import("../../cvm/package.zig");
 const ForeignCallDispatcher = @import("dispatcher.zig").Dispatcher;
+const poseidon = @import("../../poseidon2/poseidon2.zig");
 
 const EthAddress = F;
 
@@ -231,6 +232,10 @@ fn ClaimedLengthArray(comptime T: type, comptime MAX_SIZE: u32) type {
     return struct {
         data: [MAX_SIZE]T = [_]T{T{}} ** MAX_SIZE,
         claimed_length: u32 = 0,
+
+        pub fn items(self: *const @This()) []const T {
+            return self.data[0..self.claimed_length];
+        }
     };
 }
 
@@ -301,6 +306,7 @@ pub const Txe = struct {
     capsule_storage: std.StringHashMap([]F),
     //   private contractDataOracle: ContractDataOracle;
     prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(12345),
+    private_logs: std.ArrayList(PrivateLog),
 
     const CHAIN_ID = 1;
     const ROLLUP_VERSION = 1;
@@ -317,6 +323,7 @@ pub const Txe = struct {
             .contract_instance_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
             .args_hash_map = std.AutoHashMap(F, []F).init(allocator),
             .capsule_storage = std.StringHashMap([]F).init(allocator),
+            .private_logs = std.ArrayList(PrivateLog).init(allocator),
         };
     }
 
@@ -537,16 +544,17 @@ pub const Txe = struct {
         side_effect_counter: u32,
         is_static_call: bool,
     ) ![2]F {
-        // Store current environment
+        // Save current environment.
         const current_contract_address = self.contract_address;
         const current_msg_sender = self.msg_sender;
         const current_function_selector = self.function_selector;
 
-        // Set up new environment for the call
+        // Set up new environment for the call.
         self.msg_sender = self.contract_address;
         self.contract_address = target_contract_address;
         self.function_selector = function_selector;
 
+        // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {
             return error.ContractInstanceNotFound;
         };
@@ -557,10 +565,6 @@ pub const Txe = struct {
             target_contract_address,
             is_static_call,
         });
-        std.debug.print("Function parameters: {}\n", .{function.abi.parameters.len});
-        for (function.abi.parameters, 0..) |param, idx| {
-            std.debug.print("  Param[{}]: {s} (type: {s})\n", .{ idx, param.name, param.type.kind });
-        }
 
         const args = self.args_hash_map.get(args_hash) orelse {
             std.debug.print("No args found for hash {x}\n", .{args_hash});
@@ -575,88 +579,54 @@ pub const Txe = struct {
             is_static_call,
         );
 
+        // Build calldata from private context inputs and function arguments.
         var calldata = std.ArrayList(F).init(allocator);
-        const context_start = calldata.items.len;
         try structToFields(PrivateContextInputs, private_context_inputs, &calldata);
-        const context_size = calldata.items.len - context_start;
-        std.debug.print("Actual PrivateContextInputs serialized to {} fields\n", .{context_size});
-
         for (args) |arg| {
             try calldata.append(arg);
         }
 
-        std.debug.print("Total calldata size: {} (context: {}, args: {})\n", .{ calldata.items.len, context_size, args.len });
-        std.debug.print("calldata: {x}\n", .{calldata.items});
-
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
 
+        // Execute private function in nested circuit vm.
         var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items, self.fc_handler);
         std.debug.print("callPrivateFunction: Entering nested cvm\n", .{});
         circuit_vm.executeVm(0, false) catch |err| {
             if (err == error.Trapped) {
-                // Print detailed error information
-                circuit_vm.printBrilligTrapError(function.name, function_selector, "data/contracts/Counter.json" // TODO: Get actual artifact path
-                );
+                // TODO: Get actual artifact path.
+                circuit_vm.printBrilligTrapError(function.name, function_selector, "data/contracts/Counter.json");
             }
             return err;
         };
         std.debug.print("callPrivateFunction: Exited nested cvm\n", .{});
 
-        // Extract public inputs from execution result
+        // Extract public inputs from execution result.
         const start = function.sizeInFields() + constants.PRIVATE_CONTEXT_INPUTS_LENGTH;
         const public_inputs_fields = try circuit_vm.witnesses.getWitnessesRange(
             allocator,
             start,
             start + constants.PRIVATE_CIRCUIT_PUBLIC_INPUTS_LENGTH,
         );
+        const private_circuit_public_inputs = try fieldsToStruct(PrivateCircuitPublicInputs, public_inputs_fields);
 
-        const private_circuit_public_inputs = try fieldsToStructHelper(PrivateCircuitPublicInputs, public_inputs_fields);
         const end_side_effect_counter = private_circuit_public_inputs.end_side_effect_counter;
         const returns_hash = private_circuit_public_inputs.returns_hash;
 
-        // // Marshal the fields into the PrivateCircuitPublicInputs struct
-        // std.debug.print("Attempting to deserialize {} fields into PrivateCircuitPublicInputs\n", .{public_inputs_fields.len});
-
-        // For now, just print some of the raw fields to understand the structure
-        std.debug.print("First 50 fields:\n", .{});
-        for (public_inputs_fields[0..@min(50, public_inputs_fields.len)], 0..) |field, i| {
-            std.debug.print("  [{d:3}] {x}\n", .{ i, field.to_int() });
-        }
-
-        // // For now, manually extract key fields we need
-        // // Based on the TypeScript implementation and observed output:
-        // // The end_side_effect_counter should be near the end of the struct
-        // // Looking at the fields, it appears to be around index 746-747
-        // const end_side_effect_counter_index = 747;
-        // const returns_hash_index = 43; // Based on observation, this seems to be the returns_hash
-
-        // const end_side_effect_counter = if (end_side_effect_counter_index < public_inputs_fields.len)
-        //     public_inputs_fields[end_side_effect_counter_index]
-        // else
-        //     F.zero;
-
-        // const returns_hash = if (returns_hash_index < public_inputs_fields.len)
-        //     public_inputs_fields[returns_hash_index]
-        // else
-        //     F.zero;
-
-        std.debug.print("Extracted: end_side_effect_counter={x}, returns_hash={x}\n", .{
-            end_side_effect_counter.to_int(),
-            returns_hash.to_int(),
-        });
-
-        // Apply side effects
+        // Apply side effects.
         self.side_effect_counter = @intCast(end_side_effect_counter.to_int() + 1);
 
-        // TODO: Add private logs
-        // await this.addPrivateLogs(...);
+        // Add private logs.
+        for (private_circuit_public_inputs.private_logs.items()) |private_log| {
+            var log = private_log.log;
+            log.fields[0] = poseidon.hash(&[_]F{ target_contract_address.value, log.fields[0] });
+            try self.private_logs.append(log);
+        }
 
-        // Restore previous environment
+        // Restore previous environment.
         self.contract_address = current_contract_address;
         self.msg_sender = current_msg_sender;
         self.function_selector = current_function_selector;
 
-        // Return result (endSideEffectCounter, returnsHash)
         return [2]F{ end_side_effect_counter, returns_hash };
     }
 

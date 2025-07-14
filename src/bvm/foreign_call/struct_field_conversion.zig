@@ -135,7 +135,7 @@ pub fn structToFields(comptime T: type, value: T, list: *std.ArrayList(F)) !void
 
 /// Recursively populates a struct from a slice of field elements.
 /// Returns the number of fields consumed.
-pub fn fieldsToStruct(comptime T: type, fields: []const F, index: *usize) !T {
+fn fieldsToStructInternal(comptime T: type, fields: []const F, index: *usize) !T {
     // Handle F type first
     if (T == F) {
         if (index.* >= fields.len) return error.InsufficientFields;
@@ -159,7 +159,7 @@ pub fn fieldsToStruct(comptime T: type, fields: []const F, index: *usize) !T {
             var result: T = undefined;
             // For each field in the struct, recursively populate
             inline for (struct_info.fields) |field| {
-                @field(result, field.name) = try fieldsToStruct(field.type, fields, index);
+                @field(result, field.name) = try fieldsToStructInternal(field.type, fields, index);
             }
             return result;
         },
@@ -167,7 +167,7 @@ pub fn fieldsToStruct(comptime T: type, fields: []const F, index: *usize) !T {
             var result: T = undefined;
             // For arrays, populate each element
             for (&result) |*item| {
-                item.* = try fieldsToStruct(array_info.child, fields, index);
+                item.* = try fieldsToStructInternal(array_info.child, fields, index);
             }
             return result;
         },
@@ -216,7 +216,7 @@ pub fn fieldsToStruct(comptime T: type, fields: []const F, index: *usize) !T {
             index.* += 1;
 
             if (is_some) {
-                return try fieldsToStruct(optional_info.child, fields, index);
+                return try fieldsToStructInternal(optional_info.child, fields, index);
             } else {
                 return null;
             }
@@ -272,9 +272,9 @@ pub fn fieldsToStruct(comptime T: type, fields: []const F, index: *usize) !T {
 }
 
 // Helper function to make the API cleaner
-pub fn fieldsToStructHelper(comptime T: type, fields: []const F) !T {
+pub fn fieldsToStruct(comptime T: type, fields: []const F) !T {
     var index: usize = 0;
-    const result = try fieldsToStruct(T, fields, &index);
+    const result = try fieldsToStructInternal(T, fields, &index);
     if (index != fields.len) {
         return error.UnusedFields;
     }
@@ -412,7 +412,7 @@ test "roundtrip basic types" {
     try structToFields(TestStruct, original, &list);
 
     // Convert back to struct
-    const recovered = try fieldsToStructHelper(TestStruct, list.items);
+    const recovered = try fieldsToStruct(TestStruct, list.items);
 
     // Verify equality
     try std.testing.expect(recovered.a.eql(original.a));
@@ -446,7 +446,7 @@ test "roundtrip nested structs" {
     try structToFields(Outer, original, &list);
 
     // Convert back to struct
-    const recovered = try fieldsToStructHelper(Outer, list.items);
+    const recovered = try fieldsToStruct(Outer, list.items);
 
     // Verify equality
     try std.testing.expect(recovered.inner.x.eql(original.inner.x));
@@ -473,7 +473,7 @@ test "roundtrip with optionals" {
         defer list.deinit();
         try structToFields(TestStruct, original, &list);
 
-        const recovered = try fieldsToStructHelper(TestStruct, list.items);
+        const recovered = try fieldsToStruct(TestStruct, list.items);
 
         try std.testing.expectEqual(original.maybe_value, recovered.maybe_value);
         try std.testing.expectEqual(original.definitely_value, recovered.definitely_value);
@@ -492,7 +492,7 @@ test "roundtrip with optionals" {
         defer list.deinit();
         try structToFields(TestStruct, original, &list);
 
-        const recovered = try fieldsToStructHelper(TestStruct, list.items);
+        const recovered = try fieldsToStruct(TestStruct, list.items);
 
         try std.testing.expectEqual(original.maybe_value, recovered.maybe_value);
         try std.testing.expectEqual(original.definitely_value, recovered.definitely_value);
@@ -521,7 +521,7 @@ test "roundtrip with enums" {
     defer list.deinit();
     try structToFields(TestStruct, original, &list);
 
-    const recovered = try fieldsToStructHelper(TestStruct, list.items);
+    const recovered = try fieldsToStruct(TestStruct, list.items);
 
     try std.testing.expectEqual(original.e, recovered.e);
     try std.testing.expectEqual(original.num, recovered.num);
@@ -542,7 +542,7 @@ test "roundtrip with AztecAddress" {
     defer list.deinit();
     try structToFields(TestStruct, original, &list);
 
-    const recovered = try fieldsToStructHelper(TestStruct, list.items);
+    const recovered = try fieldsToStruct(TestStruct, list.items);
 
     try std.testing.expect(recovered.addr.eql(original.addr));
     try std.testing.expectEqual(original.num, recovered.num);
@@ -556,7 +556,7 @@ test "error on insufficient fields" {
 
     const fields = [_]F{F.from_int(42)}; // Only one field, but struct needs two
 
-    const result = fieldsToStructHelper(TestStruct, &fields);
+    const result = fieldsToStruct(TestStruct, &fields);
     try std.testing.expectError(error.InsufficientFields, result);
 }
 
@@ -567,6 +567,6 @@ test "error on too many fields" {
 
     const fields = [_]F{ F.from_int(42), F.from_int(100) }; // Two fields, but struct needs one
 
-    const result = fieldsToStructHelper(TestStruct, &fields);
+    const result = fieldsToStruct(TestStruct, &fields);
     try std.testing.expectError(error.UnusedFields, result);
 }
