@@ -6,8 +6,10 @@ const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
 const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
 const proto = @import("../../protocol/package.zig");
+const constants = @import("../../protocol/package.zig").constants;
 const ContractAbi = @import("../../nargo/contract.zig").ContractAbi;
-const flattenToFields = @import("./flatten_to_fields.zig").flattenToFields;
+const structToFields = @import("./struct_field_conversion.zig").structToFields;
+const fieldsToStructHelper = @import("./struct_field_conversion.zig").fieldsToStructHelper;
 const cvm = @import("../../cvm/package.zig");
 const ForeignCallDispatcher = @import("dispatcher.zig").Dispatcher;
 
@@ -140,6 +142,120 @@ const PrivateContextInputs = struct {
     historical_header: BlockHeader,
     tx_context: TxContext,
     start_side_effect_counter: u32 = 0,
+};
+
+const IncludeByTimestamp = struct {
+    is_some: bool = false,
+    value: u64 = 0,
+};
+
+const ReadRequest = struct {
+    value: F = F.zero,
+    counter: u32 = 0,
+};
+
+const KeyValidationRequest = struct {
+    pk_m: Point = Point{ .x = F.zero, .y = F.zero, .i = false },
+    sk_app: F = F.zero,
+};
+
+const KeyValidationRequestAndGenerator = struct {
+    request: KeyValidationRequest = KeyValidationRequest{},
+    sk_app_generator: F = F.zero,
+};
+
+const NoteHash = struct {
+    value: F = F.zero,
+    counter: u32 = 0,
+};
+
+const Nullifier = struct {
+    value: F = F.zero,
+    counter: u32 = 0,
+    note_hash: F = F.zero,
+};
+
+const PrivateCallRequest = struct {
+    call_context: CallContext = CallContext{},
+    args_hash: F = F.zero,
+    returns_hash: F = F.zero,
+    start_side_effect_counter: u32 = 0,
+    end_side_effect_counter: u32 = 0,
+};
+
+const PublicCallRequest = struct {
+    msg_sender: proto.AztecAddress = proto.AztecAddress.zero,
+    contract_address: proto.AztecAddress = proto.AztecAddress.zero,
+    is_static_call: bool = false,
+    calldata_hash: F = F.zero,
+};
+
+const CountedPublicCallRequest = struct {
+    request: PublicCallRequest = PublicCallRequest{},
+    counter: u32 = 0,
+};
+
+const CountedL2ToL1Message = struct {
+    message: L2ToL1Message = L2ToL1Message{},
+    counter: u32 = 0,
+};
+
+const L2ToL1Message = struct {
+    recipient: EthAddress = F.zero,
+    content: F = F.zero,
+};
+
+const PrivateLog = struct {
+    fields: [18]F = [_]F{F.zero} ** 18,
+    emitted_length: u32 = 0,
+};
+
+const PrivateLogData = struct {
+    log: PrivateLog = PrivateLog{},
+    note_hash_counter: u32 = 0,
+    counter: u32 = 0,
+};
+
+const LogHash = struct {
+    value: F = F.zero,
+    length: u32 = 0,
+};
+
+const CountedLogHash = struct {
+    log_hash: LogHash = LogHash{},
+    counter: u32 = 0,
+};
+
+// Generic wrapper for arrays with claimed length
+fn ClaimedLengthArray(comptime T: type, comptime MAX_SIZE: u32) type {
+    return struct {
+        data: [MAX_SIZE]T = [_]T{T{}} ** MAX_SIZE,
+        claimed_length: u32 = 0,
+    };
+}
+
+const PrivateCircuitPublicInputs = struct {
+    call_context: CallContext = CallContext{},
+    args_hash: F = F.zero,
+    returns_hash: F = F.zero,
+    min_revertible_side_effect_counter: F = F.zero,
+    is_fee_payer: bool = false,
+    include_by_timestamp: IncludeByTimestamp = IncludeByTimestamp{},
+    note_hash_read_requests: ClaimedLengthArray(ReadRequest, constants.MAX_NOTE_HASH_READ_REQUESTS_PER_CALL) = ClaimedLengthArray(ReadRequest, constants.MAX_NOTE_HASH_READ_REQUESTS_PER_CALL){},
+    nullifier_read_requests: ClaimedLengthArray(ReadRequest, constants.MAX_NULLIFIER_READ_REQUESTS_PER_CALL) = ClaimedLengthArray(ReadRequest, constants.MAX_NULLIFIER_READ_REQUESTS_PER_CALL){},
+    key_validation_requests_and_generators: ClaimedLengthArray(KeyValidationRequestAndGenerator, constants.MAX_KEY_VALIDATION_REQUESTS_PER_CALL) = ClaimedLengthArray(KeyValidationRequestAndGenerator, constants.MAX_KEY_VALIDATION_REQUESTS_PER_CALL){},
+    note_hashes: ClaimedLengthArray(NoteHash, constants.MAX_NOTE_HASHES_PER_CALL) = ClaimedLengthArray(NoteHash, constants.MAX_NOTE_HASHES_PER_CALL){},
+    nullifiers: ClaimedLengthArray(Nullifier, constants.MAX_NULLIFIERS_PER_CALL) = ClaimedLengthArray(Nullifier, constants.MAX_NULLIFIERS_PER_CALL){},
+    private_call_requests: ClaimedLengthArray(PrivateCallRequest, constants.MAX_PRIVATE_CALL_STACK_LENGTH_PER_CALL) = ClaimedLengthArray(PrivateCallRequest, constants.MAX_PRIVATE_CALL_STACK_LENGTH_PER_CALL){},
+    public_call_requests: ClaimedLengthArray(CountedPublicCallRequest, constants.MAX_ENQUEUED_CALLS_PER_CALL) = ClaimedLengthArray(CountedPublicCallRequest, constants.MAX_ENQUEUED_CALLS_PER_CALL){},
+    public_teardown_call_request: PublicCallRequest = PublicCallRequest{},
+    l2_to_l1_msgs: ClaimedLengthArray(CountedL2ToL1Message, constants.MAX_L2_TO_L1_MSGS_PER_CALL) = ClaimedLengthArray(CountedL2ToL1Message, constants.MAX_L2_TO_L1_MSGS_PER_CALL){},
+    private_logs: ClaimedLengthArray(PrivateLogData, constants.MAX_PRIVATE_LOGS_PER_CALL) = ClaimedLengthArray(PrivateLogData, constants.MAX_PRIVATE_LOGS_PER_CALL){},
+    contract_class_logs_hashes: ClaimedLengthArray(CountedLogHash, constants.MAX_CONTRACT_CLASS_LOGS_PER_CALL) = ClaimedLengthArray(CountedLogHash, constants.MAX_CONTRACT_CLASS_LOGS_PER_CALL){},
+    start_side_effect_counter: F = F.zero,
+    end_side_effect_counter: F = F.zero,
+    historical_header: BlockHeader = BlockHeader{},
+    tx_context: TxContext = TxContext{},
 };
 
 /// Computes a fast hash (SHA-1) of a file at the given path.
@@ -456,7 +572,7 @@ pub const Txe = struct {
         );
 
         var calldata = std.ArrayList(F).init(allocator);
-        try flattenToFields(PrivateContextInputs, private_context_inputs, &calldata);
+        try structToFields(PrivateContextInputs, private_context_inputs, &calldata);
         for (args) |arg| {
             try calldata.append(arg);
         }
@@ -477,19 +593,51 @@ pub const Txe = struct {
         };
         std.debug.print("callPrivateFunction: Exited nested cvm\n", .{});
 
-        // TODO: Extract public inputs from execution result
-        // let publicInputs = extractPrivateCircuitPublicInputs(...);
-        const start = function.sizeInFields();
-        const public_inputs = try circuit_vm.witnesses.getWitnessesRange(
+        // Extract public inputs from execution result
+        const start = function.sizeInFields() - 2;
+        const public_inputs_fields = try circuit_vm.witnesses.getWitnessesRange(
             allocator,
             start,
-            start + proto.constants.PRIVATE_CIRCUIT_PUBLIC_INPUTS_LENGTH,
+            start + constants.PRIVATE_CIRCUIT_PUBLIC_INPUTS_LENGTH,
         );
-        std.debug.print("Public inputs: {x}\n", .{public_inputs});
+
+        const private_circuit_public_inputs = try fieldsToStructHelper(PrivateCircuitPublicInputs, public_inputs_fields);
+        const end_side_effect_counter = private_circuit_public_inputs.end_side_effect_counter;
+        const returns_hash = private_circuit_public_inputs.returns_hash;
+
+        // // Marshal the fields into the PrivateCircuitPublicInputs struct
+        // std.debug.print("Attempting to deserialize {} fields into PrivateCircuitPublicInputs\n", .{public_inputs_fields.len});
+
+        // For now, just print some of the raw fields to understand the structure
+        std.debug.print("First 50 fields:\n", .{});
+        for (public_inputs_fields[0..@min(50, public_inputs_fields.len)], 0..) |field, i| {
+            std.debug.print("  [{d:3}] {x}\n", .{ i, field.to_int() });
+        }
+
+        // // For now, manually extract key fields we need
+        // // Based on the TypeScript implementation and observed output:
+        // // The end_side_effect_counter should be near the end of the struct
+        // // Looking at the fields, it appears to be around index 746-747
+        // const end_side_effect_counter_index = 747;
+        // const returns_hash_index = 43; // Based on observation, this seems to be the returns_hash
+
+        // const end_side_effect_counter = if (end_side_effect_counter_index < public_inputs_fields.len)
+        //     public_inputs_fields[end_side_effect_counter_index]
+        // else
+        //     F.zero;
+
+        // const returns_hash = if (returns_hash_index < public_inputs_fields.len)
+        //     public_inputs_fields[returns_hash_index]
+        // else
+        //     F.zero;
+
+        std.debug.print("Extracted: end_side_effect_counter={x}, returns_hash={x}\n", .{
+            end_side_effect_counter.to_int(),
+            returns_hash.to_int(),
+        });
 
         // Apply side effects
-        // let endSideEffectCounter = publicInputs.endSideEffectCounter;
-        // self.side_effect_counter = endSideEffectCounter + 1;
+        self.side_effect_counter = @intCast(end_side_effect_counter.to_int() + 1);
 
         // TODO: Add private logs
         // await this.addPrivateLogs(...);
@@ -499,8 +647,8 @@ pub const Txe = struct {
         self.msg_sender = current_msg_sender;
         self.function_selector = current_function_selector;
 
-        // TODO: Return result (endSideEffectCounter, returnsHash)
-        return [2]F{ F.zero, F.zero };
+        // Return result (endSideEffectCounter, returnsHash)
+        return [2]F{ end_side_effect_counter, returns_hash };
     }
 
     pub fn getContractInstance(
