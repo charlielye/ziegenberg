@@ -291,10 +291,8 @@ pub fn marshalOutput(
     const output_type = @TypeOf(output.*);
 
     if (output_type == F) {
-        // std.debug.assert(destinations.len == 1);
+        std.debug.assert(destinations.len == 1);
         mem.setSlot(destinations[0].MemoryAddress, output.*.to_int());
-        // } else if (output_type == []ForeignCallParam) {
-        //     marshalForeignCallParam(output.*, mem, destination, destination_value_type);
     }
 
     const info = @typeInfo(output_type);
@@ -344,6 +342,26 @@ pub fn marshalOutput(
                         var temp_destinations = [_]io.ValueOrArray{io.ValueOrArray{ .MemoryAddress = destinations[0].HeapArray.pointer + 1 }};
                         marshalOutput(&temp_value, mem, &temp_destinations, destination_value_types);
                     }
+                } else if (destinations[0] == .MemoryAddress) {
+                    // For simple optionals like Option<Field>, marshal directly to memory
+                    if (opt.child == []F) {
+                        // Handle []F with single element as Option<Field>
+                        const slice = value;
+                        if (slice.len == 1) {
+                            // Single element slice - treat as Option<Field>
+                            mem.setSlot(destinations[0].MemoryAddress, slice[0].to_int());
+                        } else {
+                            unreachable;
+                        }
+                    } else if (opt.child == F) {
+                        // Option<Field> - write the field value directly
+                        const field_value = value;
+                        mem.setSlot(destinations[0].MemoryAddress, field_value.to_int());
+                    } else {
+                        unreachable;
+                    }
+                } else {
+                    unreachable;
                 }
             } else {
                 // No value - set is_some = 0
@@ -351,6 +369,11 @@ pub fn marshalOutput(
                     const arr = destinations[0].HeapArray;
                     const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
                     mem.setSlotAtIndex(dst_idx, 0);
+                } else if (destinations[0] == .MemoryAddress) {
+                    // For simple optionals like Option<Field>, write 0 to indicate None
+                    mem.setSlot(destinations[0].MemoryAddress, 0);
+                } else {
+                    unreachable;
                 }
             }
         },

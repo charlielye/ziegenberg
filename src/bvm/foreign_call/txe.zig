@@ -184,6 +184,7 @@ pub const Txe = struct {
     // Capsule storage: key is "address:slot", value is array of F elements
     capsule_storage: std.StringHashMap([]F),
     //   private contractDataOracle: ContractDataOracle;
+    prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(12345),
 
     const CHAIN_ID = 1;
     const ROLLUP_VERSION = 1;
@@ -231,8 +232,22 @@ pub const Txe = struct {
         return try structDispatcher(self, allocator, mem, fc, params);
     }
 
-    pub fn reset(_: *Txe, _: std.mem.Allocator) !void {
+    pub fn reset(self: *Txe, _: std.mem.Allocator) !void {
         std.debug.print("reset called!\n", .{});
+
+        // Clear all capsule storage
+        var iter = self.capsule_storage.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.capsule_storage.clearRetainingCapacity();
+
+        // Reset other state
+        self.side_effect_counter = 0;
+        self.is_static_call = false;
+
+        std.debug.print("reset: cleared capsule storage and reset state\n", .{});
     }
 
     pub fn createAccount(self: *Txe, _: std.mem.Allocator, secret: F) !struct {
@@ -451,7 +466,7 @@ pub const Txe = struct {
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
 
         var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items, self.fc_handler);
-        std.debug.print("entering vm", .{});
+        std.debug.print("callPrivateFunction: Entering nested cvm\n", .{});
         circuit_vm.executeVm(0, false) catch |err| {
             if (err == error.Trapped) {
                 // Print detailed error information
@@ -460,7 +475,7 @@ pub const Txe = struct {
             }
             return err;
         };
-        std.debug.print("exiting vm", .{});
+        std.debug.print("callPrivateFunction: Exited nested cvm\n", .{});
 
         // TODO: Extract public inputs from execution result
         // let publicInputs = extractPrivateCircuitPublicInputs(...);
@@ -514,7 +529,8 @@ pub const Txe = struct {
     }
 
     fn makeCapsuleKey(allocator: std.mem.Allocator, contract_address: proto.AztecAddress, slot: F) ![]u8 {
-        return std.fmt.allocPrint(allocator, "{x}:{x}", .{ contract_address.value.to_int(), slot.to_int() });
+        // Format with consistent width (64 hex chars = 256 bits) to ensure keys match
+        return std.fmt.allocPrint(allocator, "{x:0>64}:{x:0>64}", .{ contract_address.value.to_int(), slot.to_int() });
     }
 
     pub fn storeCapsule(
@@ -530,7 +546,7 @@ pub const Txe = struct {
                 contract_address,
                 self.contract_address,
             });
-            return error.UnauthorizedCapsuleAccess;
+            return error.UnauthorizedContractAccess;
         }
 
         const key = try makeCapsuleKey(self.allocator, contract_address, slot);
@@ -545,12 +561,6 @@ pub const Txe = struct {
         @memcpy(capsule_copy, capsule);
 
         try self.capsule_storage.put(key, capsule_copy);
-
-        std.debug.print("storeCapsule: stored {} elements at slot {x} for contract {x}\n", .{
-            capsule.len,
-            slot,
-            contract_address,
-        });
     }
 
     pub fn loadCapsule(
@@ -558,15 +568,17 @@ pub const Txe = struct {
         allocator: std.mem.Allocator,
         contract_address: proto.AztecAddress,
         slot: F,
-        _: u32, // response array length.
+        response_len: u32,
     ) !?[]F {
+        _ = response_len;
+
         // Check if contract is allowed to access this storage.
         if (!contract_address.eql(self.contract_address)) {
             std.debug.print("Contract {x} is not allowed to access {x}'s storage\n", .{
                 contract_address,
                 self.contract_address,
             });
-            return error.UnauthorizedCapsuleAccess;
+            return error.UnauthorizedContractAccess;
         }
 
         const key = try makeCapsuleKey(allocator, contract_address, slot);
@@ -576,20 +588,8 @@ pub const Txe = struct {
             // Return a copy of the data
             const result = try allocator.alloc(F, capsule.len);
             @memcpy(result, capsule);
-
-            std.debug.print("loadCapsule: loaded {} elements from slot {x} for contract {x}\n", .{
-                capsule.len,
-                slot,
-                contract_address.value.to_int(),
-            });
-
             return result;
         }
-
-        std.debug.print("loadCapsule: no data at slot {x} for contract {x}\n", .{
-            slot,
-            contract_address,
-        });
 
         return null;
     }
@@ -609,5 +609,108 @@ pub const Txe = struct {
             }
             std.debug.print("\n", .{});
         }
+    }
+
+    pub fn fetchTaggedLogs(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        pending_tagged_log_array_base_slot: F,
+    ) !void {
+        // The TypeScript implementation populates this array with tagged logs from the blockchain.
+        // For our minimal implementation, we'll store an empty array.
+        var empty_array = [_]F{F.zero};
+
+        // Store the empty array at the base slot.
+        try self.storeCapsule(allocator, self.contract_address, pending_tagged_log_array_base_slot, empty_array[0..]);
+    }
+
+    pub fn bulkRetrieveLogs(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        contract_address: proto.AztecAddress,
+        log_retrieval_requests_array_base_slot: F,
+        log_retrieval_responses_array_base_slot: F,
+    ) !void {
+        // Check authorization.
+        if (!contract_address.eql(self.contract_address)) {
+            return error.UnauthorizedContractAccess;
+        }
+
+        // Load the requests array to get the count
+        const requests_key = try makeCapsuleKey(allocator, contract_address, log_retrieval_requests_array_base_slot);
+        defer allocator.free(requests_key);
+
+        var num_requests: u32 = 0;
+        if (self.capsule_storage.get(requests_key)) |data| {
+            if (data.len > 0) {
+                num_requests = @intCast(data[0].to_int());
+            }
+        }
+
+        // For minimal implementation, create empty responses for each request
+        var length_array = [_]F{F.from_int(num_requests)};
+        try self.storeCapsule(allocator, contract_address, log_retrieval_responses_array_base_slot, length_array[0..]);
+
+        // Store Option::none for each response
+        var none_response = [_]F{F.zero};
+        var i: u32 = 0;
+        while (i < num_requests) : (i += 1) {
+            const response_slot = log_retrieval_responses_array_base_slot.add(F.from_int(i + 1));
+            try self.storeCapsule(allocator, contract_address, response_slot, none_response[0..]);
+        }
+    }
+
+    pub fn validateEnqueuedNotesAndEvents(
+        self: *Txe,
+        _: std.mem.Allocator,
+        contract_address: proto.AztecAddress,
+        _: F,
+        _: F,
+    ) !void {
+        // Check authorization.
+        if (!contract_address.eql(self.contract_address)) {
+            return error.UnauthorizedContractAccess;
+        }
+    }
+
+    pub fn getRandomField(self: *Txe, _: std.mem.Allocator) !F {
+        return F.pseudo_random(&self.prng);
+    }
+
+    pub fn getIndexedTaggingSecretAsSender(
+        self: *Txe,
+        _: std.mem.Allocator,
+        sender: proto.AztecAddress,
+        recipient: proto.AztecAddress,
+    ) !struct { app_tagging_secret: F, index: u32 } {
+        _ = self;
+        // For minimal implementation, return a deterministic but unique secret
+        // In a real implementation, this would derive proper tagging secrets
+        const combined = sender.value.add(recipient.value);
+        const secret = combined.mul(F.from_int(0x1337));
+
+        return .{
+            .app_tagging_secret = secret,
+            .index = 0,
+        };
+    }
+
+    pub fn notifyCreatedNote(
+        self: *Txe,
+        _: std.mem.Allocator,
+        storage_slot: F,
+        note_type_id: u32,
+        note_items: []F,
+        note_hash: F,
+        counter: u64,
+    ) !void {
+        _ = self;
+        std.debug.print("notifyCreatedNote called with storage_slot: {x}, note_type_id: {}, note_items: {x}, note_hash: {x}, counter: {}\n", .{
+            storage_slot,
+            note_type_id,
+            note_items,
+            note_hash,
+            counter,
+        });
     }
 };
