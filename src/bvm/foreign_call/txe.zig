@@ -557,6 +557,10 @@ pub const Txe = struct {
             target_contract_address,
             is_static_call,
         });
+        std.debug.print("Function parameters: {}\n", .{function.abi.parameters.len});
+        for (function.abi.parameters, 0..) |param, idx| {
+            std.debug.print("  Param[{}]: {s} (type: {s})\n", .{ idx, param.name, param.type.kind });
+        }
 
         const args = self.args_hash_map.get(args_hash) orelse {
             std.debug.print("No args found for hash {x}\n", .{args_hash});
@@ -572,11 +576,16 @@ pub const Txe = struct {
         );
 
         var calldata = std.ArrayList(F).init(allocator);
+        const context_start = calldata.items.len;
         try structToFields(PrivateContextInputs, private_context_inputs, &calldata);
+        const context_size = calldata.items.len - context_start;
+        std.debug.print("Actual PrivateContextInputs serialized to {} fields\n", .{context_size});
+
         for (args) |arg| {
             try calldata.append(arg);
         }
 
+        std.debug.print("Total calldata size: {} (context: {}, args: {})\n", .{ calldata.items.len, context_size, args.len });
         std.debug.print("calldata: {x}\n", .{calldata.items});
 
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
@@ -594,7 +603,7 @@ pub const Txe = struct {
         std.debug.print("callPrivateFunction: Exited nested cvm\n", .{});
 
         // Extract public inputs from execution result
-        const start = function.sizeInFields() - 2;
+        const start = function.sizeInFields() + constants.PRIVATE_CONTEXT_INPUTS_LENGTH;
         const public_inputs_fields = try circuit_vm.witnesses.getWitnessesRange(
             allocator,
             start,
