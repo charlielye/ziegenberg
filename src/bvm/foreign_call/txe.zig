@@ -291,6 +291,7 @@ pub const Txe = struct {
     version: F = F.one,
     chain_id: F = F.one,
     block_number: u32 = 0,
+    timestamp: u64 = Txe.GENESIS_TIMESTAMP,
     side_effect_counter: u32 = 0,
     contract_address: proto.AztecAddress = proto.AztecAddress.zero,
     msg_sender: proto.AztecAddress,
@@ -300,7 +301,7 @@ pub const Txe = struct {
     contracts_artifacts_path: []const u8,
     contract_artifact_cache: std.AutoHashMap(F, ContractAbi),
     contract_instance_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
-    args_hash_map: std.AutoHashMap(F, []F),
+    execution_cache: std.AutoHashMap(F, []F),
     fc_handler: *ForeignCallDispatcher = undefined,
     // Capsule storage: key is "address:slot", value is array of F elements
     capsule_storage: std.StringHashMap([]F),
@@ -321,7 +322,7 @@ pub const Txe = struct {
             .contracts_artifacts_path = contract_artifacts_path,
             .contract_artifact_cache = std.AutoHashMap(F, ContractAbi).init(allocator),
             .contract_instance_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
-            .args_hash_map = std.AutoHashMap(F, []F).init(allocator),
+            .execution_cache = std.AutoHashMap(F, []F).init(allocator),
             .capsule_storage = std.StringHashMap([]F).init(allocator),
             .private_logs = std.ArrayList(PrivateLog).init(allocator),
         };
@@ -335,7 +336,7 @@ pub const Txe = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.capsule_storage.deinit();
-        self.args_hash_map.deinit();
+        self.execution_cache.deinit();
         self.contract_instance_cache.deinit();
         self.contract_artifact_cache.deinit();
     }
@@ -359,12 +360,21 @@ pub const Txe = struct {
         std.debug.print("reset called!\n", .{});
 
         // Clear all capsule storage
-        var iter = self.capsule_storage.iterator();
-        while (iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+        {
+            var iter = self.capsule_storage.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            self.capsule_storage.clearRetainingCapacity();
         }
-        self.capsule_storage.clearRetainingCapacity();
+        {
+            var iter = self.execution_cache.valueIterator();
+            while (iter.next()) |value| {
+                self.allocator.free(value.*);
+            }
+            self.execution_cache.clearRetainingCapacity();
+        }
 
         // Reset other state
         self.side_effect_counter = 0;
@@ -482,6 +492,18 @@ pub const Txe = struct {
         return self.block_number;
     }
 
+    pub fn getTimestamp(self: *Txe, _: std.mem.Allocator) !u64 {
+        return self.timestamp;
+    }
+
+    pub fn getVersion(self: *Txe, _: std.mem.Allocator) !F {
+        return self.version;
+    }
+
+    pub fn getChainId(self: *Txe, _: std.mem.Allocator) !F {
+        return self.chain_id;
+    }
+
     pub fn getPrivateContextInputs(
         self: *Txe,
         allocator: std.mem.Allocator,
@@ -506,7 +528,7 @@ pub const Txe = struct {
             },
             .historical_header = .{ .global_variables = .{
                 .block_number = block_number orelse self.block_number,
-                .timestamp = timestamp orelse Txe.GENESIS_TIMESTAMP - Txe.AZTEC_SLOT_DURATION,
+                .timestamp = timestamp orelse self.timestamp - Txe.AZTEC_SLOT_DURATION,
             } },
             .call_context = .{
                 .msg_sender = self.msg_sender,
@@ -531,7 +553,7 @@ pub const Txe = struct {
             args,
             hash,
         });
-        try self.args_hash_map.put(hash, args);
+        try self.execution_cache.put(hash, try self.allocator.dupe(F, args));
     }
 
     /// Executes an external/private function call on a target contract.
@@ -566,7 +588,7 @@ pub const Txe = struct {
             is_static_call,
         });
 
-        const args = self.args_hash_map.get(args_hash) orelse {
+        const args = self.execution_cache.get(args_hash) orelse {
             std.debug.print("No args found for hash {x}\n", .{args_hash});
             return error.ArgsNotFound;
         };
@@ -574,7 +596,7 @@ pub const Txe = struct {
         const private_context_inputs = try self.getPrivateContextInputsInternal(
             self.allocator,
             self.block_number - 1,
-            Txe.GENESIS_TIMESTAMP - Txe.AZTEC_SLOT_DURATION,
+            self.timestamp - Txe.AZTEC_SLOT_DURATION,
             side_effect_counter,
             is_static_call,
         );
@@ -839,5 +861,47 @@ pub const Txe = struct {
             note_hash,
             counter,
         });
+    }
+
+    pub fn simulateUtilityFunction(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        target_contract_address: proto.AztecAddress,
+        function_selector: FunctionSelector,
+        args_hash: F,
+    ) !F {
+        // Retrieve the function to execute from the target contract's ABI.
+        const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {
+            return error.ContractInstanceNotFound;
+        };
+
+        const function = try contract_instance.abi.getFunctionBySelector(function_selector);
+        std.debug.print("simulateUtilityFunction called with target: {x}, selector: {x}, name: {s}, args_hash: {x}\n", .{
+            target_contract_address,
+            function_selector,
+            function.name,
+            args_hash,
+        });
+
+        const calldata = self.execution_cache.get(args_hash) orelse {
+            std.debug.print("No args found for hash {x}\n", .{args_hash});
+            return error.ArgsNotFound;
+        };
+
+        const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
+
+        // Execute utility function in nested circuit vm.
+        var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata, self.fc_handler);
+        std.debug.print("simulateUtilityFunction: Entering nested cvm\n", .{});
+        circuit_vm.executeVm(0, false) catch |err| {
+            if (err == error.Trapped) {
+                // TODO: Get actual artifact path.
+                circuit_vm.printBrilligTrapError(function.name, function_selector, "data/contracts/Counter.json");
+            }
+            return err;
+        };
+        std.debug.print("simulateUtilityFunction: Exited nested cvm\n", .{});
+
+        return F.zero;
     }
 };
