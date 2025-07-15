@@ -67,6 +67,14 @@ pub fn structDispatcher(
                         params.len,
                         expected_param_count,
                     });
+                    // Debug: print all parameters
+                    std.debug.print("Parameters received:\n", .{});
+                    for (params, 0..) |param, i| {
+                        switch (param) {
+                            .Single => |v| std.debug.print("  [{}] Single: {x}\n", .{ i, v }),
+                            .Array => |arr| std.debug.print("  [{}] Array: {} elements\n", .{ i, arr.len }),
+                        }
+                    }
                     return error.ForeignCallParameterCountMismatch;
                 }
                 // First arg should be this Txe struct.

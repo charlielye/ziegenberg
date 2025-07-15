@@ -227,6 +227,215 @@ const CountedLogHash = struct {
     counter: u32 = 0,
 };
 
+// Note-related structures
+const Note = struct {
+    items: []const F,
+
+    pub fn init(items: []const F) Note {
+        return .{ .items = items };
+    }
+};
+
+pub const NoteData = struct {
+    note: Note,
+    contract_address: proto.AztecAddress,
+    storage_slot: F,
+    note_nonce: F,
+    note_hash: F,
+    siloed_nullifier: F,
+
+    pub fn toForeignCallParam(self: NoteData, allocator: std.mem.Allocator) !ForeignCallParam {
+        var fields = std.ArrayList(ForeignCallParam).init(allocator);
+
+        // Add note items
+        for (self.note.items) |item| {
+            try fields.append(.{ .Single = item.to_int() });
+        }
+
+        // Add other fields
+        try fields.append(.{ .Single = self.contract_address.value.to_int() });
+        try fields.append(.{ .Single = self.storage_slot.to_int() });
+        try fields.append(.{ .Single = self.note_nonce.to_int() });
+        try fields.append(.{ .Single = self.note_hash.to_int() });
+        try fields.append(.{ .Single = self.siloed_nullifier.to_int() });
+
+        return .{ .Array = try fields.toOwnedSlice() };
+    }
+};
+
+const PropertySelector = struct {
+    index: u32,
+    offset: u32,
+    length: u32,
+};
+
+const Comparator = enum(u8) {
+    EQ = 1,
+    NEQ = 2,
+    LT = 3,
+    LTE = 4,
+    GT = 5,
+    GTE = 6,
+};
+
+const SortOrder = enum(u8) {
+    NADA = 0,
+    DESC = 1,
+    ASC = 2,
+};
+
+// Simple in-memory note cache
+const NoteCache = struct {
+    // Maps contract_address -> storage_slot -> notes
+    notes: std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, std.ArrayList(NoteData))),
+    // Maps contract_address -> nullifiers
+    nullifiers: std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, void)),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) NoteCache {
+        return .{
+            .notes = std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, std.ArrayList(NoteData))).init(allocator),
+            .nullifiers = std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, void)).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *NoteCache) void {
+        var it = self.notes.iterator();
+        while (it.next()) |entry| {
+            var storage_it = entry.value_ptr.iterator();
+            while (storage_it.next()) |storage_entry| {
+                storage_entry.value_ptr.deinit();
+            }
+            entry.value_ptr.deinit();
+        }
+        self.notes.deinit();
+
+        var null_it = self.nullifiers.iterator();
+        while (null_it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.nullifiers.deinit();
+    }
+
+    pub fn addNote(self: *NoteCache, note_data: NoteData) !void {
+        const contract_entry = try self.notes.getOrPut(note_data.contract_address);
+        if (!contract_entry.found_existing) {
+            contract_entry.value_ptr.* = std.AutoHashMap(F, std.ArrayList(NoteData)).init(self.allocator);
+        }
+
+        const storage_entry = try contract_entry.value_ptr.getOrPut(note_data.storage_slot);
+        if (!storage_entry.found_existing) {
+            storage_entry.value_ptr.* = std.ArrayList(NoteData).init(self.allocator);
+        }
+
+        try storage_entry.value_ptr.append(note_data);
+    }
+
+    pub fn getNotes(self: *NoteCache, contract_address: proto.AztecAddress, storage_slot: F) []const NoteData {
+        const contract_map = self.notes.get(contract_address) orelse return &[_]NoteData{};
+        const note_list = contract_map.get(storage_slot) orelse return &[_]NoteData{};
+        return note_list.items;
+    }
+
+    pub fn addNullifier(self: *NoteCache, contract_address: proto.AztecAddress, nullifier: F) !void {
+        const entry = try self.nullifiers.getOrPut(contract_address);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = std.AutoHashMap(F, void).init(self.allocator);
+        }
+        try entry.value_ptr.put(nullifier, {});
+    }
+
+    pub fn hasNullifier(self: *NoteCache, contract_address: proto.AztecAddress, nullifier: F) bool {
+        const nullifier_map = self.nullifiers.get(contract_address) orelse return false;
+        return nullifier_map.contains(nullifier);
+    }
+};
+
+// Helper functions for note selection
+fn selectPropertyFromPackedNoteContent(note_data: []const F, selector: PropertySelector) !F {
+    if (selector.index >= note_data.len) return error.InvalidSelector;
+
+    // For now, just return the field at the specified index
+    // TODO: Implement proper bit-level extraction for packed fields
+    return note_data[selector.index];
+}
+
+fn compareNoteValue(note_value: F, compare_value: F, comparator: Comparator) bool {
+    return switch (comparator) {
+        .EQ => note_value.eql(compare_value),
+        .NEQ => !note_value.eql(compare_value),
+        .LT => note_value.lt(compare_value),
+        .LTE => note_value.lt(compare_value) or note_value.eql(compare_value),
+        .GT => !note_value.lt(compare_value) and !note_value.eql(compare_value),
+        .GTE => !note_value.lt(compare_value),
+    };
+}
+
+const SelectCriteria = struct {
+    selector: PropertySelector,
+    value: F,
+    comparator: Comparator,
+};
+
+const SortCriteria = struct {
+    selector: PropertySelector,
+    order: SortOrder,
+};
+
+fn selectNotes(allocator: std.mem.Allocator, notes: []const NoteData, selects: []const SelectCriteria) !std.ArrayList(NoteData) {
+    var result = std.ArrayList(NoteData).init(allocator);
+
+    for (notes) |note_data| {
+        var matches = true;
+        for (selects) |select| {
+            const note_value = selectPropertyFromPackedNoteContent(note_data.note.items, select.selector) catch {
+                matches = false;
+                break;
+            };
+            if (!compareNoteValue(note_value, select.value, select.comparator)) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            try result.append(note_data);
+        }
+    }
+
+    return result;
+}
+
+fn sortNotesRecursive(a: []const F, b: []const F, sorts: []const SortCriteria, level: usize) std.math.Order {
+    if (level >= sorts.len) return .eq;
+
+    const sort = sorts[level];
+    if (sort.order == .NADA) return .eq;
+
+    const a_value = selectPropertyFromPackedNoteContent(a, sort.selector) catch return .eq;
+    const b_value = selectPropertyFromPackedNoteContent(b, sort.selector) catch return .eq;
+
+    if (a_value.eql(b_value)) {
+        return sortNotesRecursive(a, b, sorts, level + 1);
+    }
+
+    const is_greater = !a_value.lt(b_value) and !a_value.eql(b_value);
+    return switch (sort.order) {
+        .DESC => if (is_greater) .lt else .gt,
+        .ASC => if (is_greater) .gt else .lt,
+        .NADA => .eq,
+    };
+}
+
+fn sortNotes(notes: []NoteData, sorts: []const SortCriteria) void {
+    std.mem.sort(NoteData, notes, sorts, struct {
+        fn lessThan(context: []const SortCriteria, a: NoteData, b: NoteData) bool {
+            const order = sortNotesRecursive(a.note.items, b.note.items, context, 0);
+            return order == .lt;
+        }
+    }.lessThan);
+}
+
 // Generic wrapper for arrays with claimed length
 fn ClaimedLengthArray(comptime T: type, comptime MAX_SIZE: u32) type {
     return struct {
@@ -308,6 +517,7 @@ pub const Txe = struct {
     //   private contractDataOracle: ContractDataOracle;
     prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(12345),
     private_logs: std.ArrayList(PrivateLog),
+    note_cache: NoteCache,
 
     const CHAIN_ID = 1;
     const ROLLUP_VERSION = 1;
@@ -325,6 +535,7 @@ pub const Txe = struct {
             .execution_cache = std.AutoHashMap(F, []F).init(allocator),
             .capsule_storage = std.StringHashMap([]F).init(allocator),
             .private_logs = std.ArrayList(PrivateLog).init(allocator),
+            .note_cache = NoteCache.init(allocator),
         };
     }
 
@@ -339,6 +550,8 @@ pub const Txe = struct {
         self.execution_cache.deinit();
         self.contract_instance_cache.deinit();
         self.contract_artifact_cache.deinit();
+        self.note_cache.deinit();
+        self.private_logs.deinit();
     }
 
     /// Dispatch function for foreign calls.
@@ -554,6 +767,30 @@ pub const Txe = struct {
             hash,
         });
         try self.execution_cache.put(hash, try self.allocator.dupe(F, args));
+    }
+
+    pub fn loadFromExecutionCache(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        args_hash: F,
+    ) !?[]F {
+        if (self.execution_cache.get(args_hash)) |cached_args| {
+            // Return a copy to avoid lifetime issues
+            const result = try allocator.alloc(F, cached_args.len);
+            @memcpy(result, cached_args);
+
+            std.debug.print("loadFromExecutionCache: Found cached args with hash {x}\n", .{args_hash});
+            return result;
+        }
+
+        // Special case: hash 0 returns empty array
+        if (args_hash.eql(F.zero)) {
+            std.debug.print("loadFromExecutionCache: Returning empty array for hash 0\n", .{});
+            return try allocator.alloc(F, 0);
+        }
+
+        std.debug.print("loadFromExecutionCache: No cached args found with hash {x}\n", .{args_hash});
+        return null;
     }
 
     /// Executes an external/private function call on a target contract.
@@ -844,25 +1081,6 @@ pub const Txe = struct {
         };
     }
 
-    pub fn notifyCreatedNote(
-        self: *Txe,
-        _: std.mem.Allocator,
-        storage_slot: F,
-        note_type_id: u32,
-        note_items: []F,
-        note_hash: F,
-        counter: u64,
-    ) !void {
-        _ = self;
-        std.debug.print("notifyCreatedNote called with storage_slot: {x}, note_type_id: {}, note_items: {x}, note_hash: {x}, counter: {}\n", .{
-            storage_slot,
-            note_type_id,
-            note_items,
-            note_hash,
-            counter,
-        });
-    }
-
     pub fn simulateUtilityFunction(
         self: *Txe,
         allocator: std.mem.Allocator,
@@ -903,5 +1121,124 @@ pub const Txe = struct {
         std.debug.print("simulateUtilityFunction: Exited nested cvm\n", .{});
 
         return F.zero;
+    }
+
+    pub fn getNotes(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        storage_slot: F,
+        num_selects: u32,
+        select_by_indexes: []const u32,
+        select_by_offsets: []const u32,
+        select_by_lengths: []const u32,
+        select_values: []const F,
+        select_comparators: []const u8,
+        sort_by_indexes: []const u32,
+        sort_by_offsets: []const u32,
+        sort_by_lengths: []const u32,
+        sort_order: []const u8,
+        limit: u32,
+        offset: u32,
+        status: u8,
+        max_notes: u32,
+        packed_retrieved_note_length: u32,
+    ) ![]const NoteData {
+        _ = status; // Not used in this minimal implementation
+        _ = max_notes;
+        _ = packed_retrieved_note_length;
+
+        // Get pending notes from cache
+        const pending_notes = self.note_cache.getNotes(self.contract_address, storage_slot);
+
+        // For now, we only return pending notes (no database notes)
+        // Filter out nullified notes
+        var filtered_notes = std.ArrayList(NoteData).init(allocator);
+        defer filtered_notes.deinit();
+        for (pending_notes) |note| {
+            if (!self.note_cache.hasNullifier(self.contract_address, note.siloed_nullifier)) {
+                try filtered_notes.append(note);
+            }
+        }
+
+        // Build select criteria
+        const actual_num_selects = @min(num_selects, select_by_indexes.len);
+        var selects = try allocator.alloc(SelectCriteria, actual_num_selects);
+
+        for (0..actual_num_selects) |i| {
+            selects[i] = .{
+                .selector = .{
+                    .index = select_by_indexes[i],
+                    .offset = select_by_offsets[i],
+                    .length = select_by_lengths[i],
+                },
+                .value = select_values[i],
+                .comparator = @enumFromInt(select_comparators[i]),
+            };
+        }
+
+        // Apply selection filters
+        var selected_notes = try selectNotes(allocator, filtered_notes.items, selects);
+        defer selected_notes.deinit();
+
+        // Build sort criteria
+        var sorts = try allocator.alloc(SortCriteria, sort_by_indexes.len);
+
+        for (0..sorts.len) |i| {
+            sorts[i] = .{
+                .selector = .{
+                    .index = sort_by_indexes[i],
+                    .offset = sort_by_offsets[i],
+                    .length = sort_by_lengths[i],
+                },
+                .order = @enumFromInt(sort_order[i]),
+            };
+        }
+
+        // Apply sorting
+        sortNotes(selected_notes.items, sorts);
+
+        // Apply offset and limit
+        const start_idx = @min(offset, selected_notes.items.len);
+        const end_idx = if (limit > 0) @min(start_idx + limit, selected_notes.items.len) else selected_notes.items.len;
+
+        const result = try allocator.alloc(NoteData, end_idx - start_idx);
+        @memcpy(result, selected_notes.items[start_idx..end_idx]);
+
+        std.debug.print("getNotes: Returning {} notes for contract {} at slot {x}\n", .{
+            result.len,
+            self.contract_address,
+            storage_slot,
+        });
+
+        return result;
+    }
+
+    pub fn notifyCreatedNote(
+        self: *Txe,
+        _: std.mem.Allocator,
+        storage_slot: F,
+        note_type_id: u32,
+        note_items: []const F,
+        note_hash: F,
+        counter: u32,
+    ) !void {
+        _ = note_type_id; // Not used in this implementation
+
+        const note_data = NoteData{
+            .note = Note.init(note_items),
+            .contract_address = self.contract_address,
+            .storage_slot = storage_slot,
+            .note_nonce = F.from_int(counter), // Using counter as nonce for simplicity
+            .note_hash = note_hash,
+            .siloed_nullifier = F.zero, // Will be computed when note is nullified
+        };
+
+        try self.note_cache.addNote(note_data);
+
+        std.debug.print("notifyCreatedNote: Added note with hash {x} at slot {x}, counter {}\n", .{
+            note_hash,
+            storage_slot,
+            counter,
+        });
     }
 };

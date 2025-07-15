@@ -378,6 +378,78 @@ pub fn marshalOutput(
             }
         },
         .void => {},
+        .pointer => |ptr| {
+            if (ptr.size == .slice) {
+                // Handle slices - convert to ForeignCallParam array
+                var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                defer arena.deinit();
+
+                // Check if the slice element type has a toForeignCallParam method
+                const has_to_foreign_call_param = comptime blk: {
+                    if (@typeInfo(ptr.child) == .@"struct") {
+                        break :blk @hasDecl(ptr.child, "toForeignCallParam");
+                    }
+                    break :blk false;
+                };
+
+                if (has_to_foreign_call_param) {
+                    // Convert each element to ForeignCallParam
+                    const slice = @as([]const ptr.child, @ptrCast(@alignCast(output.*)));
+                    var result = std.ArrayList(ForeignCallParam).init(arena.allocator());
+
+                    for (slice) |item| {
+                        const param = item.toForeignCallParam(arena.allocator()) catch unreachable;
+                        result.append(param) catch unreachable;
+                    }
+
+                    const params = result.toOwnedSlice() catch unreachable;
+
+                    // For slices, we expect 2 destinations: array data and array length
+                    if (destinations.len == 2 and destinations[0] == .HeapArray and destinations[1] == .MemoryAddress) {
+                        // First destination is the array data
+                        const arr = destinations[0].HeapArray;
+
+                        // Second destination is the array length
+                        mem.setSlot(destinations[1].MemoryAddress, params.len);
+                        const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+
+                        // Write the array of note data directly
+                        var flattened_fields = std.ArrayList(u256).init(arena.allocator());
+                        for (params) |param| {
+                            const fields = param.flatten(arena.allocator()) catch unreachable;
+                            flattened_fields.appendSlice(fields) catch unreachable;
+                        }
+                        const all_fields = flattened_fields.toOwnedSlice() catch unreachable;
+
+                        for (all_fields, 0..) |field, i| {
+                            mem.setSlotAtIndex(dst_idx + i, field);
+                        }
+                    } else {
+                        std.debug.print("Unexpected destinations configuration for slice\n", .{});
+                        unreachable;
+                    }
+                } else if (ptr.child == F) {
+                    // Handle []F slices
+                    const slice = output.*;
+                    if (destinations.len == 1 and destinations[0] == .HeapArray) {
+                        const arr = destinations[0].HeapArray;
+                        const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+                        for (slice, 0..) |field, i| {
+                            mem.setSlotAtIndex(dst_idx + i, field.to_int());
+                        }
+                    } else {
+                        std.debug.print("Unexpected destinations for []F slice\n", .{});
+                        unreachable;
+                    }
+                } else {
+                    std.debug.print("Unsupported slice type in marshalOutput: {any}\n", .{ptr.child});
+                    unreachable;
+                }
+            } else {
+                std.debug.print("Unexpected pointer type: {any}\n", .{ptr});
+                unreachable;
+            }
+        },
         else => {
             std.debug.print("Unexpected type: {any}\n", .{output_type});
             unreachable;
