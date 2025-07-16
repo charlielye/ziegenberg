@@ -94,11 +94,7 @@ pub const ContractInstance = struct {
         ctor: nargo.Function,
         args: []const Fr,
     ) Fr {
-        var args_fields = std.ArrayList(Fr).initCapacity(allocator, args.len + 1) catch unreachable;
-        defer args_fields.deinit();
-        args_fields.append(Fr.from_int(constants.GeneratorIndex.function_args)) catch unreachable;
-        for (args) |arg| args_fields.append(arg) catch unreachable;
-        const args_hash = poseidon2.hash(args_fields.items);
+        const args_hash = poseidon2.hash_with_generator(allocator, args, @intFromEnum(constants.GeneratorIndex.function_args));
         return poseidon2.hash(&[_]Fr{
             Fr.from_int(constants.GeneratorIndex.constructor),
             Fr.from_int(ctor.selector),

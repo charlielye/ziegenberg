@@ -443,6 +443,7 @@ pub const Txe = struct {
         {
             var iter = self.capsule_storage.iterator();
             while (iter.next()) |entry| {
+                // TODO: Make the key an int to avoid this allocation?
                 self.allocator.free(entry.key_ptr.*);
                 self.allocator.free(entry.value_ptr.*);
             }
@@ -707,6 +708,7 @@ pub const Txe = struct {
 
         // Build calldata from private context inputs and function arguments.
         var calldata = std.ArrayList(F).init(allocator);
+        defer calldata.deinit();
         try structToFields(PrivateContextInputs, private_context_inputs, &calldata);
         for (args) |arg| {
             try calldata.append(arg);
@@ -1003,7 +1005,22 @@ pub const Txe = struct {
         };
         std.debug.print("simulateUtilityFunction: Exited nested cvm\n", .{});
 
-        return F.zero;
+        const return_values = program.functions[0].return_values;
+        // Assert program return value witness indices are contiguous.
+        for (return_values, 0..) |return_value, i| {
+            if (return_value != return_values[0] + i) {
+                return error.InvalidWitnessIndex;
+            }
+        }
+
+        // std.debug.print("{any}\n", .{program.functions[0].return_values});
+
+        // Note use of long lived allocator as we will cache the result.
+        const return_witness = try circuit_vm.witnesses.getWitnessesRange(self.allocator, return_values[0], return_values.len);
+        const return_hash = poseidon.hash_with_generator(allocator, return_witness, @intFromEnum(constants.GeneratorIndex.function_args));
+        try self.execution_cache.put(return_hash, return_witness);
+
+        return return_hash;
     }
 
     // Specific type for getNotes return value that includes metadata

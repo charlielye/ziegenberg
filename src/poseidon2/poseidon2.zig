@@ -7,6 +7,19 @@ pub fn hash(input: []const Fr) Fr {
     return Poseidon2Sponge.hash_fixed_length(1, input)[0];
 }
 
+pub fn hash_with_generator(
+    allocator: std.mem.Allocator,
+    input: []const Fr,
+    generator: comptime_int,
+) Fr {
+    var to_hash = allocator.alloc(Fr, input.len + 1) catch unreachable;
+    defer allocator.free(to_hash);
+    to_hash[0] = Fr.from_int(generator);
+    std.mem.copyForwards(Fr, to_hash[1..], input);
+    return hash(to_hash);
+}
+
+// TODO: Valuable?
 pub fn hashTuple(input: anytype) Fr {
     const T = @TypeOf(input);
 
