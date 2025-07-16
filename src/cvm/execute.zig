@@ -199,6 +199,18 @@ pub fn execute(options: ExecuteOptions) !void {
 
     result catch |err| {
         std.debug.print("Execution failed: {}\n", .{err});
+        
+        // If this was a Brillig trap, show debug info
+        if (err == error.Trapped and vm.brillig_error_context != null) {
+            std.debug.print("\nSource location:\n", .{});
+            
+            // For program artifacts (tests), we don't need the function name
+            // as they use direct PC lookup in debug_symbols
+            debug_info.lookupSourceLocation(allocator, artifact_path, "test_increment", vm.brillig_error_context.?.pc) catch |lookup_err| {
+                std.debug.print("Could not resolve source location: {}\n", .{lookup_err});
+            };
+        }
+        
         try vm.witnesses.printWitnesses(false);
         return err;
     };
@@ -225,6 +237,7 @@ pub const CircuitVm = struct {
     memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
     fc_handler: ForeignCallDispatcher,
     brillig_error_context: ?debug_info.ErrorContext = null,
+    brillig_function_index: ?u32 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -310,7 +323,7 @@ pub const CircuitVm = struct {
                     brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0) catch |err| {
                         if (err == error.Trapped) {
                             self.brillig_error_context = try brillig_vm.getErrorContext(self.allocator);
-                            std.debug.print("BrilligVm error context captured - PC: {}, Ops: {}\n", .{ self.brillig_error_context.?.pc, self.brillig_error_context.?.ops_executed });
+                            self.brillig_function_index = op.id;
                         }
                         return err;
                     };
