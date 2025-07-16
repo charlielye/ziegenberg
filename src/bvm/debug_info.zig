@@ -25,99 +25,59 @@ pub fn lookupSourceLocation(
     defer parsed.deinit();
 
     const root = parsed.value.object;
-    
+
     // Check if this is a contract artifact (has "functions") or a program artifact (has "debug_symbols")
     if (root.get("functions")) |functions| {
         // Contract artifact - use the existing logic
-        return lookupInContractArtifact(allocator, functions, function_name, pc, root);
-    } else if (root.get("debug_symbols")) |debug_symbols| {
-        // Program artifact - look up directly in debug_symbols
-        return lookupInProgramArtifact(allocator, debug_symbols, pc, root);
-    } else {
-        std.debug.print("  Unknown artifact format\n", .{});
-        return;
-    }
-}
+        // Find the function
+        for (functions.array.items) |func| {
+            const func_obj = func.object;
+            const name = func_obj.get("name") orelse continue;
 
-fn lookupInContractArtifact(
-    allocator: std.mem.Allocator,
-    functions: std.json.Value,
-    function_name: []const u8,
-    pc: usize,
-    root: std.json.ObjectMap,
-) !void {
+            if (!std.mem.eql(u8, name.string, function_name)) continue;
 
-    // Find the function
-    for (functions.array.items) |func| {
-        const func_obj = func.object;
-        const name = func_obj.get("name") orelse continue;
+            const debug_sym = func_obj.get("debug_symbols") orelse {
+                std.debug.print("  No debug symbols available for function {s}\n", .{function_name});
+                return;
+            };
 
-        if (!std.mem.eql(u8, name.string, function_name)) continue;
-
-        const debug_sym = func_obj.get("debug_symbols") orelse {
-            std.debug.print("  No debug symbols available for function {s}\n", .{function_name});
+            try processDebugSymbols(allocator, debug_sym.string, pc, root);
             return;
-        };
-
-        // Decode and decompress debug symbols
-        const debug_b64 = debug_sym.string;
-        const decoder = std.base64.standard.Decoder;
-        const decoded_size = try decoder.calcSizeForSlice(debug_b64);
-        const decoded = try allocator.alloc(u8, decoded_size);
-        defer allocator.free(decoded);
-
-        try decoder.decode(decoded, debug_b64);
-
-        // Decompress (raw deflate)
-        var stream = std.io.fixedBufferStream(decoded);
-        var decompressed = std.ArrayList(u8).init(allocator);
-        defer decompressed.deinit();
-        try std.compress.flate.decompress(stream.reader(), decompressed.writer());
-
-        // Parse debug JSON
-        var debug_parsed = try std.json.parseFromSlice(std.json.Value, allocator, decompressed.items, .{});
-        defer debug_parsed.deinit();
-
-        const debug_infos = debug_parsed.value.object.get("debug_infos") orelse return;
-
-        // Look up PC in debug info
-        for (debug_infos.array.items) |info| {
-            if (try lookupPcInDebugInfo(allocator, info, pc, root)) return;
         }
 
-        std.debug.print("  PC {} not found in debug symbols\n", .{pc});
-        return;
+        std.debug.print("  Function {s} not found\n", .{function_name});
+    } else if (root.get("debug_symbols")) |debug_symbols| {
+        // Program artifact - look up directly in debug_symbols
+        try processDebugSymbols(allocator, debug_symbols.string, pc, root);
+    } else {
+        std.debug.print("  Unknown artifact format\n", .{});
     }
-
-    std.debug.print("  Function {s} not found\n", .{function_name});
 }
 
-fn lookupInProgramArtifact(
+fn processDebugSymbols(
     allocator: std.mem.Allocator,
-    debug_symbols: std.json.Value,
+    debug_b64: []const u8,
     pc: usize,
     root: std.json.ObjectMap,
 ) !void {
-    // Program artifacts have debug_symbols as a base64 encoded string
-    const debug_b64 = debug_symbols.string;
+    // Decode and decompress debug symbols
     const decoder = std.base64.standard.Decoder;
     const decoded_size = try decoder.calcSizeForSlice(debug_b64);
     const decoded = try allocator.alloc(u8, decoded_size);
     defer allocator.free(decoded);
-    
+
     try decoder.decode(decoded, debug_b64);
-    
+
     // Decompress (raw deflate)
     var stream = std.io.fixedBufferStream(decoded);
     var decompressed = std.ArrayList(u8).init(allocator);
     defer decompressed.deinit();
     try std.compress.flate.decompress(stream.reader(), decompressed.writer());
-    
+
     // Parse debug JSON
     var debug_parsed = try std.json.parseFromSlice(std.json.Value, allocator, decompressed.items, .{});
     defer debug_parsed.deinit();
-    
-    // Program artifacts have the same structure as contract artifacts
+
     const debug_infos = debug_parsed.value.object.get("debug_infos") orelse return;
 
     // Look up PC in debug info
