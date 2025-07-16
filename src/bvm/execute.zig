@@ -10,6 +10,7 @@ const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
 const Memory = @import("./memory.zig").Memory;
 const ForeignCallDispatcher = @import("../bvm/foreign_call/dispatcher.zig").Dispatcher;
 const Txe = @import("./foreign_call/txe.zig").Txe;
+const debug_info = @import("./debug_info.zig");
 
 pub const ExecuteOptions = struct {
     file_path: ?[]const u8 = null,
@@ -54,13 +55,6 @@ pub fn execute(options: ExecuteOptions) !void {
 }
 
 extern fn mlock(addr: ?*u8, len: usize) callconv(.C) i32;
-
-pub const ErrorContext = struct {
-    pc: usize,
-    callstack: []const usize,
-    ops_executed: u64,
-    return_data: []const u256,
-};
 
 pub const BrilligVm = struct {
     const mem_size = 1024 * 1024 * 8;
@@ -134,8 +128,8 @@ pub const BrilligVm = struct {
         self.mem.deinit();
     }
 
-    pub fn getErrorContext(self: *const BrilligVm, allocator: std.mem.Allocator) !ErrorContext {
-        return ErrorContext{
+    pub fn getErrorContext(self: *const BrilligVm, allocator: std.mem.Allocator) !debug_info.ErrorContext {
+        return debug_info.ErrorContext{
             .pc = self.pc,
             .callstack = try allocator.dupe(usize, self.callstack.items),
             .ops_executed = self.ops_executed,

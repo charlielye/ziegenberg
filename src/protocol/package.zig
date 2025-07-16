@@ -6,6 +6,7 @@ const contract_instance = @import("./contract_instance.zig");
 const key_derivation = @import("./key_derivation.zig");
 const partial_address = @import("./partial_address.zig");
 const public_keys = @import("./public_keys.zig");
+const notes = @import("./notes.zig");
 
 pub const constants = @import("./constants.gen.zig");
 
@@ -16,6 +17,8 @@ pub const PublicKeys = public_keys.PublicKeys;
 pub const CompleteAddress = complete_address.CompleteAddress;
 pub const PartialAddress = partial_address.PartialAddress;
 pub const deriveKeys = key_derivation.deriveKeys;
+pub const Note = notes.Note;
+pub const NoteData = notes.NoteData;
 
 test {
     std.testing.refAllDecls(@This());

@@ -157,3 +157,40 @@ fn lookupPcInDebugInfo(
 
     return true;
 }
+
+pub const ErrorContext = struct {
+    pc: usize,
+    callstack: []const usize,
+    ops_executed: u64,
+    return_data: []const u256,
+};
+
+pub fn printBrilligTrapError(
+    allocator: std.mem.Allocator,
+    error_ctx: *const ErrorContext,
+    function_name: []const u8,
+    function_selector: u32,
+    contract_artifact_path: ?[]const u8,
+) void {
+    std.debug.print("\n=== Brillig VM Trap ===\n", .{});
+    std.debug.print("Function: {s} (selector: 0x{x})\n", .{ function_name, function_selector });
+    std.debug.print("Brillig PC: {}\n", .{error_ctx.pc});
+    std.debug.print("Operations executed: {}\n", .{error_ctx.ops_executed});
+    std.debug.print("Return data: {x}\n", .{error_ctx.return_data});
+    if (error_ctx.callstack.len > 0) {
+        std.debug.print("Callstack: ", .{});
+        for (error_ctx.callstack) |addr| {
+            std.debug.print("{} ", .{addr});
+        }
+        std.debug.print("\n", .{});
+    }
+
+    // Try to look up source location
+    if (contract_artifact_path) |artifact_path| {
+        std.debug.print("\nSource location:\n", .{});
+        lookupSourceLocation(allocator, artifact_path, function_name, error_ctx.pc) catch |lookup_err| {
+            std.debug.print("  Could not resolve source location: {}\n", .{lookup_err});
+        };
+    }
+    std.debug.print("======================\n\n", .{});
+}

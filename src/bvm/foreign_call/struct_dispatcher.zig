@@ -110,6 +110,7 @@ pub fn structDispatcher(
                 }
                 // Make the function call.
                 const r = try @call(.auto, field, args);
+                std.debug.print("Function {s} returned: {any}\n", .{ decl.name, r });
                 foreign_call.marshalOutput(&r, mem, fc.destinations, fc.destination_value_types);
                 return true;
             }

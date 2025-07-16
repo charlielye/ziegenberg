@@ -5,7 +5,7 @@ const GrumpkinFr = @import("../grumpkin/fr.zig").Fr;
 const solve = @import("./expression_solver.zig").solve;
 const evaluate = @import("./expression_solver.zig").evaluate;
 const BrilligVm = @import("../bvm/execute.zig").BrilligVm;
-const ErrorContext = @import("../bvm/execute.zig").ErrorContext;
+const debug_info = @import("../bvm/debug_info.zig");
 const sha256 = @import("../blackbox/sha256_compress.zig");
 const aes = @import("../aes/encrypt_cbc.zig");
 const WitnessMap = @import("./witness_map.zig").WitnessMap;
@@ -19,7 +19,6 @@ const verify_signature = @import("../blackbox/ecdsa.zig").verify_signature;
 const toml = @import("toml");
 const msm = @import("../msm/naive.zig").msm;
 const ForeignCallDispatcher = @import("../bvm/foreign_call/dispatcher.zig").Dispatcher;
-const debug_info = @import("../bvm/debug_info.zig");
 
 pub const ExecuteOptions = struct {
     // If null, the current working directory is used.
@@ -225,7 +224,7 @@ pub const CircuitVm = struct {
     witnesses: WitnessMap,
     memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
     fc_handler: ForeignCallDispatcher,
-    brillig_error_context: ?ErrorContext = null,
+    brillig_error_context: ?debug_info.ErrorContext = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -250,37 +249,6 @@ pub const CircuitVm = struct {
     pub fn deinit(self: *CircuitVm) void {
         self.witnesses.deinit();
         self.fc_handler.deinit();
-    }
-
-    /// Print detailed error information when a Brillig VM trap occurs
-    pub fn printBrilligTrapError(
-        self: *const CircuitVm,
-        function_name: []const u8,
-        function_selector: u32,
-        contract_artifact_path: ?[]const u8,
-    ) void {
-        const error_ctx = self.brillig_error_context orelse return;
-        std.debug.print("\n=== Brillig VM Trap ===\n", .{});
-        std.debug.print("Function: {s} (selector: 0x{x})\n", .{ function_name, function_selector });
-        std.debug.print("Brillig PC: {}\n", .{error_ctx.pc});
-        std.debug.print("Operations executed: {}\n", .{error_ctx.ops_executed});
-        std.debug.print("Return data: {x}\n", .{error_ctx.return_data});
-        if (error_ctx.callstack.len > 0) {
-            std.debug.print("Callstack: ", .{});
-            for (error_ctx.callstack) |addr| {
-                std.debug.print("{} ", .{addr});
-            }
-            std.debug.print("\n", .{});
-        }
-
-        // Try to look up source location
-        if (contract_artifact_path) |artifact_path| {
-            std.debug.print("\nSource location:\n", .{});
-            debug_info.lookupSourceLocation(self.allocator, artifact_path, function_name, error_ctx.pc) catch |lookup_err| {
-                std.debug.print("  Could not resolve source location: {}\n", .{lookup_err});
-            };
-        }
-        std.debug.print("======================\n\n", .{});
     }
 
     pub fn executeVm(self: *CircuitVm, function_index: usize, show_trace: bool) !void {

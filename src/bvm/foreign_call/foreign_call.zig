@@ -127,8 +127,12 @@ fn writeSliceOfValuesToMemory(
 ) void {
     switch (value_type.*) {
         .Simple => {
-            mem.setSlotAtIndex(destination, values[values_idx.*]);
-            values_idx.* += 1;
+            if (values_idx.* < values.len) {
+                mem.setSlotAtIndex(destination, values[values_idx.*]);
+                values_idx.* += 1;
+            } else {
+                mem.setSlotAtIndex(destination, 0);
+            }
         },
         .Array => |arr| {
             var current_pointer = destination;
@@ -136,8 +140,13 @@ fn writeSliceOfValuesToMemory(
                 const elem_type = &arr.value_types[i % arr.value_types.len];
                 switch (elem_type.*) {
                     .Simple => {
-                        mem.setSlotAtIndex(current_pointer, values[values_idx.*]);
-                        values_idx.* += 1;
+                        // Check if we have a value to write, otherwise write 0
+                        if (values_idx.* < values.len) {
+                            mem.setSlotAtIndex(current_pointer, values[values_idx.*]);
+                            values_idx.* += 1;
+                        } else {
+                            mem.setSlotAtIndex(current_pointer, 0);
+                        }
                         current_pointer += 1;
                     },
                     .Array, .Vector => {
@@ -165,6 +174,7 @@ pub fn marshalForeignCallParam(
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
+    std.debug.print("marshalForeignCallParam: output.len={}, destination.len={}, types.len={}\n", .{ output.len, destination.len, destination_value_types.len });
     for (output, destination, destination_value_types) |fcp, voa, value_type| {
         // std.debug.print("Marshal output fcp: {any}\n", .{fcp});
         // std.debug.print("Marshal destination: {any}\n", .{voa});
@@ -230,15 +240,18 @@ pub fn marshalForeignCallParam(
     }
 }
 
-fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]ForeignCallParam {
+pub fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]ForeignCallParam {
     const T = @TypeOf(value);
     const info = @typeInfo(T);
 
     var result = std.ArrayList(ForeignCallParam).init(allocator);
 
-    // Check if this is a Field type first
+    // Check for special types first
     if (T == F) {
         try result.append(ForeignCallParam{ .Single = value.to_int() });
+        return result.toOwnedSlice();
+    } else if (T == ForeignCallParam) {
+        try result.append(value);
         return result.toOwnedSlice();
     }
 
@@ -247,10 +260,27 @@ fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]Fo
             // Check if this struct has a toForeignCallParams method (returns array of params)
             if (@hasDecl(T, "toForeignCallParams")) {
                 const params = value.toForeignCallParams();
-                try result.appendSlice(&params);
+                const params_type_info = @typeInfo(@TypeOf(params));
+                if (params_type_info == .array) {
+                    try result.appendSlice(&params);
+                } else {
+                    try result.appendSlice(params);
+                }
             } else if (@hasDecl(T, "toForeignCallParam")) {
                 // Check if this struct has a toForeignCallParam method (returns single param)
-                try result.append(value.toForeignCallParam());
+                const func_info = @typeInfo(@TypeOf(T.toForeignCallParam));
+                if (func_info.@"fn".params.len == 1) {
+                    // Method takes no allocator
+                    try result.append(value.toForeignCallParam());
+                } else {
+                    // Method takes allocator
+                    const return_type_info = @typeInfo(func_info.@"fn".return_type.?);
+                    if (return_type_info == .error_union) {
+                        try result.append(try value.toForeignCallParam(allocator));
+                    } else {
+                        try result.append(value.toForeignCallParam(allocator));
+                    }
+                }
             } else if (@hasDecl(T, "to_int")) {
                 // Check if this struct has a to_int method (like Field types)
                 try result.append(ForeignCallParam{ .Single = value.to_int() });
@@ -273,6 +303,17 @@ fn structToForeignCallParams(allocator: std.mem.Allocator, value: anytype) ![]Fo
         },
         .int => {
             try result.append(ForeignCallParam{ .Single = value });
+        },
+        .pointer => |ptr| {
+            if (ptr.size == .slice) {
+                // Handle slices by converting each element
+                for (value) |elem| {
+                    const elem_params = try structToForeignCallParams(allocator, elem);
+                    try result.appendSlice(elem_params);
+                }
+            } else {
+                @compileError("Unsupported pointer type in structToForeignCallParams: " ++ @typeName(T));
+            }
         },
         else => {
             @compileError("Unsupported type in structToForeignCallParams: " ++ @typeName(T));
@@ -380,71 +421,14 @@ pub fn marshalOutput(
         .void => {},
         .pointer => |ptr| {
             if (ptr.size == .slice) {
-                // Handle slices - convert to ForeignCallParam array
+                // Handle slices by converting to ForeignCallParams
                 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
                 defer arena.deinit();
-
-                // Check if the slice element type has a toForeignCallParam method
-                const has_to_foreign_call_param = comptime blk: {
-                    if (@typeInfo(ptr.child) == .@"struct") {
-                        break :blk @hasDecl(ptr.child, "toForeignCallParam");
-                    }
-                    break :blk false;
-                };
-
-                if (has_to_foreign_call_param) {
-                    // Convert each element to ForeignCallParam
-                    const slice = @as([]const ptr.child, @ptrCast(@alignCast(output.*)));
-                    var result = std.ArrayList(ForeignCallParam).init(arena.allocator());
-
-                    for (slice) |item| {
-                        const param = item.toForeignCallParam(arena.allocator()) catch unreachable;
-                        result.append(param) catch unreachable;
-                    }
-
-                    const params = result.toOwnedSlice() catch unreachable;
-
-                    // For slices, we expect 2 destinations: array data and array length
-                    if (destinations.len == 2 and destinations[0] == .HeapArray and destinations[1] == .MemoryAddress) {
-                        // First destination is the array data
-                        const arr = destinations[0].HeapArray;
-
-                        // Second destination is the array length
-                        mem.setSlot(destinations[1].MemoryAddress, params.len);
-                        const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
-
-                        // Write the array of note data directly
-                        var flattened_fields = std.ArrayList(u256).init(arena.allocator());
-                        for (params) |param| {
-                            const fields = param.flatten(arena.allocator()) catch unreachable;
-                            flattened_fields.appendSlice(fields) catch unreachable;
-                        }
-                        const all_fields = flattened_fields.toOwnedSlice() catch unreachable;
-
-                        for (all_fields, 0..) |field, i| {
-                            mem.setSlotAtIndex(dst_idx + i, field);
-                        }
-                    } else {
-                        std.debug.print("Unexpected destinations configuration for slice\n", .{});
-                        unreachable;
-                    }
-                } else if (ptr.child == F) {
-                    // Handle []F slices
-                    const slice = output.*;
-                    if (destinations.len == 1 and destinations[0] == .HeapArray) {
-                        const arr = destinations[0].HeapArray;
-                        const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
-                        for (slice, 0..) |field, i| {
-                            mem.setSlotAtIndex(dst_idx + i, field.to_int());
-                        }
-                    } else {
-                        std.debug.print("Unexpected destinations for []F slice\n", .{});
-                        unreachable;
-                    }
-                } else {
-                    std.debug.print("Unsupported slice type in marshalOutput: {any}\n", .{ptr.child});
-                    unreachable;
-                }
+                
+                // Convert the slice to ForeignCallParams using the existing function
+                const slice_value = output.*;
+                const params = structToForeignCallParams(arena.allocator(), slice_value) catch unreachable;
+                marshalForeignCallParam(params, mem, destinations, destination_value_types);
             } else {
                 std.debug.print("Unexpected pointer type: {any}\n", .{ptr});
                 unreachable;
