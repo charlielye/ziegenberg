@@ -16,6 +16,7 @@ pub fn hash_with_generator(
     defer allocator.free(to_hash);
     to_hash[0] = Fr.from_int(generator);
     std.mem.copyForwards(Fr, to_hash[1..], input);
+    std.debug.print("hash_with_generator: {x}\n", .{to_hash});
     return hash(to_hash);
 }
 
