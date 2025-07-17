@@ -9,7 +9,7 @@
       "args": [
         "cvm",
         "run",
-        "--bytecode_path=./aztec-packages/noir-projects/noir-contracts/target/tests/Counter__test_increment.pass.cvm_bytecode"
+        "--artifact_path=./aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__test_increment_pass.json"
       ],
       "cwd": "${workspaceFolder}",
       "stopOnEntry": false,

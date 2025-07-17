@@ -421,14 +421,26 @@ pub fn marshalOutput(
         .void => {},
         .pointer => |ptr| {
             if (ptr.size == .slice) {
-                // Handle slices by converting to ForeignCallParams
-                var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-                defer arena.deinit();
-                
-                // Convert the slice to ForeignCallParams using the existing function
-                const slice_value = output.*;
-                const params = structToForeignCallParams(arena.allocator(), slice_value) catch unreachable;
-                marshalForeignCallParam(params, mem, destinations, destination_value_types);
+                // // Handle slices by converting to ForeignCallParams
+                // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                // defer arena.deinit();
+
+                // // Convert the slice to ForeignCallParams using the existing function
+                // const slice_value = output.*;
+                // const params = structToForeignCallParams(arena.allocator(), slice_value) catch unreachable;
+                // marshalForeignCallParam(params, mem, destinations, destination_value_types);
+                if (ptr.child == ForeignCallParam) {
+                    // If the pointer is to ForeignCallParam, we can directly marshal it
+                    const params = output.*;
+                    marshalForeignCallParam(params, mem, destinations, destination_value_types);
+                    return;
+                }
+                std.debug.assert(destinations[0] == .HeapArray);
+                const arr = destinations[0].HeapArray;
+                const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+                // TODO: This will break if the array element is anything other than a field or int.
+                for (0..arr.size) |i|
+                    mem.setSlotAtIndex(dst_idx + i, if (ptr.child == F) output.*[i].to_int() else output.*[i]);
             } else {
                 std.debug.print("Unexpected pointer type: {any}\n", .{ptr});
                 unreachable;
