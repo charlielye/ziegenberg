@@ -212,7 +212,9 @@ pub fn Field(comptime Params: type) type {
         }
 
         pub fn hash(self: Fe) u64 {
-            return std.hash.Wyhash.hash(0, std.mem.asBytes(&self.limbs));
+            // Hash based on the canonical integer representation to ensure consistency.
+            const canonical_value = self.to_int();
+            return std.hash.Wyhash.hash(0, std.mem.asBytes(&canonical_value));
         }
     };
 }

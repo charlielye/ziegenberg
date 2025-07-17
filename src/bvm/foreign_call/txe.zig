@@ -360,6 +360,17 @@ pub fn BoundedVec(comptime T: type) type {
 //     return std.fmt.allocPrint(allocator, "{s}", .{std.fmt.fmtSliceHexLower(&digest)});
 // }
 
+pub fn KeyCtx(comptime K: type) type {
+    return struct {
+        pub fn hash(_: @This(), key: K) u64 {
+            return key.hash();
+        }
+        pub fn eql(_: @This(), a: K, b: K) bool {
+            return a.eql(b);
+        }
+    };
+}
+
 pub const Txe = struct {
     allocator: std.mem.Allocator,
     version: F = F.one,
@@ -375,7 +386,7 @@ pub const Txe = struct {
     contracts_artifacts_path: []const u8,
     contract_artifact_cache: std.AutoHashMap(F, ContractAbi),
     contract_instance_cache: std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
-    execution_cache: std.AutoHashMap(F, []F),
+    execution_cache: std.HashMap(F, []F, KeyCtx(F), 80),
     fc_handler: *ForeignCallDispatcher = undefined,
     // Capsule storage: key is "address:slot", value is array of F elements
     capsule_storage: std.StringHashMap([]F),
@@ -399,7 +410,7 @@ pub const Txe = struct {
             .contracts_artifacts_path = contract_artifacts_path,
             .contract_artifact_cache = std.AutoHashMap(F, ContractAbi).init(allocator),
             .contract_instance_cache = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator),
-            .execution_cache = std.AutoHashMap(F, []F).init(allocator),
+            .execution_cache = std.HashMap(F, []F, KeyCtx(F), 80).init(allocator),
             .capsule_storage = std.StringHashMap([]F).init(allocator),
             .private_logs = std.ArrayList(PrivateLog).init(allocator),
             .note_cache = note_cache.NoteCache.init(allocator),
@@ -642,10 +653,10 @@ pub const Txe = struct {
         allocator: std.mem.Allocator,
         args_hash: F,
     ) !?[]F {
-        if (self.execution_cache.get(args_hash)) |cached_args| {
+        if (self.execution_cache.get(args_hash)) |result| {
             // Return a copy to avoid lifetime issues
-            const result = try allocator.alloc(F, cached_args.len);
-            @memcpy(result, cached_args);
+            // const result = try allocator.alloc(F, cached_args.len);
+            // @memcpy(result, cached_args);
 
             std.debug.print("loadFromExecutionCache: Found cached args with hash {x}\n", .{args_hash});
             return result;
@@ -653,11 +664,9 @@ pub const Txe = struct {
 
         // Special case: hash 0 returns empty array
         if (args_hash.eql(F.zero)) {
-            std.debug.print("loadFromExecutionCache: Returning empty array for hash 0\n", .{});
             return try allocator.alloc(F, 0);
         }
 
-        std.debug.print("loadFromExecutionCache: No cached args found with hash {x}\n", .{args_hash});
         return null;
     }
 
@@ -1013,12 +1022,17 @@ pub const Txe = struct {
             }
         }
 
-        // std.debug.print("{any}\n", .{program.functions[0].return_values});
-
         // Note use of long lived allocator as we will cache the result.
-        const return_witness = try circuit_vm.witnesses.getWitnessesRange(self.allocator, return_values[0], return_values.len);
+        const return_witness = try circuit_vm.witnesses.getWitnessesRange(self.allocator, return_values[0], return_values[0] + return_values.len);
+        std.debug.print("simulateUtilityFunction: Retrieved return witness: {x}\n", .{return_witness});
         const return_hash = poseidon.hash_with_generator(allocator, return_witness, @intFromEnum(constants.GeneratorIndex.function_args));
         try self.execution_cache.put(return_hash, return_witness);
+
+        std.debug.print("simulateUtilityFunction: Returning hash {x} for function {s} at address {x}\n", .{
+            return_hash,
+            function.name,
+            target_contract_address,
+        });
 
         return return_hash;
     }
