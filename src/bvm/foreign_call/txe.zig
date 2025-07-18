@@ -1212,4 +1212,146 @@ pub const Txe = struct {
             self.contract_address,
         });
     }
+
+    pub fn privateCallNewFlow(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        from: proto.AztecAddress,
+        target_contract_address: proto.AztecAddress,
+        function_selector: FunctionSelector,
+        args_len: u32,
+        args: []F,
+        args_hash: F,
+        is_static_call: bool,
+    ) ![3]F {
+        _ = from; // The msg_sender is managed by the TXE context
+        _ = args_len; // We have the actual args slice
+
+        // TODO: Step 1 - Get function artifact
+        // - Implement contractDataProvider.getFunctionArtifact(targetContractAddress, functionSelector)
+        // - This should look up the contract ABI and find the specific function
+        // - Throw error if artifact is undefined
+
+        // TODO: Step 2 - Create proper contexts
+        // - Create CallContext with (from, targetContractAddress, functionSelector, isStaticCall)
+        // - Create GasLimits with DEFAULT_GAS_LIMIT and MAX_L2_GAS_PER_TX_PUBLIC_PORTION
+        // - Create teardownGasLimits with DEFAULT_TEARDOWN_GAS_LIMIT
+        // - Create GasSettings from gas limits and empty gas fees
+        // - Create TxContext with CHAIN_ID, ROLLUP_VERSION, and gasSettings
+
+        // TODO: Step 3 - Get block header
+        // - Implement getBlockHeader() to get the current block's header
+        // - This should include the full block state for the historical header
+
+        // TODO: Step 4 - Create execution note cache
+        // - Create ExecutionNoteCache with getTxRequestHash()
+        // - This is different from the simple note cache we have now
+
+        // TODO: Step 5 - Create PrivateExecutionOracle
+        // - Create full private execution context with:
+        //   - argsHash, txContext, callContext, blockHeader
+        //   - Empty auth witness arrays
+        //   - HashedValuesCache
+        //   - ExecutionNoteCache
+        //   - Oracle interface (self)
+        //   - Simulator
+        //   - Initial counters (0, 1)
+
+        // Store the args in the execution cache for the called function to retrieve
+        try self.storeInExecutionCache(allocator, F.from_int(args.len), args, args_hash);
+
+        // TODO: Step 6 - Execute private function with full simulator
+        // - Replace callPrivateFunction with executePrivateFunction that returns PrivateExecutionResult
+        // - This should handle all the complex execution logic
+        // - Wrap in try/catch to handle simulation errors properly
+
+        // TODO: Step 7 - Process execution results
+        // - Call noteCache.finish() to get usedTxRequestHashForNonces
+        // - Calculate firstNullifierHint (Fr.ZERO if usedTxRequestHashForNonces, else first nullifier)
+        // - Collect nested public call requests from execution result
+        // - Load calldata for each public call request from execution cache
+        // - Create PrivateExecutionResult with all the data
+
+        // Use existing callPrivateFunction implementation (temporary)
+        const result = try self.callPrivateFunction(
+            allocator,
+            target_contract_address,
+            function_selector,
+            args_hash,
+            self.side_effect_counter,
+            is_static_call,
+        );
+
+        const end_side_effect_counter = result[0];
+        const returns_hash = result[1];
+
+        // TODO: Step 8 - Handle return values
+        // - If executionResult has returnValues:
+        //   - Compute hash of return values using computeVarArgsHash
+        //   - Store return values in execution cache with the hash
+
+        // TODO: Step 9 - Generate simulated proving result
+        // - Calculate nonceGenerator (firstNullifier or getTxRequestHash if no nullifiers)
+        // - Call generateSimulatedProvingResult(result, nonceGenerator, contractDataProvider)
+        // - Extract publicInputs from the result
+
+        // TODO: Step 10 - Create global variables
+        // - Create makeGlobalVariables() with current block number, timestamp, and empty gas fees
+
+        // TODO: Step 11 - Set up public execution infrastructure
+        // - Create PublicContractsDB with TXEPublicContractDataSource
+        // - Create GuardedMerkleTreeOperations wrapping baseFork
+        // - Create PublicTxSimulator with merkle trees, contracts DB, and globals
+        // - Create PublicProcessor with all the components
+
+        // TODO: Step 12 - Create transaction
+        // - Create Tx with publicInputs, empty proof, empty logs, and publicFunctionCalldata
+
+        // TODO: Step 13 - Handle static call checkpointing
+        // - If isStaticCall, create ForkCheckpoint before processing
+
+        // TODO: Step 14 - Process public functions
+        // - Call processor.process([tx]) to execute public functions
+        // - Check for failed transactions and throw error if any failed
+
+        // TODO: Step 15 - For static calls, revert and return early
+        // - If isStaticCall:
+        //   - Revert the checkpoint
+        //   - Return early with endSideEffectCounter, returnsHash, and txRequestHash
+
+        // TODO: Step 16 - Create L2 block and update state (non-static calls only)
+        // - Create TxEffect from processed transaction results
+        // - Copy noteHashes, nullifiers, logs, and publicDataWrites
+        // - Set txHash to Fr(blockNumber)
+        // - Create Body with txEffect
+        // - Create L2Block with snapshot, header, and body
+
+        // TODO: Step 17 - Update merkle trees
+        // - Append L1_TO_L2 messages (zeros) to the message tree
+        // - Get updated state reference from fork
+        // - Get archive tree info
+        // - Create BlockHeader with all the data
+        // - Update archive with the new block header
+
+        // TODO: Step 18 - Update state machine
+        // - Call stateMachine.handleL2Block(l2Block) to update state
+
+        // TODO: Step 19 - Get proper transaction hash
+        // - Call getTxRequestHash() for the actual transaction hash
+        // - This should be more complex than our simple hash
+
+        // Generate a tx hash - for minimal implementation, use a simple hash of the function call parameters
+        const tx_hash = poseidon.hash(&[_]F{
+            target_contract_address.value,
+            F.from_int(function_selector),
+            args_hash,
+            F.from_int(self.block_number),
+        });
+
+        // TODO: Step 20 - Advance state (non-static calls only)
+        // - Increment block number
+        // - Advance timestamp by AZTEC_SLOT_DURATION
+
+        return [3]F{ end_side_effect_counter, returns_hash, tx_hash };
+    }
 };
