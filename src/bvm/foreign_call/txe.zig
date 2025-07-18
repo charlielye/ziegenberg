@@ -976,7 +976,6 @@ pub const Txe = struct {
         function_selector: FunctionSelector,
         args_hash: F,
     ) !F {
-        std.debug.assert(self.contract_address.eql(target_contract_address));
         // Save current contract address
         const saved_contract_address = self.contract_address;
 
