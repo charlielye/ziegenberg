@@ -28,10 +28,9 @@ pub fn build(b: *std.Build) void {
         lib.bundle_compiler_rt = true;
         lib.linkLibC();
 
-        // This declares intent for the library to be installed into the standard
-        // location when the user invokes the "install" step (the default step when
-        // running `zig build`).
-        b.installArtifact(lib);
+        // Create install artifact and add to default install step
+        const lib_install = b.addInstallArtifact(lib, .{});
+        b.getInstallStep().dependOn(&lib_install.step);
     }
 
     // Exe.
@@ -48,10 +47,11 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addImport("toml", toml.module("zig-toml"));
         exe.linkLibC();
 
-        b.installArtifact(exe);
-
-        // A step to install the exe into zig-out/bin. Depends on being built.
+        // Create install step.
         const exe_install = b.addInstallArtifact(exe, .{});
+
+        // Add to default install step so "zig build" installs it.
+        b.getInstallStep().dependOn(&exe_install.step);
 
         // A command step to just build and install test executable.
         const test_exe_step = b.step("build-exe", "Build exe");
@@ -71,11 +71,11 @@ pub fn build(b: *std.Build) void {
         list_tests.root_module.addImport("toml", toml.module("zig-toml"));
         list_tests.linkLibC();
 
-        // Install the list test binary into the standard location on the default "zig build".
-        b.installArtifact(list_tests);
-
-        // A step to install the list test binary into zig-out/bin. Depends on them being built.
+        // Create a single install step for list tests.
         const list_tests_install = b.addInstallArtifact(list_tests, .{});
+
+        // Add to default install step.
+        b.getInstallStep().dependOn(&list_tests_install.step);
 
         const run_list_tests = b.addRunArtifact(list_tests);
         run_list_tests.step.dependOn(&list_tests_install.step);
@@ -100,11 +100,11 @@ pub fn build(b: *std.Build) void {
         lib_unit_tests.root_module.addImport("toml", toml.module("zig-toml"));
         lib_unit_tests.linkLibC();
 
-        // Install the unit tests into the standard location on the default "zig build".
-        b.installArtifact(lib_unit_tests);
-
-        // A step to install the unit tests into zig-out/bin. Depends on them being built.
+        // Create a single install step for unit tests.
         const lib_unit_tests_install = b.addInstallArtifact(lib_unit_tests, .{});
+
+        // Add to default install step.
+        b.getInstallStep().dependOn(&lib_unit_tests_install.step);
 
         // A step to run the unit tests. Depends on them being built and installed.
         const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
