@@ -680,10 +680,17 @@ pub const Txe = struct {
         side_effect_counter: u32,
         is_static_call: bool,
     ) ![2]F {
+        std.debug.print("current_contract_address: {x}\n", .{self.contract_address});
         // Save current environment.
         const current_contract_address = self.contract_address;
         const current_msg_sender = self.msg_sender;
         const current_function_selector = self.function_selector;
+        defer {
+            // Restore previous environment.
+            self.contract_address = current_contract_address;
+            self.msg_sender = current_msg_sender;
+            self.function_selector = current_function_selector;
+        }
 
         // Set up new environment for the call.
         self.msg_sender = self.contract_address;
@@ -766,11 +773,6 @@ pub const Txe = struct {
             log.fields[0] = poseidon.hash(&[_]F{ target_contract_address.value, log.fields[0] });
             try self.private_logs.append(log);
         }
-
-        // Restore previous environment.
-        self.contract_address = current_contract_address;
-        self.msg_sender = current_msg_sender;
-        self.function_selector = current_function_selector;
 
         return [2]F{ end_side_effect_counter, returns_hash };
     }
@@ -974,6 +976,14 @@ pub const Txe = struct {
         function_selector: FunctionSelector,
         args_hash: F,
     ) !F {
+        std.debug.assert(self.contract_address.eql(target_contract_address));
+        // Save current contract address
+        const saved_contract_address = self.contract_address;
+
+        // Set contract address to the target contract for this utility function
+        self.contract_address = target_contract_address;
+        defer self.contract_address = saved_contract_address;
+
         // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {
             return error.ContractInstanceNotFound;
@@ -996,7 +1006,7 @@ pub const Txe = struct {
 
         // Execute utility function in nested circuit vm.
         var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata, self.fc_handler);
-        std.debug.print("simulateUtilityFunction: Entering nested cvm\n", .{});
+        std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{self.contract_address});
         circuit_vm.executeVm(0, false) catch |err| {
             if (err == error.Trapped) {
                 // TODO: Get actual artifact path.
@@ -1024,7 +1034,6 @@ pub const Txe = struct {
 
         // Note use of long lived allocator as we will cache the result.
         const return_witness = try circuit_vm.witnesses.getWitnessesRange(self.allocator, return_values[0], return_values[0] + return_values.len);
-        return_witness[0] = F.from_int(5);
         std.debug.print("simulateUtilityFunction: Retrieved return witness: {x}\n", .{return_witness});
         const return_hash = poseidon.hash_with_generator(allocator, return_witness, @intFromEnum(constants.GeneratorIndex.function_args));
         try self.execution_cache.put(return_hash, return_witness);
@@ -1086,16 +1095,27 @@ pub const Txe = struct {
 
         // Get pending notes from cache
         const pending_notes = self.note_cache.getNotes(self.contract_address, storage_slot);
+        std.debug.print("getNotes: note_cache.getNotes returned {} notes for contract {x} at slot {x}\n", .{
+            pending_notes.len,
+            self.contract_address,
+            storage_slot,
+        });
 
         // For now, we only return pending notes (no database notes)
         // Filter out nullified notes
         var filtered_notes = std.ArrayList(proto.NoteData).init(allocator);
         defer filtered_notes.deinit();
         for (pending_notes) |note| {
-            if (!self.note_cache.hasNullifier(self.contract_address, note.siloed_nullifier)) {
+            const has_nullifier = self.note_cache.hasNullifier(self.contract_address, note.siloed_nullifier);
+            std.debug.print("getNotes: Processing note with hash {x}, has_nullifier: {}\n", .{
+                note.note_hash,
+                has_nullifier,
+            });
+            if (!has_nullifier) {
                 try filtered_notes.append(note);
             }
         }
+        std.debug.print("getNotes: After filtering, {} notes remain\n", .{filtered_notes.items.len});
 
         // Build select criteria
         const actual_num_selects = @min(num_selects, select_by_indexes.len);
@@ -1149,7 +1169,7 @@ pub const Txe = struct {
             };
         }
 
-        std.debug.print("getNotes: Returning {} notes for contract {} at slot {x}\n", .{
+        std.debug.print("getNotes: Returning {} notes for contract {x} at slot {x}\n", .{
             result.len,
             self.contract_address,
             storage_slot,
@@ -1184,11 +1204,13 @@ pub const Txe = struct {
         };
 
         try self.note_cache.addNote(note_data);
+        std.debug.print("notifyCreatedNote: note_cache.addNote completed\n", .{});
 
-        std.debug.print("notifyCreatedNote: Added note with hash {x} at slot {x}, counter {}\n", .{
+        std.debug.print("notifyCreatedNote: Added note with hash {x} at slot {x}, counter {}, contract_address {x}\n", .{
             note_hash,
             storage_slot,
             counter,
+            self.contract_address,
         });
     }
 };

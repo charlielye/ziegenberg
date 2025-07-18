@@ -235,7 +235,7 @@ pub const CircuitVm = struct {
     program: *const io.Program,
     witnesses: WitnessMap,
     memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
-    fc_handler: ForeignCallDispatcher,
+    fc_handler: *ForeignCallDispatcher,
     brillig_error_context: ?debug_info.ErrorContext = null,
 
     pub fn init(
@@ -254,13 +254,13 @@ pub const CircuitVm = struct {
             .program = program,
             .witnesses = witnesses,
             .memory_solvers = std.AutoHashMap(u32, MemoryOpSolver).init(allocator),
-            .fc_handler = fc_handler.*,
+            .fc_handler = fc_handler,
         };
     }
 
     pub fn deinit(self: *CircuitVm) void {
         self.witnesses.deinit();
-        self.fc_handler.deinit();
+        // Don't deinit fc_handler since it's now a pointer to an external dispatcher
     }
 
     pub fn executeVm(self: *CircuitVm, function_index: usize, show_trace: bool) !void {
@@ -317,7 +317,7 @@ pub const CircuitVm = struct {
                     }
                     var arena = std.heap.ArenaAllocator.init(self.allocator);
                     defer arena.deinit();
-                    var brillig_vm = try BrilligVm.init(arena.allocator(), calldata.items, &self.fc_handler);
+                    var brillig_vm = try BrilligVm.init(arena.allocator(), calldata.items, self.fc_handler);
                     defer brillig_vm.deinit();
                     brillig_vm.executeVm(self.program.unconstrained_functions[op.id], show_trace, 0) catch |err| {
                         if (err == error.Trapped) {
