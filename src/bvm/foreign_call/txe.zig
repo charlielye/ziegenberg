@@ -386,15 +386,15 @@ pub const Txe = struct {
         // Create global state components
         const contract_artifact_cache = try allocator.create(std.AutoHashMap(F, ContractAbi));
         contract_artifact_cache.* = std.AutoHashMap(F, ContractAbi).init(allocator);
-        
+
         const contract_instance_cache = try allocator.create(std.AutoHashMap(proto.AztecAddress, proto.ContractInstance));
         contract_instance_cache.* = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator);
-        
+
         const prng = try allocator.create(std.Random.DefaultPrng);
         prng.* = std.Random.DefaultPrng.init(12345);
-        
+
         const fc_handler: *ForeignCallDispatcher = undefined;
-        
+
         var txe = Txe{
             .allocator = allocator,
             .global = call_state.GlobalState{
@@ -412,28 +412,28 @@ pub const Txe = struct {
             .root_state = call_state.CallState.init(allocator),
             .current_context = undefined,
         };
-        
+
         // Now set up current context with proper pointers
         txe.current_context = call_state.CallContext{
             .global = &txe.global,
             .current = &txe.root_state,
             .allocator = allocator,
         };
-        
+
         return txe;
     }
 
     pub fn deinit(self: *Txe) void {
         // Deinit root state
         self.root_state.deinit();
-        
+
         // Deinit global state components
         self.global.contract_artifact_cache.deinit();
         self.allocator.destroy(self.global.contract_artifact_cache);
-        
+
         self.global.contract_instance_cache.deinit();
         self.allocator.destroy(self.global.contract_instance_cache);
-        
+
         self.allocator.destroy(self.global.prng);
     }
 
@@ -458,11 +458,11 @@ pub const Txe = struct {
 
         // Clear capsule storage from current context
         self.current_context.current.clearCapsuleStorage();
-        
+
         // Clear and reinit root state
         self.root_state.deinit();
         self.root_state = call_state.CallState.init(self.allocator);
-        
+
         // Reset current context to root
         self.current_context.current = &self.root_state;
 
@@ -670,16 +670,15 @@ pub const Txe = struct {
         side_effect_counter: u32,
         is_static_call: bool,
     ) ![2]F {
-        
+
         // Create child context for the nested call
         var child_context = try self.current_context.createChild(target_contract_address, function_selector, is_static_call);
         child_context.current.side_effect_counter = side_effect_counter;
-        
+
         // Save current context and switch to child
         const saved_current = self.current_context.current;
         self.current_context.current = child_context.current;
-        
-        
+
         defer {
             // Merge child state back into parent (if not static)
             if (!is_static_call) {
@@ -803,14 +802,10 @@ pub const Txe = struct {
         }
     }
 
-    fn makeCapsuleKey(allocator: std.mem.Allocator, contract_address: proto.AztecAddress, slot: F) ![]u8 {
-        // Format with consistent width (64 hex chars = 256 bits) to ensure keys match
-        return std.fmt.allocPrint(allocator, "{x:0>64}:{x:0>64}", .{ contract_address.value.to_int(), slot.to_int() });
-    }
 
     pub fn storeCapsule(
         self: *Txe,
-        _: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         contract_address: proto.AztecAddress,
         slot: F,
         capsule: []F,
@@ -824,11 +819,8 @@ pub const Txe = struct {
             return error.UnauthorizedContractAccess;
         }
 
-        // Always use current contract address for the key, matching TypeScript behavior
-        const key = try makeCapsuleKey(self.allocator, self.current_context.current.contract_address, slot);
-
-        // Store new data in current context.
-        try self.current_context.current.storeCapsule(key, capsule);
+        // Store using the new CallState method
+        try self.current_context.current.storeCapsuleAtSlot(allocator, slot, capsule);
     }
 
     pub fn loadCapsule(
@@ -842,26 +834,12 @@ pub const Txe = struct {
 
         // Authorization check - contracts can only access their own capsule storage
         if (!contract_address.eql(self.current_context.current.contract_address)) {
-            std.debug.print("Capsule access denied: Contract {x} is not allowed to access {x}'s storage\n", .{ 
-                self.current_context.current.contract_address, 
-                contract_address 
-            });
+            std.debug.print("Capsule access denied: Contract {x} is not allowed to access {x}'s storage\n", .{ self.current_context.current.contract_address, contract_address });
             return error.UnauthorizedCapsuleAccess;
         }
 
-        // Always use current contract address for the key, matching TypeScript behavior
-        const key = try makeCapsuleKey(allocator, self.current_context.current.contract_address, slot);
-        defer allocator.free(key);
-
-        
-        if (self.current_context.current.getCapsule(key)) |capsule| {
-            // Return a copy of the data
-            const result = try allocator.alloc(F, capsule.len);
-            @memcpy(result, capsule);
-            return result;
-        }
-
-        return null;
+        // Load using the new CallState method
+        return try self.current_context.current.loadCapsuleAtSlot(allocator, slot);
     }
 
     pub fn debugLog(
@@ -890,9 +868,8 @@ pub const Txe = struct {
         // For our minimal implementation, we'll store an empty array.
         var empty_array = [_]F{F.zero};
 
-        
         // Store the empty array at the base slot.
-        try self.storeCapsule(allocator, self.current_context.current.contract_address, pending_tagged_log_array_base_slot, empty_array[0..]);
+        try self.current_context.current.storeCapsuleAtSlot(allocator, pending_tagged_log_array_base_slot, empty_array[0..]);
     }
 
     pub fn bulkRetrieveLogs(
@@ -904,19 +881,14 @@ pub const Txe = struct {
     ) !void {
         // Authorization check - contracts can only access their own capsule storage
         if (!contract_address.eql(self.current_context.current.contract_address)) {
-            std.debug.print("Capsule access denied: Contract {x} is not allowed to access {x}'s storage\n", .{ 
-                self.current_context.current.contract_address, 
-                contract_address 
-            });
+            std.debug.print("Capsule access denied: Contract {x} is not allowed to access {x}'s storage\n", .{ self.current_context.current.contract_address, contract_address });
             return error.UnauthorizedCapsuleAccess;
         }
 
-        // Load the requests array to get the count using current contract address
-        const requests_key = try makeCapsuleKey(allocator, self.current_context.current.contract_address, log_retrieval_requests_array_base_slot);
-        defer allocator.free(requests_key);
-
+        // Load the requests array to get the count
         var num_requests: u32 = 0;
-        if (self.current_context.current.getCapsule(requests_key)) |data| {
+        if (try self.current_context.current.loadCapsuleAtSlot(allocator, log_retrieval_requests_array_base_slot)) |data| {
+            defer allocator.free(data);
             if (data.len > 0) {
                 num_requests = @intCast(data[0].to_int());
             }
@@ -924,14 +896,14 @@ pub const Txe = struct {
 
         // For minimal implementation, create empty responses for each request
         var length_array = [_]F{F.from_int(num_requests)};
-        try self.storeCapsule(allocator, self.current_context.current.contract_address, log_retrieval_responses_array_base_slot, length_array[0..]);
+        try self.current_context.current.storeCapsuleAtSlot(allocator, log_retrieval_responses_array_base_slot, length_array[0..]);
 
         // Store Option::none for each response
         var none_response = [_]F{F.zero};
         var i: u32 = 0;
         while (i < num_requests) : (i += 1) {
             const response_slot = log_retrieval_responses_array_base_slot.add(F.from_int(i + 1));
-            try self.storeCapsule(allocator, self.current_context.current.contract_address, response_slot, none_response[0..]);
+            try self.current_context.current.storeCapsuleAtSlot(allocator, response_slot, none_response[0..]);
         }
     }
 
@@ -1115,7 +1087,7 @@ pub const Txe = struct {
                     break;
                 }
             }
-            
+
             std.debug.print("getNotes: Processing note with hash {x}, has_nullifier: {}\n", .{
                 note.note_hash,
                 has_nullifier,
