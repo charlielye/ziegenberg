@@ -12,10 +12,10 @@ pub const Dispatcher = struct {
     txe: Txe,
     mocker: Mocker,
 
-    pub fn init(allocator: std.mem.Allocator) Dispatcher {
+    pub fn init(allocator: std.mem.Allocator) !Dispatcher {
         return .{
             .allocator = allocator,
-            .txe = Txe.init(allocator, "data/contracts"),
+            .txe = try Txe.init(allocator, "data/contracts"),
             .mocker = Mocker.init(allocator),
         };
     }

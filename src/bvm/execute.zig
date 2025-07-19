@@ -39,7 +39,7 @@ pub fn execute(options: ExecuteOptions) !void {
     }
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
-    var fc_handler = ForeignCallDispatcher.init(allocator);
+    var fc_handler = try ForeignCallDispatcher.init(allocator);
     defer fc_handler.deinit();
 
     var t = try std.time.Timer.start();
