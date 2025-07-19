@@ -207,6 +207,36 @@ pub const CallState = struct {
         return null;
     }
 
+    /// Get notes for a contract address and storage slot, checking parent chain
+    pub fn getNotesFromCacheWithParents(self: *const CallState, allocator: std.mem.Allocator, contract_address: proto.AztecAddress, storage_slot: F) ![]proto.NoteData {
+        var all_notes = std.ArrayList(proto.NoteData).init(allocator);
+        
+        // Collect notes from this state and all parents
+        var current: ?*const CallState = self;
+        while (current) |state| {
+            const notes = state.note_cache.getNotes(contract_address, storage_slot);
+            try all_notes.appendSlice(notes);
+            current = state.parent;
+        }
+        
+        return all_notes.toOwnedSlice();
+    }
+
+    /// Check if a nullifier exists in this state or any parent state
+    pub fn hasNullifierInChain(self: *const CallState, contract_address: proto.AztecAddress, nullifier: F) bool {
+        // Check local cache
+        if (self.note_cache.hasNullifier(contract_address, nullifier)) {
+            return true;
+        }
+
+        // Check parent chain
+        if (self.parent) |parent| {
+            return parent.hasNullifierInChain(contract_address, nullifier);
+        }
+
+        return false;
+    }
+
     /// Load capsule data for a given slot (uses contract address)
     pub fn loadCapsuleAtSlot(self: *const CallState, allocator: std.mem.Allocator, slot: F) !?[]F {
         const key = CapsuleKey{ .address = self.contract_address, .slot = slot };

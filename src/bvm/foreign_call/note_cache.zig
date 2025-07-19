@@ -71,7 +71,7 @@ pub const NoteCache = struct {
         try storage_entry.value_ptr.append(note_data);
     }
 
-    pub fn getNotes(self: *NoteCache, contract_address: proto.AztecAddress, storage_slot: F) []const proto.NoteData {
+    pub fn getNotes(self: *const NoteCache, contract_address: proto.AztecAddress, storage_slot: F) []const proto.NoteData {
         const contract_map = self.notes.get(contract_address) orelse return &[_]proto.NoteData{};
         const note_list = contract_map.get(storage_slot) orelse return &[_]proto.NoteData{};
         return note_list.items;
@@ -85,7 +85,7 @@ pub const NoteCache = struct {
         try entry.value_ptr.put(nullifier, {});
     }
 
-    pub fn hasNullifier(self: *NoteCache, contract_address: proto.AztecAddress, nullifier: F) bool {
+    pub fn hasNullifier(self: *const NoteCache, contract_address: proto.AztecAddress, nullifier: F) bool {
         const nullifier_map = self.nullifiers.get(contract_address) orelse return false;
         return nullifier_map.contains(nullifier);
     }

@@ -947,10 +947,21 @@ pub const Txe = struct {
         function_selector: FunctionSelector,
         args_hash: F,
     ) !F {
-        // Save the current contract address and temporarily change it
-        const saved_address = self.current_state.contract_address;
-        self.current_state.contract_address = target_contract_address;
-        defer self.current_state.contract_address = saved_address;
+        // Create child state for the utility function (static call)
+        const child_state = try self.current_state.createChild(self.allocator, target_contract_address, function_selector, true);
+        child_state.side_effect_counter = self.current_state.side_effect_counter;
+
+        // Save current state and switch to child
+        const saved_current = self.current_state;
+        self.current_state = child_state;
+
+        defer {
+            // Restore previous state
+            self.current_state = saved_current;
+            // Clean up child
+            child_state.deinit();
+            self.allocator.destroy(child_state);
+        }
 
         // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {
@@ -1004,7 +1015,9 @@ pub const Txe = struct {
         const return_witness = try circuit_vm.witnesses.getWitnessesRange(self.allocator, return_values[0], return_values[0] + return_values.len);
         std.debug.print("simulateUtilityFunction: Retrieved return witness: {x}\n", .{return_witness});
         const return_hash = poseidon.hash_with_generator(allocator, return_witness, @intFromEnum(constants.GeneratorIndex.function_args));
-        try self.current_state.execution_cache.put(return_hash, return_witness);
+
+        // Store in the parent state's execution cache, not the child's
+        try saved_current.execution_cache.put(return_hash, return_witness);
 
         std.debug.print("simulateUtilityFunction: Returning hash {x} for function {s} at address {x}\n", .{
             return_hash,
@@ -1061,8 +1074,9 @@ pub const Txe = struct {
     ) !BoundedVec(RetrievedNoteWithMetadata) {
         _ = status; // Not used in this minimal implementation
 
-        // Get pending notes from cache
-        const pending_notes = self.current_state.note_cache.getNotes(self.current_state.contract_address, storage_slot);
+        // Get pending notes from cache (including parent states)
+        const pending_notes = try self.current_state.getNotesFromCacheWithParents(allocator, self.current_state.contract_address, storage_slot);
+        defer allocator.free(pending_notes);
         std.debug.print("getNotes: note_cache.getNotes returned {} notes for contract {x} at slot {x}\n", .{
             pending_notes.len,
             self.current_state.contract_address,
