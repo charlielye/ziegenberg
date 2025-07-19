@@ -947,13 +947,10 @@ pub const Txe = struct {
         function_selector: FunctionSelector,
         args_hash: F,
     ) !F {
-        std.debug.assert(self.current_state.contract_address.eql(target_contract_address));
-        // Save current contract address
-        const saved_contract_address = self.current_state.contract_address;
-
-        // Set contract address to the target contract for this utility function
+        // Save the current contract address and temporarily change it
+        const saved_address = self.current_state.contract_address;
         self.current_state.contract_address = target_contract_address;
-        defer self.current_state.contract_address = saved_contract_address;
+        defer self.current_state.contract_address = saved_address;
 
         // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {

@@ -51,7 +51,7 @@ pub const CallState = struct {
     // Capsule storage (temporary storage used by contracts)
     capsule_storage: std.HashMap(CapsuleKey, []F, KeyCtx(CapsuleKey), 80),
 
-    // Execution data (input args and return values hash map).
+    // Execution data (args_hash->input args, return_hash->return witnesses).
     execution_cache: std.HashMap(F, []F, KeyCtx(F), 80),
     return_data: []F,
 
@@ -268,4 +268,3 @@ pub const PrivateLog = struct {
     fields: [18]F = [_]F{F.zero} ** 18,
     emitted_length: u32 = 0,
 };
-
