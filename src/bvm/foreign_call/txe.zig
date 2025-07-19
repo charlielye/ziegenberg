@@ -372,6 +372,9 @@ pub const Txe = struct {
     contract_artifact_cache: *std.AutoHashMap(F, ContractAbi),
     contract_instance_cache: *std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
 
+    // Account data.
+    accounts: *std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress),
+
     // Foreign call handler.
     fc_handler: *ForeignCallDispatcher,
 
@@ -394,6 +397,9 @@ pub const Txe = struct {
         const contract_instance_cache = try allocator.create(std.AutoHashMap(proto.AztecAddress, proto.ContractInstance));
         contract_instance_cache.* = std.AutoHashMap(proto.AztecAddress, proto.ContractInstance).init(allocator);
 
+        const accounts = try allocator.create(std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress));
+        accounts.* = std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress).init(allocator);
+
         const prng = try allocator.create(std.Random.DefaultPrng);
         prng.* = std.Random.DefaultPrng.init(12345);
 
@@ -408,6 +414,7 @@ pub const Txe = struct {
             .contracts_artifacts_path = contract_artifacts_path,
             .contract_artifact_cache = contract_artifact_cache,
             .contract_instance_cache = contract_instance_cache,
+            .accounts = accounts,
             .fc_handler = fc_handler,
             .prng = prng,
             .current_state = undefined,
@@ -438,6 +445,9 @@ pub const Txe = struct {
 
         self.contract_instance_cache.deinit();
         self.allocator.destroy(self.contract_instance_cache);
+
+        self.accounts.deinit();
+        self.allocator.destroy(self.accounts);
 
         self.allocator.destroy(self.prng);
     }
@@ -473,7 +483,6 @@ pub const Txe = struct {
         address: proto.AztecAddress,
         public_keys: proto.PublicKeys,
     } {
-        _ = self;
         std.debug.print("createAccount called: {x}\n", .{secret});
 
         // TODO: Why do we use the secret for both args here?
@@ -482,6 +491,9 @@ pub const Txe = struct {
             secret,
             proto.PartialAddress.init(secret),
         );
+
+        // Store the account for later retrieval
+        try self.accounts.put(complete_address.aztec_address, complete_address);
 
         return .{
             .address = complete_address.aztec_address,
@@ -549,29 +561,16 @@ pub const Txe = struct {
 
         self.block_number += 1;
 
-        const mnpk_inf: u256 = if (public_keys.master_nullifier_public_key.is_infinity()) 1 else 0;
-        const mivpk_inf: u256 = if (public_keys.master_incoming_viewing_public_key.is_infinity()) 1 else 0;
-        const movpk_inf: u256 = if (public_keys.master_outgoing_viewing_public_key.is_infinity()) 1 else 0;
-        const mtpk_inf: u256 = if (public_keys.master_tagging_public_key.is_infinity()) 1 else 0;
+        // Get public key fields using toFields
+        const key_fields = public_keys.toFields();
 
-        return [16]F{
+        // Build result array using array concatenation
+        return [4]F{
             contract_instance.salt,
             contract_instance.deployer.value,
             contract_instance.current_contract_class_id,
             contract_instance.initialization_hash,
-            public_keys.master_nullifier_public_key.x,
-            public_keys.master_nullifier_public_key.y,
-            F.from_int(mnpk_inf),
-            public_keys.master_incoming_viewing_public_key.x,
-            public_keys.master_incoming_viewing_public_key.y,
-            F.from_int(mivpk_inf),
-            public_keys.master_outgoing_viewing_public_key.x,
-            public_keys.master_outgoing_viewing_public_key.y,
-            F.from_int(movpk_inf),
-            public_keys.master_tagging_public_key.x,
-            public_keys.master_tagging_public_key.y,
-            F.from_int(mtpk_inf),
-        };
+        } ++ key_fields;
     }
 
     pub fn getBlockNumber(self: *Txe, _: std.mem.Allocator) !u64 {
@@ -940,6 +939,60 @@ pub const Txe = struct {
             .app_tagging_secret = secret,
             .index = 0,
         };
+    }
+
+    pub fn getPublicKeysAndPartialAddress(
+        self: *Txe,
+        allocator: std.mem.Allocator,
+        address: proto.AztecAddress,
+    ) ![]F {
+        // First check if it's an account we created
+        if (self.accounts.get(address)) |complete_address| {
+            var result = std.ArrayList(F).init(allocator);
+            
+            // Get all public key fields using toFields
+            const key_fields = complete_address.public_keys.toFields();
+            try result.appendSlice(&key_fields);
+            
+            // Add partial address
+            try result.append(complete_address.partial_address.value);
+            
+            return result.toOwnedSlice();
+        }
+        
+        // Look up the contract instance to get its public keys
+        const instance = self.contract_instance_cache.get(address) orelse {
+            // If not found anywhere, return default public keys with a deterministic partial address
+            var result = std.ArrayList(F).init(allocator);
+            const default_keys = proto.PublicKeys.default();
+            
+            // Get all public key fields using toFields
+            const key_fields = default_keys.toFields();
+            try result.appendSlice(&key_fields);
+            
+            // Add partial address
+            try result.append(address.value.mul(F.from_int(0x42)));
+            
+            return result.toOwnedSlice();
+        };
+
+        // For contracts, return their stored public keys
+        var result = std.ArrayList(F).init(allocator);
+        
+        // Get all public key fields using toFields
+        const key_fields = instance.public_keys.toFields();
+        try result.appendSlice(&key_fields);
+        
+        // Add partial address
+        const partial_address = proto.PartialAddress.compute(
+            instance.current_contract_class_id,
+            instance.salt,
+            instance.initialization_hash,
+            instance.deployer,
+        ).value;
+        try result.append(partial_address);
+        
+        return result.toOwnedSlice();
     }
 
     pub fn simulateUtilityFunction(

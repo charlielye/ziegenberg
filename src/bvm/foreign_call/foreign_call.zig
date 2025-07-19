@@ -438,8 +438,9 @@ pub fn marshalOutput(
                 std.debug.assert(destinations[0] == .HeapArray);
                 const arr = destinations[0].HeapArray;
                 const dst_idx: usize = @intCast(mem.getSlot(arr.pointer));
+                const output_len = output.len;
                 // TODO: This will break if the array element is anything other than a field or int.
-                for (0..arr.size) |i|
+                for (0..@min(arr.size, output_len)) |i|
                     mem.setSlotAtIndex(dst_idx + i, if (ptr.child == F) output.*[i].to_int() else output.*[i]);
             } else {
                 std.debug.print("Unexpected pointer type: {any}\n", .{ptr});
