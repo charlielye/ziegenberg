@@ -2,8 +2,6 @@ const std = @import("std");
 const F = @import("../../bn254/fr.zig").Fr;
 const proto = @import("../../protocol/package.zig");
 const note_cache = @import("./note_cache.zig");
-const ForeignCallDispatcher = @import("dispatcher.zig").Dispatcher;
-const ContractAbi = @import("../../nargo/contract.zig").ContractAbi;
 
 pub fn KeyCtx(comptime K: type) type {
     return struct {
@@ -33,30 +31,11 @@ pub const CapsuleKey = struct {
     }
 };
 
-/// Immutable/global state across all calls
-pub const GlobalState = struct {
-    // Block and chain data (read-only)
-    version: F,
-    chain_id: F,
-    block_number: u32,
-    timestamp: u64,
-
-    // Contract data (read-only)
-    contracts_artifacts_path: []const u8,
-    contract_artifact_cache: *std.AutoHashMap(F, ContractAbi),
-    contract_instance_cache: *std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
-
-    // Shared infrastructure
-    fc_handler: *ForeignCallDispatcher,
-    allocator: std.mem.Allocator,
-
-    // Random number generator (shared but mutable - needs synchronization in future)
-    prng: *std.Random.DefaultPrng,
-};
-
 /// Mutable per-call state
 pub const CallState = struct {
-    // Execution context
+    // Execution context (immutable after initialization)
+    // These fields define the execution context for this call frame and should
+    // never be modified after the CallState is created.
     contract_address: proto.AztecAddress,
     msg_sender: proto.AztecAddress,
     function_selector: u32,
@@ -72,7 +51,7 @@ pub const CallState = struct {
     // Capsule storage (temporary storage used by contracts)
     capsule_storage: std.HashMap(CapsuleKey, []F, KeyCtx(CapsuleKey), 80),
 
-    // Execution data
+    // Execution data (input args and return values hash map).
     execution_cache: std.HashMap(F, []F, KeyCtx(F), 80),
     return_data: []F,
 
@@ -201,7 +180,7 @@ pub const CallState = struct {
     }
 
     /// Look up storage, checking parent chain if not found locally
-    pub fn getStorage(self: *CallState, key: []const u8) ?[]F {
+    pub fn getStorage(self: *const CallState, key: []const u8) ?[]F {
         if (self.storage_writes.get(key)) |value| {
             return value;
         }
@@ -215,7 +194,7 @@ pub const CallState = struct {
     }
 
     /// Look up execution cache, checking parent chain if not found locally
-    pub fn getFromExecutionCache(self: *CallState, hash: F) ?[]F {
+    pub fn getFromExecutionCache(self: *const CallState, hash: F) ?[]F {
         if (self.execution_cache.get(hash)) |value| {
             return value;
         }
@@ -229,7 +208,7 @@ pub const CallState = struct {
     }
 
     /// Load capsule data for a given slot (uses contract address)
-    pub fn loadCapsuleAtSlot(self: *CallState, allocator: std.mem.Allocator, slot: F) !?[]F {
+    pub fn loadCapsuleAtSlot(self: *const CallState, allocator: std.mem.Allocator, slot: F) !?[]F {
         const key = CapsuleKey{ .address = self.contract_address, .slot = slot };
 
         if (self.loadCapsule(key)) |capsule| {
@@ -248,7 +227,7 @@ pub const CallState = struct {
     }
 
     /// Look up capsule storage by key, checking parent chain if not found locally
-    pub fn loadCapsule(self: *CallState, key: CapsuleKey) ?[]F {
+    fn loadCapsule(self: *const CallState, key: CapsuleKey) ?[]F {
         if (self.capsule_storage.get(key)) |value| {
             return value;
         }
@@ -262,7 +241,7 @@ pub const CallState = struct {
     }
 
     /// Store capsule data with a key in the current context
-    pub fn storeCapsule(self: *CallState, key: CapsuleKey, capsule: []const F) !void {
+    fn storeCapsule(self: *CallState, key: CapsuleKey, capsule: []const F) !void {
         // If there's existing data, free it
         if (self.capsule_storage.get(key)) |existing| {
             self.capsule_storage.allocator.free(existing);
@@ -290,30 +269,3 @@ pub const PrivateLog = struct {
     emitted_length: u32 = 0,
 };
 
-/// Manages the call context for foreign calls
-pub const CallContext = struct {
-    global: *const GlobalState,
-    current: *CallState,
-    allocator: std.mem.Allocator,
-
-    pub fn createChild(self: *CallContext, target: proto.AztecAddress, selector: u32, is_static: bool) !CallContext {
-        const child_state = try self.current.createChild(self.allocator, target, selector, is_static);
-
-        return CallContext{
-            .global = self.global,
-            .current = child_state,
-            .allocator = self.allocator,
-        };
-    }
-
-    pub fn mergeToParent(self: *CallContext) !void {
-        if (self.current.parent) |parent| {
-            try parent.mergeChild(self.current);
-        }
-    }
-
-    pub fn destroy(self: *CallContext) void {
-        self.current.deinit();
-        self.allocator.destroy(self.current);
-    }
-};
