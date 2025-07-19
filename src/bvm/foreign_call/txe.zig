@@ -1074,39 +1074,14 @@ pub const Txe = struct {
     ) !BoundedVec(RetrievedNoteWithMetadata) {
         _ = status; // Not used in this minimal implementation
 
-        // Get pending notes from cache (including parent states)
-        const pending_notes = try self.current_state.getNotesFromCacheWithParents(allocator, self.current_state.contract_address, storage_slot);
+        // Get pending notes from cache (already filtered for nullifiers)
+        const pending_notes = try self.current_state.getNotes(allocator, self.current_state.contract_address, storage_slot);
         defer allocator.free(pending_notes);
-        std.debug.print("getNotes: note_cache.getNotes returned {} notes for contract {x} at slot {x}\n", .{
+        std.debug.print("getNotes: Found {} notes for contract {x} at slot {x}\n", .{
             pending_notes.len,
             self.current_state.contract_address,
             storage_slot,
         });
-
-        // For now, we only return pending notes (no database notes)
-        // Filter out nullified notes
-        var filtered_notes = std.ArrayList(proto.NoteData).init(allocator);
-        defer filtered_notes.deinit();
-        for (pending_notes) |note| {
-            // Check if nullifier exists in either current context or global nullifiers
-            var has_nullifier = false;
-            // Check current context's nullifiers (includes parent chain through merging)
-            for (self.current_state.nullifiers.items) |nullifier| {
-                if (nullifier.eql(note.siloed_nullifier)) {
-                    has_nullifier = true;
-                    break;
-                }
-            }
-
-            std.debug.print("getNotes: Processing note with hash {x}, has_nullifier: {}\n", .{
-                note.note_hash,
-                has_nullifier,
-            });
-            if (!has_nullifier) {
-                try filtered_notes.append(note);
-            }
-        }
-        std.debug.print("getNotes: After filtering, {} notes remain\n", .{filtered_notes.items.len});
 
         // Build select criteria
         const actual_num_selects = @min(num_selects, select_by_indexes.len);
@@ -1125,7 +1100,7 @@ pub const Txe = struct {
         }
 
         // Apply selection filters
-        var selected_notes = try note_cache.selectNotes(allocator, filtered_notes.items, selects);
+        var selected_notes = try note_cache.selectNotes(allocator, pending_notes, selects);
         defer selected_notes.deinit();
 
         // Build sort criteria

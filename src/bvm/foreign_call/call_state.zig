@@ -207,9 +207,10 @@ pub const CallState = struct {
         return null;
     }
 
-    /// Get notes for a contract address and storage slot, checking parent chain
-    pub fn getNotesFromCacheWithParents(self: *const CallState, allocator: std.mem.Allocator, contract_address: proto.AztecAddress, storage_slot: F) ![]proto.NoteData {
+    /// Get notes for a contract address and storage slot, filtered by nullifiers
+    pub fn getNotes(self: *const CallState, allocator: std.mem.Allocator, contract_address: proto.AztecAddress, storage_slot: F) ![]proto.NoteData {
         var all_notes = std.ArrayList(proto.NoteData).init(allocator);
+        defer all_notes.deinit();
         
         // Collect notes from this state and all parents
         var current: ?*const CallState = self;
@@ -219,11 +220,20 @@ pub const CallState = struct {
             current = state.parent;
         }
         
-        return all_notes.toOwnedSlice();
+        // Filter out nullified notes
+        var filtered_notes = std.ArrayList(proto.NoteData).init(allocator);
+        for (all_notes.items) |note| {
+            // Check if this note has been nullified
+            if (!self.hasNullifier(contract_address, note.siloed_nullifier)) {
+                try filtered_notes.append(note);
+            }
+        }
+        
+        return filtered_notes.toOwnedSlice();
     }
 
-    /// Check if a nullifier exists in this state or any parent state
-    pub fn hasNullifierInChain(self: *const CallState, contract_address: proto.AztecAddress, nullifier: F) bool {
+    /// Check if a nullifier exists
+    pub fn hasNullifier(self: *const CallState, contract_address: proto.AztecAddress, nullifier: F) bool {
         // Check local cache
         if (self.note_cache.hasNullifier(contract_address, nullifier)) {
             return true;
@@ -231,7 +241,7 @@ pub const CallState = struct {
 
         // Check parent chain
         if (self.parent) |parent| {
-            return parent.hasNullifierInChain(contract_address, nullifier);
+            return parent.hasNullifier(contract_address, nullifier);
         }
 
         return false;
