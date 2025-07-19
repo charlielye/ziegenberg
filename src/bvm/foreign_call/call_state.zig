@@ -31,6 +31,11 @@ pub const CapsuleKey = struct {
     }
 };
 
+pub const PrivateLog = struct {
+    fields: [18]F = [_]F{F.zero} ** 18,
+    emitted_length: u32 = 0,
+};
+
 /// Mutable per-call state
 pub const CallState = struct {
     // Execution context (immutable after initialization)
@@ -211,7 +216,7 @@ pub const CallState = struct {
     pub fn getNotes(self: *const CallState, allocator: std.mem.Allocator, contract_address: proto.AztecAddress, storage_slot: F) ![]proto.NoteData {
         var all_notes = std.ArrayList(proto.NoteData).init(allocator);
         defer all_notes.deinit();
-        
+
         // Collect notes from this state and all parents
         var current: ?*const CallState = self;
         while (current) |state| {
@@ -219,7 +224,7 @@ pub const CallState = struct {
             try all_notes.appendSlice(notes);
             current = state.parent;
         }
-        
+
         // Filter out nullified notes
         var filtered_notes = std.ArrayList(proto.NoteData).init(allocator);
         for (all_notes.items) |note| {
@@ -228,7 +233,7 @@ pub const CallState = struct {
                 try filtered_notes.append(note);
             }
         }
-        
+
         return filtered_notes.toOwnedSlice();
     }
 
@@ -293,18 +298,4 @@ pub const CallState = struct {
 
         try self.capsule_storage.put(key, capsule_copy);
     }
-
-    /// Clear all capsule storage
-    pub fn clearCapsuleStorage(self: *CallState) void {
-        var iter = self.capsule_storage.valueIterator();
-        while (iter.next()) |value| {
-            self.capsule_storage.allocator.free(value.*);
-        }
-        self.capsule_storage.clearRetainingCapacity();
-    }
-};
-
-pub const PrivateLog = struct {
-    fields: [18]F = [_]F{F.zero} ** 18,
-    emitted_length: u32 = 0,
 };

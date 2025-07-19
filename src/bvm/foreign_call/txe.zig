@@ -379,7 +379,6 @@ pub const Txe = struct {
     prng: *std.Random.DefaultPrng,
 
     // Call state.
-    root_state: call_state.CallState,
     current_state: *call_state.CallState,
 
     const CHAIN_ID = 1;
@@ -411,19 +410,27 @@ pub const Txe = struct {
             .contract_instance_cache = contract_instance_cache,
             .fc_handler = fc_handler,
             .prng = prng,
-            .root_state = call_state.CallState.init(allocator),
             .current_state = undefined,
         };
 
-        // Set current state to root
-        txe.current_state = &txe.root_state;
+        // Create initial state on heap
+        const initial_state = try allocator.create(call_state.CallState);
+        initial_state.* = call_state.CallState.init(allocator);
+        txe.current_state = initial_state;
 
         return txe;
     }
 
     pub fn deinit(self: *Txe) void {
-        // Deinit root state
-        self.root_state.deinit();
+        // Walk up to find the root state
+        var root = self.current_state;
+        while (root.parent) |parent| {
+            root = parent;
+        }
+
+        // Deinit and free the root state
+        root.deinit();
+        self.allocator.destroy(root);
 
         // Deinit components
         self.contract_artifact_cache.deinit();
@@ -454,15 +461,10 @@ pub const Txe = struct {
     pub fn reset(self: *Txe, _: std.mem.Allocator) !void {
         std.debug.print("reset called!\n", .{});
 
-        // Clear capsule storage from current state
-        self.current_state.clearCapsuleStorage();
-
-        // Clear and reinit root state
-        self.root_state.deinit();
-        self.root_state = call_state.CallState.init(self.allocator);
-
-        // Reset current state to root
-        self.current_state = &self.root_state;
+        // By the time reset is called, we should already be at the root state
+        // since child states are cleaned up in defer blocks
+        self.current_state.deinit();
+        self.current_state.* = call_state.CallState.init(self.allocator);
 
         std.debug.print("reset: cleared capsule storage and reset state\n", .{});
     }
