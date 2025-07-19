@@ -159,6 +159,7 @@ pub const ContractAbi = struct {
     name: []const u8,
     functions: []Function,
     // Following are computed at load time.
+    artifact_path: ?[]const u8 = null, // Path to the artifact this ABI was loaded from
     public_function: ?Function = null,
     private_functions: []Function = &[_]Function{},
     unconstrained_functions: []Function = &[_]Function{},
@@ -183,6 +184,10 @@ pub const ContractAbi = struct {
             .{ .ignore_unknown_fields = true },
         );
         var abi = parsed.value;
+
+        // Store the artifact path
+        abi.artifact_path = try allocator.dupe(u8, contract_path);
+
         for (abi.functions) |*f| {
             f.selector = f.computeSelector();
             if (std.mem.eql(u8, f.name, "public_dispatch")) {

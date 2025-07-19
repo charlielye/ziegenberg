@@ -37,3 +37,11 @@ The unit tests are named as per zigs test name.
 When writing code:
 
 - avoid rightward drift with optionals by using assigments with "orelse" style syntax and early returns.
+
+IMPORTANT FOR TESTING:
+At present your main test iteration command is:
+zig build build-exe -freference-trace && zb cvm run --artifact_path ./aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter\_\_extended_incrementing_and_decrementing_pass.json
+Do not waste time running other test related commands without asking first.
+
+IMPORTANT FOR CLEANUP:
+Only ever remove debug lines that you added yourself recently. Never remove debug lines without asking if they existed in the committed code.

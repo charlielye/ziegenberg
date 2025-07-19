@@ -1,7 +1,9 @@
 const std = @import("std");
 const F = @import("../../bn254/fr.zig").Fr;
 const proto = @import("../../protocol/package.zig");
+const nargo = @import("../../nargo/package.zig");
 const note_cache = @import("./note_cache.zig");
+const debug_info = @import("../debug_info.zig");
 
 pub fn KeyCtx(comptime K: type) type {
     return struct {
@@ -62,6 +64,12 @@ pub const CallState = struct {
 
     // Reference to parent for state lookup
     parent: ?*CallState = null,
+
+    // Contract ABI reference for debug info (contains artifact path)
+    contract_abi: ?*const nargo.ContractAbi = null,
+
+    // Error context if execution failed (for nested error reporting)
+    execution_error: ?debug_info.ErrorContext = null,
 
     pub fn init(allocator: std.mem.Allocator) CallState {
         return .{

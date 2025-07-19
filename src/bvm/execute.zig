@@ -472,7 +472,10 @@ pub const BrilligVm = struct {
 
     fn processForeignCall(self: *BrilligVm, opcode: *BrilligOpcode) !void {
         const fc = &opcode.ForeignCall;
-        try self.fc_handler.handleForeignCall(&self.mem, fc);
+        self.fc_handler.handleForeignCall(&self.mem, fc) catch |err| {
+            std.debug.print("Foreign call '{s}' failed with error: {}\n", .{ fc.function, err });
+            return err;
+        };
         self.pc += 1;
     }
 

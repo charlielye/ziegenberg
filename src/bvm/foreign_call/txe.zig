@@ -429,15 +429,14 @@ pub const Txe = struct {
     }
 
     pub fn deinit(self: *Txe) void {
-        // Walk up to find the root state
-        var root = self.current_state;
-        while (root.parent) |parent| {
-            root = parent;
+        // Free state chain.
+        var state = self.current_state;
+        while (true) {
+            const parent = state.parent;
+            state.deinit();
+            if (parent == null) break;
+            state = parent.?;
         }
-
-        // Deinit and free the root state
-        root.deinit();
-        self.allocator.destroy(root);
 
         // Deinit components
         self.contract_artifact_cache.deinit();
@@ -669,6 +668,13 @@ pub const Txe = struct {
         side_effect_counter: u32,
         is_static_call: bool,
     ) ![2]F {
+        std.debug.print("callPrivateFunction called with:\n", .{});
+        std.debug.print("  target: {x}\n", .{target_contract_address});
+        std.debug.print("  selector: {x}\n", .{function_selector});
+        std.debug.print("  args_hash: {x}\n", .{args_hash});
+        std.debug.print("  side_effect_counter: {}\n", .{side_effect_counter});
+        std.debug.print("  is_static_call: {}\n", .{is_static_call});
+        std.debug.print("  current_state.parent: {}\n", .{self.current_state.parent != null});
 
         // Create child state for the nested call
         const child_state = try self.current_state.createChild(self.allocator, target_contract_address, function_selector, is_static_call);
@@ -678,23 +684,18 @@ pub const Txe = struct {
         const saved_current = self.current_state;
         self.current_state = child_state;
 
-        defer {
-            // Merge child state back into parent (if not static)
-            if (!is_static_call) {
-                saved_current.mergeChild(child_state) catch unreachable;
-            }
-            // Restore previous state
-            self.current_state = saved_current;
-            // Clean up child
-            child_state.deinit();
-            self.allocator.destroy(child_state);
-        }
-
         // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {
+            std.debug.print("Contract instance not found for address: {x}\n", .{target_contract_address});
             return error.ContractInstanceNotFound;
         };
-        const function = try contract_instance.abi.getFunctionBySelector(function_selector);
+        const function = contract_instance.abi.getFunctionBySelector(function_selector) catch |err| {
+            std.debug.print("Function not found for selector: {x} in contract {x}\n", .{ function_selector, target_contract_address });
+            return err;
+        };
+
+        // Set the contract ABI reference for debugging
+        child_state.contract_abi = &contract_instance.abi;
 
         std.debug.print("Executing external function: {s}@{x} (static: {})\n", .{
             function.name,
@@ -729,17 +730,9 @@ pub const Txe = struct {
         var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata.items, self.fc_handler);
         std.debug.print("callPrivateFunction: Entering nested cvm\n", .{});
         circuit_vm.executeVm(0, false) catch |err| {
-            if (err == error.Trapped) {
-                // TODO: Get actual artifact path.
-                if (circuit_vm.brillig_error_context) |ctx| {
-                    debug_info.printBrilligTrapError(
-                        allocator,
-                        &ctx,
-                        function.name,
-                        function_selector,
-                        "data/contracts/Counter.json",
-                    );
-                }
+            // If this was a trap, capture the error context in the child state
+            if (err == error.Trapped and circuit_vm.brillig_error_context != null) {
+                child_state.execution_error = circuit_vm.brillig_error_context;
             }
             return err;
         };
@@ -773,6 +766,16 @@ pub const Txe = struct {
                 try child_state.nullifiers.append(nullifier.value);
             }
         }
+
+        // Success path: merge state and cleanup
+        if (!is_static_call) {
+            try saved_current.mergeChild(child_state);
+        }
+        child_state.deinit();
+        self.allocator.destroy(child_state);
+
+        // Restore parent state only on success
+        self.current_state = saved_current;
 
         return [2]F{ end_side_effect_counter, returns_hash };
     }
@@ -949,40 +952,40 @@ pub const Txe = struct {
         // First check if it's an account we created
         if (self.accounts.get(address)) |complete_address| {
             var result = std.ArrayList(F).init(allocator);
-            
+
             // Get all public key fields using toFields
             const key_fields = complete_address.public_keys.toFields();
             try result.appendSlice(&key_fields);
-            
+
             // Add partial address
             try result.append(complete_address.partial_address.value);
-            
+
             return result.toOwnedSlice();
         }
-        
+
         // Look up the contract instance to get its public keys
         const instance = self.contract_instance_cache.get(address) orelse {
             // If not found anywhere, return default public keys with a deterministic partial address
             var result = std.ArrayList(F).init(allocator);
             const default_keys = proto.PublicKeys.default();
-            
+
             // Get all public key fields using toFields
             const key_fields = default_keys.toFields();
             try result.appendSlice(&key_fields);
-            
+
             // Add partial address
             try result.append(address.value.mul(F.from_int(0x42)));
-            
+
             return result.toOwnedSlice();
         };
 
         // For contracts, return their stored public keys
         var result = std.ArrayList(F).init(allocator);
-        
+
         // Get all public key fields using toFields
         const key_fields = instance.public_keys.toFields();
         try result.appendSlice(&key_fields);
-        
+
         // Add partial address
         const partial_address = proto.PartialAddress.compute(
             instance.current_contract_class_id,
@@ -991,7 +994,7 @@ pub const Txe = struct {
             instance.deployer,
         ).value;
         try result.append(partial_address);
-        
+
         return result.toOwnedSlice();
     }
 
@@ -1010,20 +1013,15 @@ pub const Txe = struct {
         const saved_current = self.current_state;
         self.current_state = child_state;
 
-        defer {
-            // Restore previous state
-            self.current_state = saved_current;
-            // Clean up child
-            child_state.deinit();
-            self.allocator.destroy(child_state);
-        }
-
         // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.contract_instance_cache.get(target_contract_address) orelse {
             return error.ContractInstanceNotFound;
         };
 
         const function = try contract_instance.abi.getFunctionBySelector(function_selector);
+
+        // Set the contract ABI reference for debugging
+        child_state.contract_abi = &contract_instance.abi;
         std.debug.print("simulateUtilityFunction called with target: {x}, selector: {x}, name: {s}, args_hash: {x}\n", .{
             target_contract_address,
             function_selector,
@@ -1042,17 +1040,9 @@ pub const Txe = struct {
         var circuit_vm = try cvm.CircuitVm.init(allocator, &program, calldata, self.fc_handler);
         std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{self.current_state.contract_address});
         circuit_vm.executeVm(0, false) catch |err| {
-            if (err == error.Trapped) {
-                // TODO: Get actual artifact path.
-                if (circuit_vm.brillig_error_context) |ctx| {
-                    debug_info.printBrilligTrapError(
-                        allocator,
-                        &ctx,
-                        function.name,
-                        function_selector,
-                        "data/contracts/Counter.json",
-                    );
-                }
+            // If this was a trap, capture the error context in the child state
+            if (err == error.Trapped and circuit_vm.brillig_error_context != null) {
+                child_state.execution_error = circuit_vm.brillig_error_context;
             }
             return err;
         };
@@ -1080,6 +1070,13 @@ pub const Txe = struct {
             target_contract_address,
         });
 
+        // Success path: cleanup (utility functions are always static)
+        child_state.deinit();
+        self.allocator.destroy(child_state);
+
+        // Restore parent state only on success
+        self.current_state = saved_current;
+
         return return_hash;
     }
 
@@ -1089,22 +1086,6 @@ pub const Txe = struct {
         note_nonce: F,
         nonzero_note_hash_counter: u256,
         note: proto.Note,
-
-        // pub fn toForeignCallParam(self: @This(), allocator: std.mem.Allocator) !ForeignCallParam {
-        //     var fields = std.ArrayList(ForeignCallParam).init(allocator);
-
-        //     // Add fields in the expected order
-        //     try fields.append(.{ .Single = self.contract_address.value.to_int() });
-        //     try fields.append(.{ .Single = self.note_nonce.to_int() });
-        //     try fields.append(.{ .Single = self.nonzero_note_hash_counter });
-
-        //     // Add packed note data
-        //     for (self.note.items) |field| {
-        //         try fields.append(.{ .Single = field.to_int() });
-        //     }
-
-        //     return .{ .Array = try fields.toOwnedSlice() };
-        // }
     };
 
     pub fn getNotes(
@@ -1233,6 +1214,61 @@ pub const Txe = struct {
             counter,
             self.current_state.contract_address,
         });
+    }
+
+    pub fn notifyCreatedNullifier(
+        self: *Txe,
+        _: std.mem.Allocator,
+        inner_nullifier: F,
+    ) !void {
+        // Silo the nullifier to the current contract
+        const siloed_nullifier = poseidon.hash(&[_]F{
+            self.current_state.contract_address.value,
+            inner_nullifier,
+        });
+
+        // Add the nullifier to the current state
+        try self.current_state.nullifiers.append(siloed_nullifier);
+
+        std.debug.print("notifyCreatedNullifier: Added nullifier {x} (siloed: {x}) for contract {x}\n", .{
+            inner_nullifier,
+            siloed_nullifier,
+            self.current_state.contract_address,
+        });
+    }
+
+    pub fn advanceBlocksBy(
+        self: *Txe,
+        _: std.mem.Allocator,
+        blocks: F,
+    ) !void {
+        const n_blocks = @as(u32, @intCast(blocks.to_int()));
+        std.debug.print("advanceBlocksBy: time traveling {} blocks\n", .{n_blocks});
+
+        var i: u32 = 0;
+        while (i < n_blocks) : (i += 1) {
+            // Advance block number
+            self.block_number += 1;
+
+            // Also advance timestamp by one slot duration
+            self.timestamp += Txe.AZTEC_SLOT_DURATION;
+
+            std.debug.print("advanceBlocksBy: advanced to block {} at timestamp {}\n", .{
+                self.block_number,
+                self.timestamp,
+            });
+        }
+    }
+
+    pub fn incrementAppTaggingSecretIndexAsSender(
+        _: *Txe,
+        _: std.mem.Allocator,
+        _: proto.AztecAddress,
+        _: proto.AztecAddress,
+    ) !void {
+        // This function increments the tagging secret index for a sender
+        // For our minimal implementation, we'll just log and continue
+        std.debug.print("incrementAppTaggingSecretIndexAsSender: called (no-op in minimal implementation)\n", .{});
     }
 
     pub fn privateCallNewFlow(

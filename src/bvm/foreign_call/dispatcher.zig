@@ -45,6 +45,7 @@ pub const Dispatcher = struct {
         }
 
         // We didn't find a matching function. Fallback on default foreign call handler.
+        std.debug.print("Foreign call not found in txe or mocker: '{s}'\n", .{fc.function});
         try foreign_call.handleForeignCall(arena.allocator(), mem, fc, params);
     }
 };

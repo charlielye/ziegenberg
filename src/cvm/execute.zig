@@ -19,6 +19,8 @@ const verify_signature = @import("../blackbox/ecdsa.zig").verify_signature;
 const toml = @import("toml");
 const msm = @import("../msm/naive.zig").msm;
 const ForeignCallDispatcher = @import("../bvm/foreign_call/dispatcher.zig").Dispatcher;
+const Txe = @import("../bvm/foreign_call/txe.zig").Txe;
+const CallState = @import("../bvm/foreign_call/call_state.zig").CallState;
 
 pub const ExecuteOptions = struct {
     // If null, the current working directory is used.
@@ -202,13 +204,65 @@ pub fn execute(options: ExecuteOptions) !void {
 
         // If this was a Brillig trap, show debug info
         if (err == error.Trapped and vm.brillig_error_context != null) {
-            std.debug.print("\nSource location:\n", .{});
+            std.debug.print("\nExecution Stack Trace:\n", .{});
 
-            // For program artifacts (tests), we don't need the function name
-            // as they use direct PC lookup in debug_symbols
-            debug_info.lookupSourceLocation(allocator, artifact_path, "test_increment", vm.brillig_error_context.?.pc) catch |lookup_err| {
-                std.debug.print("Could not resolve source location: {}\n", .{lookup_err});
-            };
+            // Walk the CallState chain if we have access to Txe
+            // Always try to walk the chain, even if parent is null (we might be at root)
+            {
+                // We have nested calls, walk the chain
+                var level: usize = 0;
+                var current_state: ?*CallState = vm.fc_handler.txe.current_state;
+
+                while (current_state) |state| : (current_state = state.parent) {
+                    std.debug.print("\n[{}] ", .{level});
+
+                    if (state.contract_abi) |abi| {
+                        std.debug.print("Contract: {s} @ {x}\n", .{
+                            abi.name,
+                            state.contract_address,
+                        });
+                        std.debug.print("    Function: selector {x}\n", .{state.function_selector});
+
+                        // Try to find function name
+                        for (abi.functions) |func| {
+                            if (func.selector == state.function_selector) {
+                                std.debug.print("    Function name: {s}\n", .{func.name});
+                                break;
+                            }
+                        }
+
+                        // Show source location if we have error context for this level
+                        const error_ctx = if (state.execution_error) |exec_err| exec_err else if (level == 0) vm.brillig_error_context else null;
+
+                        if (error_ctx != null) {
+                            std.debug.print("    Source location:\n", .{});
+
+                            // Find the function name for this selector
+                            var func_name: []const u8 = "unknown";
+                            for (abi.functions) |f| {
+                                if (f.selector == state.function_selector) {
+                                    func_name = f.name;
+                                    break;
+                                }
+                            }
+
+                            // Always use the test artifact path which contains all debug symbols
+                            debug_info.lookupSourceLocation(allocator, artifact_path, func_name, error_ctx.?.pc) catch |lookup_err| {
+                                std.debug.print("      Could not resolve: {}\n", .{lookup_err});
+                            };
+                        }
+                    } else {
+                        // Top-level test execution
+                        std.debug.print("Test execution\n", .{});
+                        std.debug.print("    Source location:\n", .{});
+                        debug_info.lookupSourceLocation(allocator, artifact_path, "test", vm.brillig_error_context.?.pc) catch |lookup_err| {
+                            std.debug.print("      Could not resolve: {}\n", .{lookup_err});
+                        };
+                    }
+
+                    level += 1;
+                }
+            }
         }
 
         try vm.witnesses.printWitnesses(false);
