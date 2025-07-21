@@ -1,9 +1,9 @@
 const std = @import("std");
-const F = @import("../../bn254/fr.zig").Fr;
-const proto = @import("../../protocol/package.zig");
-const nargo = @import("../../nargo/package.zig");
-const note_cache = @import("./note_cache.zig");
-const debug_info = @import("../debug_info.zig");
+const F = @import("../bn254/fr.zig").Fr;
+const proto = @import("../protocol/package.zig");
+const nargo = @import("../nargo/package.zig");
+const bvm = @import("../bvm/package.zig");
+const note_cache = @import("note_cache.zig");
 
 pub fn KeyCtx(comptime K: type) type {
     return struct {
@@ -69,7 +69,7 @@ pub const CallState = struct {
     contract_abi: ?*const nargo.ContractAbi = null,
 
     // Error context if execution failed (for nested error reporting)
-    execution_error: ?debug_info.ErrorContext = null,
+    execution_error: ?bvm.brillig_vm.ErrorContext = null,
 
     pub fn init(allocator: std.mem.Allocator) CallState {
         return .{

@@ -1,6 +1,6 @@
 const std = @import("std");
-const F = @import("../../bn254/fr.zig").Fr;
-const proto = @import("../../protocol/package.zig");
+const F = @import("../bn254/fr.zig").Fr;
+const proto = @import("../protocol/package.zig");
 
 const PropertySelector = struct {
     index: u32,

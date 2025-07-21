@@ -1,10 +1,10 @@
 const std = @import("std");
 const Memory = @import("../memory.zig").Memory;
-const foreign_call = @import("./foreign_call.zig");
 const ForeignCallParam = @import("./param.zig").ForeignCallParam;
 const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
-const structDispatcher = @import("./struct_dispatcher.zig").structDispatcher;
+const marshal = @import("marshal.zig");
+const structDispatcher = @import("struct_dispatcher.zig").structDispatcher;
 
 const MockedCall = struct {
     /// The id of the mock, used to update or remove it
@@ -62,10 +62,7 @@ pub const Mocker = struct {
                     std.debug.print("Destination value types: {any}\n", .{fc.destination_value_types});
                     call.last_called_params = try ForeignCallParam.sliceDeepCopy(params, self.allocator);
                     call.times_called += 1;
-                    // _ = foreign_call.marshalOutput(&call.result, mem, fc.destinations);
-                    // for (call.result) |*r_param| {
-                    foreign_call.marshalForeignCallParam(call.result, mem, fc.destinations, fc.destination_value_types);
-                    // }
+                    marshal.marshalForeignCallParam(call.result, mem, fc.destinations, fc.destination_value_types);
                     if (call.times_left) |*left| {
                         left.* -= 1;
                         if (left.* == 0) {

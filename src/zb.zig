@@ -1,8 +1,8 @@
 const std = @import("std");
 const avmExecute = @import("./avm/execute.zig").execute;
 const avmDisassemble = @import("./avm/disassemble.zig").disassemble;
-const bvmExecute = @import("./bvm/execute.zig").execute;
-const bvmDisassemble = @import("./bvm/disassemble.zig").disassemble;
+// const bvmExecute = @import("./bvm/execute.zig").execute;
+// const bvmDisassemble = @import("./bvm/disassemble.zig").disassemble;
 const cvmExecute = @import("./cvm/execute.zig").execute;
 const cvmDisassemble = @import("./cvm/disassemble.zig").disassemble;
 const mt = @import("./merkle_tree/package.zig");
@@ -11,6 +11,7 @@ const F = @import("./bn254/fr.zig").Fr;
 const App = @import("yazap").App;
 const Arg = @import("yazap").Arg;
 const ArgMatches = @import("yazap").ArgMatches;
+const Txe = @import("./txe/package.zig").Txe;
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -38,21 +39,15 @@ pub fn main() !void {
     }
 
     {
-        var bvm_cmd = app.createCommand("bvm", "Brillig VM commands.");
+        var txe_cmd = app.createCommand("txe", "Run the given artifact within the Txe.");
+        try txe_cmd.addArg(Arg.positional("artifact_path", "Path to file containing nargo json contract artifact.", null));
+        try txe_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to toml containing calldata (default: Prover.toml)."));
+        try txe_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
+        try txe_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
+        try txe_cmd.addArg(Arg.booleanOption("debug", 'd', "Step through execution by source line."));
+        txe_cmd.setProperty(.help_on_empty_args);
 
-        var run_cmd = app.createCommand("run", "Run the given bytecode with the given calldata.");
-        try run_cmd.addArg(Arg.singleValueOption("bytecode_path", 'b', "Path to file containing raw brillig bytecode (otherwise parse target/<package_name>.json)."));
-        try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to file containing raw calldata (otherwise parse Prover.toml)."));
-        try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
-        try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
-        run_cmd.setProperty(.help_on_empty_args);
-
-        var dis_cmd = app.createCommand("dis", "Disassemble the given bytecode.");
-        try dis_cmd.addArg(Arg.positional("bytecode_path", null, null));
-        try dis_cmd.addArg(Arg.booleanOption("binary", 'b', "Output the pure brillig as binary."));
-
-        try bvm_cmd.addSubcommands(&.{ run_cmd, dis_cmd });
-        try root.addSubcommand(bvm_cmd);
+        try root.addSubcommand(txe_cmd);
     }
 
     {
@@ -66,6 +61,7 @@ pub fn main() !void {
         try run_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to toml file containing calldata."));
         try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
         try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
+        try run_cmd.addArg(Arg.booleanOption("debug", 'd', "Step through execution by source line."));
         try run_cmd.addArg(Arg.booleanOption("binary", 'b', "Output the witness as binary."));
         // run_cmd.setProperty(.help_on_empty_args);
 
@@ -97,12 +93,12 @@ pub fn main() !void {
         return;
     }
 
-    if (matches.subcommandMatches("bvm")) |bvm_matches| {
-        if (!bvm_matches.containsArgs()) {
+    if (matches.subcommandMatches("txe")) |txe_matches| {
+        if (!txe_matches.containsArgs()) {
             try app.displaySubcommandHelp();
             return;
         }
-        try handleBvm(bvm_matches);
+        try handleTxe(txe_matches);
         return;
     }
 
@@ -156,48 +152,36 @@ fn handleAvm(matches: ArgMatches) !void {
     }
 }
 
-fn handleBvm(matches: ArgMatches) !void {
-    if (matches.subcommandMatches("run")) |cmd_matches| {
-        const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
-        const calldata_path = cmd_matches.getSingleValue("calldata_path");
-        bvmExecute(.{
-            .file_path = bytecode_path,
-            .calldata_path = calldata_path,
-            .show_stats = cmd_matches.containsArg("stats"),
-            .show_trace = cmd_matches.containsArg("trace"),
-        }) catch |err| {
-            std.debug.print("{}\n", .{err});
-            // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
-            std.posix.exit(switch (err) {
-                error.Trapped => 2,
-                else => 1,
-            });
-        };
-        return;
-    }
-
-    if (matches.subcommandMatches("dis")) |cmd_matches| {
-        const bytecode_path = cmd_matches.getSingleValue("bytecode_path") orelse null;
-        try bvmDisassemble(bytecode_path, cmd_matches.containsArg("binary"));
-        return;
-    }
+fn handleTxe(cmd_matches: ArgMatches) !void {
+    const txe = try Txe.init(std.heap.page_allocator, "data/contracts");
+    defer txe.deinit();
+    txe.execute(cmd_matches.getSingleValue("artifact_path").?, .{
+        .calldata_path = cmd_matches.getSingleValue("calldata_path"),
+        .show_stats = cmd_matches.containsArg("stats"),
+        .show_trace = cmd_matches.containsArg("trace"),
+        .debug_mode = cmd_matches.containsArg("debug"),
+    }) catch |err| {
+        std.debug.print("{}\n", .{err});
+        // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
+        std.posix.exit(switch (err) {
+            error.Trapped => 2,
+            else => 1,
+        });
+    };
+    return;
 }
 
 fn handleCvm(matches: ArgMatches) !void {
     if (matches.subcommandMatches("run")) |cmd_matches| {
-        const project_path = cmd_matches.getSingleValue("project_path");
-        const artifact_path = cmd_matches.getSingleValue("artifact_path");
-        const witness_path = cmd_matches.getSingleValue("witness_path");
-        const bytecode_path = cmd_matches.getSingleValue("bytecode_path");
-        const calldata_path = cmd_matches.getSingleValue("calldata_path");
         cvmExecute(.{
-            .project_path = project_path,
-            .artifact_path = artifact_path,
-            .witness_path = witness_path,
-            .bytecode_path = bytecode_path,
-            .calldata_path = calldata_path,
-            // .show_stats = cmd_matches.containsArg("stats"),
+            .project_path = cmd_matches.getSingleValue("project_path"),
+            .artifact_path = cmd_matches.getSingleValue("artifact_path"),
+            .witness_path = cmd_matches.getSingleValue("witness_path"),
+            .bytecode_path = cmd_matches.getSingleValue("bytecode_path"),
+            .calldata_path = cmd_matches.getSingleValue("calldata_path"),
+            .show_stats = cmd_matches.containsArg("stats"),
             .show_trace = cmd_matches.containsArg("trace"),
+            .debug_mode = cmd_matches.containsArg("debug"),
             .binary = cmd_matches.containsArg("binary"),
         }) catch |err| {
             // std.debug.print("Exiting due to error: {}\n", .{err});

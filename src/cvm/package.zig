@@ -1,10 +1,11 @@
 const std = @import("std");
 const disassemble = @import("./disassemble.zig");
 const execute = @import("./execute.zig");
-const io = @import("./io.zig");
+pub const io = @import("./io.zig");
+const circuit_vm = @import("./circuit_vm.zig");
 
 // Export types that are used externally
-pub const CircuitVm = execute.CircuitVm;
+pub const CircuitVm = circuit_vm.CircuitVm;
 pub const deserialize = io.deserialize;
 
 test {
@@ -12,4 +13,5 @@ test {
     _ = disassemble;
     _ = execute;
     _ = io;
+    _ = circuit_vm;
 }

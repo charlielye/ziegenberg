@@ -1,8 +1,7 @@
 const std = @import("std");
 const Memory = @import("../memory.zig").Memory;
-const foreign_call = @import("./foreign_call.zig");
+const marshal = @import("./marshal.zig");
 const ForeignCallParam = @import("./param.zig").ForeignCallParam;
-const F = @import("../../bn254/fr.zig").Fr;
 const io = @import("../io.zig");
 
 /// Dispatch function for foreign calls.
@@ -93,7 +92,7 @@ pub fn structDispatcher(
                         };
                         const opt_param = ForeignCallParam{ .Array = &opt_array };
                         std.debug.print("Marshal into {s} arg {} (optional): {any}\n", .{ decl.name, i, opt_param });
-                        foreign_call.marshalInput(&args[i], allocator, opt_param) catch |err| {
+                        marshal.marshalInput(&args[i], allocator, opt_param) catch |err| {
                             std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, opt_param });
                             return err;
                         };
@@ -101,7 +100,7 @@ pub fn structDispatcher(
                     } else {
                         std.debug.print("Marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
                         // Marshal the ForeignCallParam into the argument type.
-                        foreign_call.marshalInput(&args[i], allocator, params[param_idx]) catch |err| {
+                        marshal.marshalInput(&args[i], allocator, params[param_idx]) catch |err| {
                             std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
                             return err;
                         };
@@ -111,7 +110,7 @@ pub fn structDispatcher(
                 // Make the function call.
                 const r = try @call(.auto, field, args);
                 std.debug.print("Function {s} returned: {any}\n", .{ decl.name, r });
-                foreign_call.marshalOutput(&r, mem, fc.destinations, fc.destination_value_types);
+                marshal.marshalOutput(&r, mem, fc.destinations, fc.destination_value_types);
                 return true;
             }
         }
