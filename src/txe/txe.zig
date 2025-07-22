@@ -106,7 +106,8 @@ pub const Txe = struct {
                     const error_ctx = state.execution_error orelse return error.NoExecutionError;
                     std.debug.print("    Source location:\n", .{});
 
-                    const fn_debug_info = try f.getDebugInfo(allocator);
+                    // Pass the contract's file_map
+                    const fn_debug_info = try f.getDebugInfo(allocator, abi.file_map);
 
                     // Print source location for current PC.
                     std.debug.print("      [0] PC: {}\n", .{error_ctx.pc});

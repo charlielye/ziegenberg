@@ -29,6 +29,7 @@ pub const DebugInfo = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         debug_symbols_b64: []const u8,
+        file_map: ?std.json.Value,
     ) !DebugInfo {
         // Decode and decompress
         const decoded = try decodeBase64(allocator, debug_symbols_b64);
@@ -65,9 +66,9 @@ pub const DebugInfo = struct {
             try self.parsePCMappings(debug_info);
         }
 
-        // Cache file info
-        if (root.get("file_map")) |file_map| {
-            var iter = file_map.object.iterator();
+        // Cache file info from the passed file_map
+        if (file_map) |fm| {
+            var iter = fm.object.iterator();
             while (iter.next()) |entry| {
                 const file_obj = entry.value_ptr.object;
                 const path = (file_obj.get("path") orelse continue).string;

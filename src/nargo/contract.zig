@@ -167,10 +167,10 @@ pub const Function = struct {
         return total;
     }
 
-    pub fn getDebugInfo(self: *const Function, allocator: std.mem.Allocator) !*const debug_info.DebugInfo {
+    pub fn getDebugInfo(self: *const Function, allocator: std.mem.Allocator, file_map: ?std.json.Value) !*const debug_info.DebugInfo {
         if (self.debug_info == null) {
             if (self.debug_symbols) |symbols| {
-                @constCast(self).debug_info = try debug_info.DebugInfo.init(allocator, symbols);
+                @constCast(self).debug_info = try debug_info.DebugInfo.init(allocator, symbols, file_map);
             } else {
                 return error.DebugSymbolsNotFound;
             }
@@ -184,12 +184,14 @@ const JsonContractAbi = struct {
     noir_version: []const u8,
     name: []const u8,
     functions: []JsonFunction,
+    file_map: ?std.json.Value = null,
 };
 
 pub const ContractAbi = struct {
     noir_version: []const u8,
     name: []const u8,
     functions: []Function,
+    file_map: ?std.json.Value = null,
     // Following are computed at load time.
     artifact_path: ?[]const u8 = null, // Path to the artifact this ABI was loaded from
     public_function: ?Function = null,
@@ -237,6 +239,7 @@ pub const ContractAbi = struct {
             .noir_version = json_abi.noir_version,
             .name = json_abi.name,
             .functions = functions,
+            .file_map = json_abi.file_map,
             .artifact_path = null,
             .public_function = null,
             .private_functions = &[_]Function{},

@@ -40,6 +40,7 @@ const JsonArtifactAbi = struct {
     abi: Abi,
     bytecode: []const u8,
     debug_symbols: ?[]const u8 = null,
+    file_map: ?std.json.Value = null,
 };
 
 pub const ArtifactAbi = struct {
@@ -48,6 +49,7 @@ pub const ArtifactAbi = struct {
     abi: Abi,
     bytecode: []const u8,
     debug_symbols: ?[]const u8 = null,
+    file_map: ?std.json.Value = null,
     // Lazy loaded.
     debug_info: ?debug_info.DebugInfo = null,
 
@@ -78,6 +80,7 @@ pub const ArtifactAbi = struct {
             .abi = json_abi.abi,
             .bytecode = json_abi.bytecode,
             .debug_symbols = json_abi.debug_symbols,
+            .file_map = json_abi.file_map,
             .debug_info = null,
         };
     }
@@ -98,7 +101,7 @@ pub const ArtifactAbi = struct {
     pub fn getDebugInfo(self: *const ArtifactAbi, allocator: std.mem.Allocator) !*const debug_info.DebugInfo {
         if (self.debug_info == null) {
             if (self.debug_symbols) |symbols| {
-                @constCast(self).debug_info = try debug_info.DebugInfo.init(allocator, symbols);
+                @constCast(self).debug_info = try debug_info.DebugInfo.init(allocator, symbols, self.file_map);
             } else {
                 return error.DebugSymbolsNotFound;
             }
