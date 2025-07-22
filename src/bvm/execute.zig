@@ -10,7 +10,6 @@ const blackbox = @import("../blackbox/blackbox.zig");
 const rdtsc = @import("../timer/rdtsc.zig").rdtsc;
 const Memory = @import("./memory.zig").Memory;
 const ForeignCallDispatcher = @import("../bvm/foreign_call/dispatcher.zig").Dispatcher;
-const debug_info = @import("./debug_info.zig");
 const debug_context = @import("./debug_context.zig");
 const DebugContext = debug_context.DebugContext;
 const DebugMode = debug_context.DebugMode;

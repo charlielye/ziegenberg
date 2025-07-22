@@ -5,7 +5,6 @@ const GrumpkinFr = @import("../grumpkin/fr.zig").Fr;
 const solve = @import("./expression_solver.zig").solve;
 const evaluate = @import("./expression_solver.zig").evaluate;
 const bvm = @import("../bvm/package.zig");
-const debug_info = @import("../bvm/debug_info.zig");
 const debug_context = @import("../bvm/debug_context.zig");
 const DebugContext = debug_context.DebugContext;
 const sha256 = @import("../blackbox/sha256_compress.zig");
