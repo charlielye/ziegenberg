@@ -218,7 +218,7 @@ pub const ContractAbi = struct {
             .{ .ignore_unknown_fields = true },
         );
         const json_abi = parsed.value;
-        
+
         // Convert JsonFunction to Function
         var functions = try allocator.alloc(Function, json_abi.functions.len);
         for (json_abi.functions, 0..) |jf, i| {
@@ -230,27 +230,14 @@ pub const ContractAbi = struct {
                 .bytecode = jf.bytecode,
                 .verification_key = jf.verification_key,
                 .debug_symbols = jf.debug_symbols,
-                .selector = 0,
-                .debug_info = null,
             };
         }
-        
+
         var abi = ContractAbi{
             .noir_version = json_abi.noir_version,
             .name = json_abi.name,
             .functions = functions,
             .file_map = json_abi.file_map,
-            .artifact_path = null,
-            .public_function = null,
-            .private_functions = &[_]Function{},
-            .unconstrained_functions = &[_]Function{},
-            .initializer_functions = &[_]Function{},
-            .private_function_tree_root = F.zero,
-            .unconstrained_function_tree_root = F.zero,
-            .public_bytecode_commitment = F.zero,
-            .artifact_hash = F.zero,
-            .default_initializer = null,
-            .class_id = F.zero,
         };
 
         // Store the artifact path
