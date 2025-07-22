@@ -62,103 +62,75 @@ pub const Txe = struct {
         std.debug.assert(program.functions.len == 1);
         std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
-        // var t = try std.time.Timer.start();
-        // std.debug.print("Initing...\n", .{});
-
-        // Create debug context if needed
-        // var debug_ctx_storage: ?DebugContext = null;
-        // defer if (debug_ctx_storage) |*ctx| ctx.deinit();
-
-        // var debug_ctx_ptr: ?*DebugContext = null;
-        // if (options.debug_mode or options.show_trace) {
-        //     const mode: DebugMode = if (options.debug_mode) .step_by_line else .trace;
-        //     debug_ctx_storage = DebugContext.init(allocator, mode);
-        //     debug_ctx_ptr = &debug_ctx_storage.?;
-
-        //     // Load debug symbols if available
-        //     if (debug_ctx_ptr) |ctx| {
-        //         const function_name = if (std.mem.indexOf(u8, artifact_path, "test") != null) "test" else "main";
-        //         ctx.loadDebugSymbols(artifact_path, function_name) catch |err| {
-        //             std.debug.print("Warning: Could not load debug symbols: {}\n", .{err});
-        //         };
-        //     }
-        // }
-
-        // std.debug.print("Init time: {}us\n", .{t.read() / 1000});
-
-        std.debug.print("Executing...\n", .{});
-        // t.reset();
-
         var t = try std.time.Timer.start();
-
+        std.debug.print("Initing...\n", .{});
         // Create and execute the circuit VM
         var circuit_vm = try cvm.CircuitVm(Dispatcher).init(allocator, &program, calldata, &self.fc_handler);
         defer circuit_vm.deinit();
+        std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
-        // Execute with debug context
-        const result = circuit_vm.executeVm(0, .{ .debug_ctx = null });
-        std.debug.print("time taken: {}us\n", .{t.read() / 1000});
+        std.debug.print("Executing...\n", .{});
+        t.reset();
+        defer std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 
-        result catch |err| {
+        circuit_vm.executeVm(0, .{ .debug_ctx = null }) catch |err| {
             std.debug.print("Execution failed: {}\n", .{err});
 
-            // If this was a Brillig trap, show debug info
-            if (err == error.Trapped) {
-                std.debug.print("\nExecution Stack Trace:\n", .{});
+            if (err != error.Trapped) {
+                return err;
+            }
 
-                // Walk the CallState chain if we have access to Txe
-                // Always try to walk the chain, even if parent is null (we might be at root)
-                {
-                    // We have nested calls, walk the chain
-                    var level: usize = 0;
-                    var current_state: ?*CallState = self.impl.state.current_state;
+            // If this was a Brillig trap, show debug info.
+            std.debug.print("\nExecution Stack Trace:\n", .{});
 
-                    while (current_state) |state| : (current_state = state.parent) {
-                        std.debug.print("\n[{}] ", .{level});
+            var level: usize = 0;
+            var current_state: ?*CallState = self.impl.state.current_state;
 
-                        if (state.contract_abi) |abi| {
-                            std.debug.print("Contract: {s} @ {x}\n", .{
-                                abi.name,
-                                state.contract_address,
-                            });
-                            std.debug.print("    Function: selector {x}\n", .{state.function_selector});
+            // We have nested vm instances, walk the chain.
+            while (current_state) |state| : ({
+                current_state = state.parent;
+                level += 1;
+            }) {
+                std.debug.print("\n[{}] ", .{level});
 
-                            // Try to find function name
-                            for (abi.functions) |func| {
-                                if (func.selector == state.function_selector) {
-                                    std.debug.print("    Function name: {s}\n", .{func.name});
-                                    break;
-                                }
-                            }
+                if (state.contract_abi) |abi| {
+                    std.debug.print("Contract: {s} @ {x}\n", .{
+                        abi.name,
+                        state.contract_address,
+                    });
+                    std.debug.print("    Function: selector {x}\n", .{state.function_selector});
 
-                            // Show source location if we have error context for this level
-                            const error_ctx = state.execution_error;
+                    const f = try abi.getFunctionBySelector(state.function_selector);
+                    std.debug.print("    Function name: {s}\n", .{f.name});
 
-                            if (error_ctx != null) {
-                                std.debug.print("    Source location:\n", .{});
+                    const error_ctx = state.execution_error orelse return error.NoExecutionError;
+                    std.debug.print("    Source location:\n", .{});
 
-                                // Find the function name for this selector
-                                var func_name: []const u8 = "unknown";
-                                for (abi.functions) |f| {
-                                    if (f.selector == state.function_selector) {
-                                        func_name = f.name;
-                                        break;
-                                    }
-                                }
+                    const fn_debug_info = try f.getDebugInfo(allocator);
 
-                                // Always use the test artifact path which contains all debug symbols
-                                bvm.debug_info.lookupSourceLocation(allocator, artifact_path, func_name, error_ctx.?.pc) catch |lookup_err| {
-                                    std.debug.print("      Could not resolve: {}\n", .{lookup_err});
-                                };
-                            }
-                        } else {
-                            // Top-level test execution
-                            bvm.debug_info.lookupSourceLocation(allocator, artifact_path, "", circuit_vm.brillig_error_context.?.pc) catch |lookup_err| {
-                                std.debug.print("      Could not resolve: {}\n", .{lookup_err});
-                            };
-                        }
+                    // Print source location for current PC.
+                    std.debug.print("      [0] PC: {}\n", .{error_ctx.pc});
+                    fn_debug_info.printSourceLocation(error_ctx.pc, 2);
 
-                        level += 1;
+                    // Print source locations for callstack entries.
+                    for (error_ctx.callstack, 1..) |return_addr, i| {
+                        const pc = return_addr - 1;
+                        std.debug.print("      [{d}] PC: {}\n", .{ i, pc });
+                        fn_debug_info.printSourceLocation(pc, 2);
+                    }
+                } else {
+                    // Top-level execution.
+                    const debug_info = try artifact.getDebugInfo(allocator);
+                    const error_ctx = circuit_vm.brillig_error_context orelse return error.NoExecutionError;
+                    // Print source location for current PC
+                    std.debug.print("Source location:\n", .{});
+                    std.debug.print("      [0] PC: {}\n", .{error_ctx.pc});
+                    debug_info.printSourceLocation(error_ctx.pc, 2);
+
+                    for (error_ctx.callstack, 1..) |return_addr, i| {
+                        const pc = return_addr - 1;
+                        std.debug.print("      [{d}] PC: {}\n", .{ i, pc });
+                        debug_info.printSourceLocation(pc, 2);
                     }
                 }
             }

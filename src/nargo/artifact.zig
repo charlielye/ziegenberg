@@ -1,6 +1,7 @@
 const std = @import("std");
 const pretty = @import("../fmt/pretty.zig");
 const cvm = @import("../cvm/io.zig");
+const debug_info = @import("debug_info.zig");
 
 pub const Kind = enum {
     integer,
@@ -32,11 +33,23 @@ const Abi = struct {
     parameters: []const Parameter,
 };
 
+// JSON parseable version
+const JsonArtifactAbi = struct {
+    noir_version: []const u8,
+    hash: []const u8,
+    abi: Abi,
+    bytecode: []const u8,
+    debug_symbols: ?[]const u8 = null,
+};
+
 pub const ArtifactAbi = struct {
     noir_version: []const u8,
     hash: []const u8,
     abi: Abi,
     bytecode: []const u8,
+    debug_symbols: ?[]const u8 = null,
+    // Lazy loaded.
+    debug_info: ?debug_info.DebugInfo = null,
 
     /// Load the abi from the json file.
     pub fn load(allocator: std.mem.Allocator, contract_path: []const u8) !ArtifactAbi {
@@ -46,7 +59,7 @@ pub const ArtifactAbi = struct {
         var diagnostics = std.json.Diagnostics{};
         json_reader.enableDiagnostics(&diagnostics);
         const parsed = std.json.parseFromTokenSource(
-            ArtifactAbi,
+            JsonArtifactAbi,
             allocator,
             &json_reader,
             .{ .ignore_unknown_fields = true },
@@ -58,8 +71,15 @@ pub const ArtifactAbi = struct {
             });
             return err;
         };
-        const abi = parsed.value;
-        return abi;
+        const json_abi = parsed.value;
+        return ArtifactAbi{
+            .noir_version = json_abi.noir_version,
+            .hash = json_abi.hash,
+            .abi = json_abi.abi,
+            .bytecode = json_abi.bytecode,
+            .debug_symbols = json_abi.debug_symbols,
+            .debug_info = null,
+        };
     }
 
     /// Base 64 decode, gunzip, and return the bytecode.
@@ -73,6 +93,17 @@ pub const ArtifactAbi = struct {
         defer buffer.deinit();
         try std.compress.gzip.decompress(reader_stream.reader(), buffer.writer());
         return buffer.toOwnedSlice();
+    }
+
+    pub fn getDebugInfo(self: *const ArtifactAbi, allocator: std.mem.Allocator) !*const debug_info.DebugInfo {
+        if (self.debug_info == null) {
+            if (self.debug_symbols) |symbols| {
+                @constCast(self).debug_info = try debug_info.DebugInfo.init(allocator, symbols);
+            } else {
+                return error.DebugSymbolsNotFound;
+            }
+        }
+        return &self.debug_info.?;
     }
 };
 

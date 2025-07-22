@@ -4,6 +4,7 @@ const poseidon2 = @import("../poseidon2/poseidon2.zig");
 const F = @import("../bn254/fr.zig").Fr;
 const mt = @import("../merkle_tree/package.zig");
 const constants = @import("../protocol/constants.gen.zig");
+const debug_info = @import("debug_info.zig");
 
 var VERSION: u8 = 1;
 
@@ -54,6 +55,17 @@ const Abi = struct {
 
 const FunctionSelector = u32;
 
+// JSON parseable version
+const JsonFunction = struct {
+    name: []const u8,
+    is_unconstrained: bool,
+    custom_attributes: []const []const u8,
+    abi: Abi,
+    bytecode: []const u8 = &[_]u8{},
+    verification_key: ?[]const u8 = null,
+    debug_symbols: ?[]const u8 = null,
+};
+
 pub const Function = struct {
     name: []const u8,
     is_unconstrained: bool,
@@ -61,8 +73,10 @@ pub const Function = struct {
     abi: Abi,
     bytecode: []const u8 = &[_]u8{},
     verification_key: ?[]const u8 = null,
+    debug_symbols: ?[]const u8 = null,
     // Computed at load time.
     selector: FunctionSelector = 0,
+    debug_info: ?debug_info.DebugInfo = null,
 
     fn encodeType(writer: anytype, t: Type) !void {
         if (std.mem.eql(u8, t.kind, "field")) {
@@ -152,6 +166,24 @@ pub const Function = struct {
         }
         return total;
     }
+
+    pub fn getDebugInfo(self: *const Function, allocator: std.mem.Allocator) !*const debug_info.DebugInfo {
+        if (self.debug_info == null) {
+            if (self.debug_symbols) |symbols| {
+                @constCast(self).debug_info = try debug_info.DebugInfo.init(allocator, symbols);
+            } else {
+                return error.DebugSymbolsNotFound;
+            }
+        }
+        return &self.debug_info.?;
+    }
+};
+
+// JSON parseable version
+const JsonContractAbi = struct {
+    noir_version: []const u8,
+    name: []const u8,
+    functions: []JsonFunction,
 };
 
 pub const ContractAbi = struct {
@@ -178,12 +210,45 @@ pub const ContractAbi = struct {
         defer file.close();
         var json_reader = std.json.reader(allocator, file.reader());
         const parsed = try std.json.parseFromTokenSource(
-            ContractAbi,
+            JsonContractAbi,
             allocator,
             &json_reader,
             .{ .ignore_unknown_fields = true },
         );
-        var abi = parsed.value;
+        const json_abi = parsed.value;
+        
+        // Convert JsonFunction to Function
+        var functions = try allocator.alloc(Function, json_abi.functions.len);
+        for (json_abi.functions, 0..) |jf, i| {
+            functions[i] = Function{
+                .name = jf.name,
+                .is_unconstrained = jf.is_unconstrained,
+                .custom_attributes = jf.custom_attributes,
+                .abi = jf.abi,
+                .bytecode = jf.bytecode,
+                .verification_key = jf.verification_key,
+                .debug_symbols = jf.debug_symbols,
+                .selector = 0,
+                .debug_info = null,
+            };
+        }
+        
+        var abi = ContractAbi{
+            .noir_version = json_abi.noir_version,
+            .name = json_abi.name,
+            .functions = functions,
+            .artifact_path = null,
+            .public_function = null,
+            .private_functions = &[_]Function{},
+            .unconstrained_functions = &[_]Function{},
+            .initializer_functions = &[_]Function{},
+            .private_function_tree_root = F.zero,
+            .unconstrained_function_tree_root = F.zero,
+            .public_bytecode_commitment = F.zero,
+            .artifact_hash = F.zero,
+            .default_initializer = null,
+            .class_id = F.zero,
+        };
 
         // Store the artifact path
         abi.artifact_path = try allocator.dupe(u8, contract_path);
