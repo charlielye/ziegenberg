@@ -113,10 +113,12 @@ pub const Txe = struct {
                     std.debug.print("      [0] PC: {}\n", .{error_ctx.pc});
                     fn_debug_info.printSourceLocation(error_ctx.pc, 2);
 
-                    // Print source locations for callstack entries.
-                    for (error_ctx.callstack, 1..) |return_addr, i| {
+                    // Print source locations for callstack entries in reverse order.
+                    var i: usize = error_ctx.callstack.len;
+                    while (i > 0) : (i -= 1) {
+                        const return_addr = error_ctx.callstack[i - 1];
                         const pc = return_addr - 1;
-                        std.debug.print("      [{d}] PC: {}\n", .{ i, pc });
+                        std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len - i + 1, pc });
                         fn_debug_info.printSourceLocation(pc, 2);
                     }
                 } else {
@@ -128,9 +130,12 @@ pub const Txe = struct {
                     std.debug.print("      [0] PC: {}\n", .{error_ctx.pc});
                     debug_info.printSourceLocation(error_ctx.pc, 2);
 
-                    for (error_ctx.callstack, 1..) |return_addr, i| {
+                    // Print callstack in reverse order
+                    var i: usize = error_ctx.callstack.len;
+                    while (i > 0) : (i -= 1) {
+                        const return_addr = error_ctx.callstack[i - 1];
                         const pc = return_addr - 1;
-                        std.debug.print("      [{d}] PC: {}\n", .{ i, pc });
+                        std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len - i + 1, pc });
                         debug_info.printSourceLocation(pc, 2);
                     }
                 }
