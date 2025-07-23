@@ -8,6 +8,8 @@ const nargo_toml = @import("../nargo/nargo_toml.zig");
 const nargo_artifact = @import("../nargo/artifact.zig");
 const nargo = @import("../nargo/package.zig");
 const CallState = @import("call_state.zig").CallState;
+const DebugContext = @import("../bvm/debug_context.zig").DebugContext;
+const DebugMode = @import("../bvm/debug_context.zig").DebugMode;
 
 pub const ExecuteOptions = struct {
     calldata_path: ?[]const u8 = null,
@@ -19,8 +21,6 @@ pub const ExecuteOptions = struct {
 pub const Txe = struct {
     allocator: std.mem.Allocator,
     fc_handler: Dispatcher,
-    // Debug context (optional) - passed to all nested VM executions
-    // debug_ctx: ?*DebugContext = null,
     impl: TxeImpl,
 
     pub fn init(allocator: std.mem.Allocator, contract_artifacts_path: []const u8) !*Txe {
@@ -69,11 +69,18 @@ pub const Txe = struct {
         defer circuit_vm.deinit();
         std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
+        // Create debug context if debug mode is enabled
+        self.impl.debug_mode = options.debug_mode;
+        var debug_ctx = if (options.debug_mode)
+            DebugContext.init(allocator, .step_by_line, try artifact.getDebugInfo(allocator))
+        else
+            null;
+
         std.debug.print("Executing...\n", .{});
         t.reset();
         defer std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 
-        circuit_vm.executeVm(0, .{ .debug_ctx = null }) catch |err| {
+        circuit_vm.executeVm(0, .{ .debug_ctx = if (debug_ctx) |*ctx| ctx else null }) catch |err| {
             std.debug.print("Execution failed: {}\n", .{err});
 
             if (err != error.Trapped) {

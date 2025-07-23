@@ -76,47 +76,23 @@ pub fn execute(options: ExecuteOptions) !void {
     std.debug.assert(program.functions.len == 1);
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
-    var fc_handler = try bvm.foreign_call.Dispatcher.init(allocator);
-    defer fc_handler.deinit();
-
+    // Init.
     var t = try std.time.Timer.start();
     std.debug.print("Initing...\n", .{});
-
-    // Create debug context if needed
-    // var debug_ctx_storage: ?DebugContext = null;
-    // defer if (debug_ctx_storage) |*ctx| ctx.deinit();
-
-    // var debug_ctx_ptr: ?*DebugContext = null;
-    // if (options.debug_mode or options.show_trace) {
-    //     const mode: DebugMode = if (options.debug_mode) .step_by_line else .trace;
-    //     debug_ctx_storage = DebugContext.init(allocator, mode);
-    //     debug_ctx_ptr = &debug_ctx_storage.?;
-
-    //     // Load debug symbols if available
-    //     if (debug_ctx_ptr) |ctx| {
-    //         const function_name = if (std.mem.indexOf(u8, artifact_path, "test") != null) "test" else "main";
-    //         ctx.loadDebugSymbols(artifact_path, function_name) catch |err| {
-    //             std.debug.print("Warning: Could not load debug symbols: {}\n", .{err});
-    //         };
-    //     }
-    // }
-
-    std.debug.print("Init time: {}us\n", .{t.read() / 1000});
-
-    std.debug.print("Executing...\n", .{});
-    t.reset();
-
-    // Create and execute the circuit VM
+    var fc_handler = try bvm.foreign_call.Dispatcher.init(allocator);
+    defer fc_handler.deinit();
     var circuit_vm = try CircuitVm(bvm.foreign_call.Dispatcher).init(allocator, &program, calldata, &fc_handler);
     defer circuit_vm.deinit();
+    std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
-    // Execute with debug context
+    // Execute.
+    std.debug.print("Executing...\n", .{});
+    t.reset();
     const result = circuit_vm.executeVm(0, .{
         .show_trace = options.show_trace,
         .debug_ctx = null,
     });
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
-
     result catch |err| {
         std.debug.print("Execution failed: {}\n", .{err});
         return err;

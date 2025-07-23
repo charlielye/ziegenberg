@@ -5,6 +5,7 @@ pub const io = @import("io.zig");
 pub const brillig_vm = @import("brillig_vm.zig");
 pub const memory = @import("memory.zig");
 pub const foreign_call = @import("foreign_call/package.zig");
+pub const DebugContext = @import("debug_context.zig").DebugContext;
 
 pub const BrilligVm = brillig_vm.BrilligVm;
 

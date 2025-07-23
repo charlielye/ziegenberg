@@ -138,6 +138,10 @@ pub const DebugInfo = struct {
     }
 
     pub fn printSourceLocation(self: *const DebugInfo, pc: usize, context_lines: usize) void {
+        self.printSourceLocationWithOptions(pc, context_lines, true);
+    }
+    
+    pub fn printSourceLocationWithOptions(self: *const DebugInfo, pc: usize, context_lines: usize, show_column_indicator: bool) void {
         const loc = self.getSourceLocation(pc) orelse {
             std.debug.print("        (source not found)\n", .{});
             return;
@@ -151,7 +155,7 @@ pub const DebugInfo = struct {
         std.debug.print("  {s}:{}:{}\n", .{ file_info.path, loc.line, loc.column });
         
         // Print source with context
-        printSourceWithContext(file_info.source, loc.line, loc.column, context_lines);
+        printSourceWithContext(file_info.source, loc.line, loc.column, context_lines, show_column_indicator);
     }
 
     const LineInfo = struct {
@@ -206,7 +210,7 @@ pub const DebugInfo = struct {
         return decompressed.toOwnedSlice();
     }
 
-    fn printSourceWithContext(source: []const u8, target_line: u32, column: u32, context_lines: usize) void {
+    fn printSourceWithContext(source: []const u8, target_line: u32, column: u32, context_lines: usize, show_column_indicator: bool) void {
         var lines = std.ArrayList([]const u8).init(std.heap.page_allocator);
         defer lines.deinit();
 
@@ -232,7 +236,7 @@ pub const DebugInfo = struct {
         }
 
         // Show column indicator for target line
-        if (column > 0) {
+        if (show_column_indicator and column > 0) {
             printColumnIndicator(target_line, column);
         }
     }
