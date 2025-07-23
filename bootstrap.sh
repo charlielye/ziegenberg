@@ -53,7 +53,7 @@ export test_contracts_dir="$contracts_target_dir/tests"
 # BUILD COMMANDS
 # -------------
 ###
-function noir_bootstrap {
+function build_nargo {
   cd aztec-packages/noir/noir-repo
   cargo build --release --bin nargo
 }
@@ -86,10 +86,26 @@ function build_protocol_circuits {
 
 function build_contracts {
   cd aztec-packages/noir-projects/noir-contracts
-  ../../noir/noir-repo/target/release/nargo dump
+  ../../noir/noir-repo/target/release/nargo dump --package counter_contract --inliner-aggressiveness 0
+  cd ../../..
+  build_data
 }
 
-function generate_constants {
+function build_data {
+  echo "Building data directory with contract symlinks..."
+  rm -rf data
+  mkdir -p data/contracts
+
+  # Create symlinks for each JSON file, renaming to keep only the part after the last dash.
+  for json_file in $contracts_target_dir/*.json; do
+    local basename=$(basename $json_file)
+    # Extract the part after the last dash (before .json)
+    local new_name=${basename##*-}
+    cat $json_file | jq . > data/contracts/$new_name
+  done
+}
+
+function build_constants {
   local ts_file="aztec-packages/yarn-project/constants/src/constants.gen.ts"
   local zig_file="src/protocol/constants.gen.zig"
 
@@ -101,7 +117,7 @@ function generate_constants {
   echo "Generating Zig constants from $ts_file to $zig_file..."
 
   cat > "$zig_file" << 'EOF'
-// GENERATED FILE - DO NOT EDIT, RUN ./bootstrap.sh generate_constants
+// GENERATED FILE - DO NOT EDIT, RUN ./bootstrap.sh build_constants
 // Auto-generated from aztec-packages/yarn-project/constants/src/constants.gen.ts
 
 EOF
@@ -206,21 +222,7 @@ EOF
   echo "Generated $zig_file successfully!"
 }
 
-function build_data {
-  echo "Building data directory with contract symlinks..."
-  rm -rf data
-  mkdir -p data/contracts
-
-  # Create symlinks for each JSON file, renaming to keep only the part after the last dash.
-  for json_file in $contracts_target_dir/*.json; do
-    local basename=$(basename $json_file)
-    # Extract the part after the last dash (before .json)
-    local new_name=${basename##*-}
-    cat $json_file | jq . > data/contracts/$new_name
-  done
-}
-
-export -f compile_and_execute nargo_dump build_protocol_circuits build_contracts generate_constants build_data
+export -f compile_and_execute nargo_dump build_protocol_circuits build_contracts build_constants build_data
 
 # Compiles and executes all noir execution_success test programs to generate witness data.
 # Uses nargo to dump out all noir_test_success test bytecode.
@@ -385,7 +387,7 @@ function bench {
 ###
 case "$cmd" in
   "")
-    (noir_bootstrap)
+    (build_nargo)
     (build_fixtures)
     build ${1:-}
     ;;

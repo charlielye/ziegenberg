@@ -45,6 +45,7 @@ pub fn main() !void {
         try txe_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
         try txe_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
         try txe_cmd.addArg(Arg.booleanOption("debug", 'd', "Step through execution by source line."));
+        try txe_cmd.addArg(Arg.booleanOption("debug-dap", null, "Enable DAP debugging mode for VSCode."));
         txe_cmd.setProperty(.help_on_empty_args);
 
         try root.addSubcommand(txe_cmd);
@@ -160,6 +161,7 @@ fn handleTxe(cmd_matches: ArgMatches) !void {
         .show_stats = cmd_matches.containsArg("stats"),
         .show_trace = cmd_matches.containsArg("trace"),
         .debug_mode = cmd_matches.containsArg("debug"),
+        .debug_dap = cmd_matches.containsArg("debug-dap"),
     }) catch |err| {
         std.debug.print("{}\n", .{err});
         // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.

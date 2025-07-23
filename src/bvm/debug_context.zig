@@ -1,11 +1,21 @@
 const std = @import("std");
 const nargo_debug_info = @import("../nargo/debug_info.zig");
 const BrilligVm = @import("brillig_vm.zig").BrilligVm;
+const dap = @import("../debugger/dap.zig");
 
 pub const DebugMode = enum {
     none,
     trace,
     step_by_line,
+    dap,
+};
+
+pub const ExecutionState = enum {
+    running,
+    paused,
+    step_over,
+    step_into,
+    terminated,
 };
 
 pub const DebugContext = struct {
@@ -13,13 +23,32 @@ pub const DebugContext = struct {
     debug_info: *const nargo_debug_info.DebugInfo,
     mode: DebugMode,
     last_line: ?u32 = null,
+    
+    // DAP-specific fields
+    dap_protocol: ?*dap.DapProtocol = null,
+    execution_state: ExecutionState = .paused,
+    current_thread_id: u32 = 1,
 
-    pub fn init(allocator: std.mem.Allocator, mode: DebugMode, debug_info: *const nargo_debug_info.DebugInfo) DebugContext {
-        return DebugContext{
+    pub fn init(allocator: std.mem.Allocator, mode: DebugMode, debug_info: *const nargo_debug_info.DebugInfo) !DebugContext {
+        var ctx = DebugContext{
             .allocator = allocator,
             .mode = mode,
             .debug_info = debug_info,
         };
+        
+        // Initialize DAP if in DAP mode
+        if (mode == .dap) {
+            try ctx.initDap();
+        }
+        
+        return ctx;
+    }
+    
+    pub fn deinit(self: *DebugContext) void {
+        if (self.dap_protocol) |protocol| {
+            protocol.deinit();
+            self.allocator.destroy(protocol);
+        }
     }
 
     pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64) void {
@@ -43,6 +72,202 @@ pub const DebugContext = struct {
                     self.debug_info.printSourceLocationWithOptions(pc, 0, false);
                 }
             },
+            .dap => self.handleDapMode(pc, ops_executed),
         }
+    }
+    
+    fn initDap(self: *DebugContext) !void {
+        self.dap_protocol = try self.allocator.create(dap.DapProtocol);
+        self.dap_protocol.?.* = dap.DapProtocol.init(self.allocator);
+        
+        // Handle DAP initialization sequence
+        try self.handleDapInitialization();
+    }
+    
+    fn handleDapInitialization(self: *DebugContext) !void {
+        const protocol = self.dap_protocol.?;
+        
+        // Wait for initialize request
+        const init_msg = try protocol.readMessage(self.allocator);
+        defer init_msg.deinit();
+        
+        const obj = init_msg.value.object;
+        const req_type = obj.get("type").?.string;
+        if (!std.mem.eql(u8, req_type, "request")) return error.UnexpectedMessage;
+        
+        const command = obj.get("command").?.string;
+        if (!std.mem.eql(u8, command, "initialize")) return error.UnexpectedCommand;
+        
+        const seq: u32 = @intCast(obj.get("seq").?.integer);
+        
+        // Send initialize response with capabilities
+        const capabilities = dap.Capabilities{};
+        try protocol.sendResponse(seq, "initialize", true, capabilities);
+        
+        // Send initialized event
+        try protocol.sendEvent("initialized", .{});
+        
+        // Handle initial DAP requests until we get configurationDone
+        while (true) {
+            const msg = try protocol.readMessage(self.allocator);
+            defer msg.deinit();
+            
+            const msg_obj = msg.value.object;
+            const msg_type = msg_obj.get("type").?.string;
+            if (!std.mem.eql(u8, msg_type, "request")) continue;
+            
+            const cmd_seq: u32 = @intCast(msg_obj.get("seq").?.integer);
+            const cmd = msg_obj.get("command").?.string;
+            
+            if (std.mem.eql(u8, cmd, "launch") or std.mem.eql(u8, cmd, "attach")) {
+                // Send response
+                try protocol.sendResponse(cmd_seq, cmd, true, .{});
+            } else if (std.mem.eql(u8, cmd, "setBreakpoints")) {
+                // For now, just acknowledge but don't actually set breakpoints
+                const breakpoints = .{ .breakpoints = &[_]struct {}{} };
+                try protocol.sendResponse(cmd_seq, cmd, true, breakpoints);
+            } else if (std.mem.eql(u8, cmd, "threads")) {
+                const threads = .{ .threads = &[_]dap.Thread{.{ .id = 1, .name = "main" }} };
+                try protocol.sendResponse(cmd_seq, cmd, true, threads);
+            } else if (std.mem.eql(u8, cmd, "configurationDone")) {
+                try protocol.sendResponse(cmd_seq, cmd, true, .{});
+                // Send stopped event for entry after configuration is done
+                try self.sendStoppedEvent("entry", 0);
+                break;
+            } else if (std.mem.eql(u8, cmd, "disconnect")) {
+                self.execution_state = .terminated;
+                try protocol.sendResponse(cmd_seq, cmd, true, .{});
+                return;
+            } else {
+                // Unknown command during initialization
+                try protocol.sendResponse(cmd_seq, cmd, false, .{ .message = "Command not supported during initialization" });
+            }
+        }
+    }
+    
+    fn handleDapMode(self: *DebugContext, pc: usize, ops_executed: u64) void {
+        _ = ops_executed;
+        
+        const source_loc = self.debug_info.getSourceLocation(pc);
+        const current_line = if (source_loc) |loc| loc.line else null;
+        
+        // Check if we've reached a new source line
+        if (current_line != null and (self.last_line == null or current_line.? != self.last_line.?)) {
+            self.last_line = current_line;
+            
+            switch (self.execution_state) {
+                .running => {
+                    // TODO: Check for breakpoints
+                    // For now, just continue
+                },
+                .paused => {
+                    self.waitForDapCommands(pc);
+                },
+                .step_over, .step_into => {
+                    self.execution_state = .paused;
+                    self.sendStoppedEvent("step", pc) catch {};
+                    self.waitForDapCommands(pc);
+                },
+                .terminated => {},
+            }
+        }
+    }
+    
+    fn waitForDapCommands(self: *DebugContext, current_pc: usize) void {
+        const protocol = self.dap_protocol.?;
+        
+        while (self.execution_state == .paused) {
+            const msg = protocol.readMessage(self.allocator) catch |err| {
+                std.debug.print("DAP read error: {}\n", .{err});
+                continue;
+            };
+            defer msg.deinit();
+            
+            self.processDapCommand(msg.value, current_pc) catch |err| {
+                std.debug.print("DAP command error: {}\n", .{err});
+            };
+        }
+    }
+    
+    fn processDapCommand(self: *DebugContext, msg: std.json.Value, current_pc: usize) !void {
+        const protocol = self.dap_protocol.?;
+        const obj = msg.object;
+        
+        const msg_type = obj.get("type").?.string;
+        if (!std.mem.eql(u8, msg_type, "request")) return;
+        
+        const seq: u32 = @intCast(obj.get("seq").?.integer);
+        const command = obj.get("command").?.string;
+        
+        if (std.mem.eql(u8, command, "continue")) {
+            self.execution_state = .running;
+            try protocol.sendResponse(seq, command, true, .{ .allThreadsContinued = true });
+        } else if (std.mem.eql(u8, command, "next")) {
+            self.execution_state = .step_over;
+            try protocol.sendResponse(seq, command, true, .{});
+        } else if (std.mem.eql(u8, command, "stepIn")) {
+            self.execution_state = .step_into;
+            try protocol.sendResponse(seq, command, true, .{});
+        } else if (std.mem.eql(u8, command, "threads")) {
+            const threads = .{ .threads = &[_]dap.Thread{.{ .id = 1, .name = "main" }} };
+            try protocol.sendResponse(seq, command, true, threads);
+        } else if (std.mem.eql(u8, command, "stackTrace")) {
+            try self.sendStackTrace(seq, current_pc);
+        } else if (std.mem.eql(u8, command, "disconnect")) {
+            self.execution_state = .terminated;
+            try protocol.sendResponse(seq, command, true, .{});
+        } else if (std.mem.eql(u8, command, "setBreakpoints")) {
+            // For now, just acknowledge but don't actually set breakpoints
+            const breakpoints = .{ .breakpoints = &[_]struct {}{} };
+            try protocol.sendResponse(seq, command, true, breakpoints);
+        } else if (std.mem.eql(u8, command, "configurationDone")) {
+            try protocol.sendResponse(seq, command, true, .{});
+        } else {
+            // Unknown command - send error response
+            try protocol.sendResponse(seq, command, false, .{ .message = "Unsupported command" });
+        }
+    }
+    
+    fn sendStoppedEvent(self: *DebugContext, reason: []const u8, pc: usize) !void {
+        _ = pc;
+        const protocol = self.dap_protocol.?;
+        const body = dap.StoppedEventBody{
+            .reason = reason,
+            .threadId = self.current_thread_id,
+        };
+        try protocol.sendEvent("stopped", body);
+    }
+    
+    fn sendStackTrace(self: *DebugContext, request_seq: u32, current_pc: usize) !void {
+        const protocol = self.dap_protocol.?;
+        
+        var frames = std.ArrayList(dap.StackFrame).init(self.allocator);
+        defer frames.deinit();
+        
+        // Add current frame
+        if (self.debug_info.getSourceLocation(current_pc)) |loc| {
+            var file_key_buf: [32]u8 = undefined;
+            const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+            
+            if (self.debug_info.files.get(file_key)) |file_info| {
+                try frames.append(.{
+                    .id = 0,
+                    .name = "main",
+                    .source = .{
+                        .path = file_info.path,
+                        .name = std.fs.path.basename(file_info.path),
+                    },
+                    .line = loc.line,
+                    .column = loc.column,
+                });
+            }
+        }
+        
+        const response_body = .{
+            .stackFrames = frames.items,
+            .totalFrames = frames.items.len,
+        };
+        
+        try protocol.sendResponse(request_seq, "stackTrace", true, response_body);
     }
 };

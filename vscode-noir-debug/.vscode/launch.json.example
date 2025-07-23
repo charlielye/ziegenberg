@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "noir",
+      "request": "launch",
+      "name": "Debug Noir Test",
+      "artifactPath": "${workspaceFolder}/path/to/your/test.json",
+      "zbPath": "${workspaceFolder}/../ziegenberg/zig-out/bin/zb",
+      "preLaunchTask": ""  // Empty string to disable any pre-launch compilation
+    }
+  ]
+}

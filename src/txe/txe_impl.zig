@@ -662,10 +662,10 @@ pub const TxeImpl = struct {
         circuit_vm.function_name = function.name;
 
         // Create debug context if debug mode is enabled.
-        var debug_ctx = if (self.debug_mode)
-            bvm.DebugContext.init(allocator, .step_by_line, try function.getDebugInfo(allocator, contract_instance.abi.file_map))
-        else
-            null;
+        var debug_ctx: ?bvm.DebugContext = null;
+        if (self.debug_mode) {
+            debug_ctx = try bvm.DebugContext.init(allocator, .step_by_line, try function.getDebugInfo(allocator, contract_instance.abi.file_map));
+        }
 
         std.debug.print("callPrivateFunction: Entering nested cvm (function: {s})\n", .{function.name});
         circuit_vm.executeVm(
@@ -953,9 +953,10 @@ pub const TxeImpl = struct {
         var debug_ctx_ptr: ?*@import("../bvm/debug_context.zig").DebugContext = null;
         if (self.debug_mode) {
             const fn_debug_info = try function.getDebugInfo(allocator, contract_instance.abi.file_map);
-            debug_ctx_storage = @import("../bvm/debug_context.zig").DebugContext.init(allocator, .step_by_line, fn_debug_info);
+            debug_ctx_storage = try @import("../bvm/debug_context.zig").DebugContext.init(allocator, .step_by_line, fn_debug_info);
             debug_ctx_ptr = &debug_ctx_storage.?;
         }
+        defer if (debug_ctx_storage) |*ctx| ctx.deinit();
 
         std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{self.state.current_state.contract_address});
         circuit_vm.executeVm(0, .{ .debug_ctx = debug_ctx_ptr }) catch |err| {

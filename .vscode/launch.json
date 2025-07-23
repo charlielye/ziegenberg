@@ -1,19 +1,28 @@
 {
   "version": "0.2.0",
   "configurations": [
+    // {
+    //   "name": "Debug Zig",
+    //   "type": "lldb",
+    //   "request": "launch",
+    //   "program": "${workspaceFolder}/zig-out/bin/zb",
+    //   "args": [
+    //     "cvm",
+    //     "run",
+    //     "--artifact_path=./aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__test_increment_pass.json"
+    //   ],
+    //   "cwd": "${workspaceFolder}",
+    //   "stopOnEntry": false,
+    //   "preLaunchTask": "build-exe"
+    // },
     {
-      "name": "Debug Zig",
-      "type": "lldb",
+      "name": "Debug Noir Contract",
+      "type": "noir",
       "request": "launch",
-      "program": "${workspaceFolder}/zig-out/bin/zb",
-      "args": [
-        "cvm",
-        "run",
-        "--artifact_path=./aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__test_increment_pass.json"
-      ],
       "cwd": "${workspaceFolder}",
-      "stopOnEntry": false,
-      "preLaunchTask": "build-exe"
+      "artifactPath": "${workspaceFolder}/aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__extended_incrementing_and_decrementing_pass.json",
+      "zbPath": "zb",
+      "preLaunchTask": ""
     }
   ]
 }

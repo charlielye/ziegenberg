@@ -1,0 +1,81 @@
+{
+  "name": "noir-debug",
+  "displayName": "Noir Debug",
+  "version": "0.0.1",
+  "publisher": "ziegenberg",
+  "description": "Debug adapter for Noir language",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ziegenberg/noir-debug"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "noir",
+        "label": "Noir Debug",
+        "program": "./out/debugAdapter.js",
+        "runtime": "node",
+        "languages": [],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "artifactPath"
+            ],
+            "properties": {
+              "artifactPath": {
+                "type": "string",
+                "description": "Path to the Noir artifact JSON file",
+                "default": "${workspaceFolder}/target/contract.json"
+              },
+              "zbPath": {
+                "type": "string",
+                "description": "Path to the zb executable",
+                "default": "zb"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the debug session",
+                "default": "${workspaceFolder}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop on first line of execution",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "noir",
+            "request": "launch",
+            "name": "Debug Noir",
+            "artifactPath": "${workspaceFolder}/target/contract.json",
+            "cwd": "${workspaceFolder}"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "vsce": "^2.15.0",
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^4.9.0"
+  }
+}
