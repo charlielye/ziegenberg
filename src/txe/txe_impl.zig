@@ -887,56 +887,15 @@ pub const TxeImpl = struct {
 
     pub fn getPublicKeysAndPartialAddress(
         self: *TxeImpl,
-        allocator: std.mem.Allocator,
+        _: std.mem.Allocator,
         address: proto.AztecAddress,
-    ) ![]F {
-        // First check if it's an account we created
+    ) ![13]F {
         if (self.state.accounts.get(address)) |complete_address| {
-            var result = std.ArrayList(F).init(allocator);
-
-            // Get all public key fields using toFields
-            const key_fields = complete_address.public_keys.toFields();
-            try result.appendSlice(&key_fields);
-
-            // Add partial address
-            try result.append(complete_address.partial_address.value);
-
-            return result.toOwnedSlice();
+            return complete_address.public_keys.toFields() ++ [_]F{
+                complete_address.partial_address.value,
+            };
         }
-
-        // Look up the contract instance to get its public keys
-        const instance = self.state.contract_instance_cache.get(address) orelse {
-            // If not found anywhere, return default public keys with a deterministic partial address
-            var result = std.ArrayList(F).init(allocator);
-            const default_keys = proto.PublicKeys.default();
-
-            // Get all public key fields using toFields
-            const key_fields = default_keys.toFields();
-            try result.appendSlice(&key_fields);
-
-            // Add partial address
-            try result.append(address.value.mul(F.from_int(0x42)));
-
-            return result.toOwnedSlice();
-        };
-
-        // For contracts, return their stored public keys
-        var result = std.ArrayList(F).init(allocator);
-
-        // Get all public key fields using toFields
-        const key_fields = instance.public_keys.toFields();
-        try result.appendSlice(&key_fields);
-
-        // Add partial address
-        const partial_address = proto.PartialAddress.compute(
-            instance.current_contract_class_id,
-            instance.salt,
-            instance.initialization_hash,
-            instance.deployer,
-        ).value;
-        try result.append(partial_address);
-
-        return result.toOwnedSlice();
+        return error.AccountNotFound;
     }
 
     pub fn simulateUtilityFunction(

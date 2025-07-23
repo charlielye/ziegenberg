@@ -34,23 +34,24 @@ pub const PublicKeys = struct {
         };
     }
 
-    pub fn toFields(self: PublicKeys) [12]Fr {
+    pub fn toFields(self: *const PublicKeys) [12]Fr {
+        @constCast(self).normalize();
         return .{
             // Master nullifier public key (x, y, isInfinite)
             self.master_nullifier_public_key.x,
             self.master_nullifier_public_key.y,
             Fr.from_int(@as(u256, if (self.master_nullifier_public_key.is_infinity()) 1 else 0)),
-            
+
             // Master incoming viewing public key (x, y, isInfinite)
             self.master_incoming_viewing_public_key.x,
             self.master_incoming_viewing_public_key.y,
             Fr.from_int(@as(u256, if (self.master_incoming_viewing_public_key.is_infinity()) 1 else 0)),
-            
+
             // Master outgoing viewing public key (x, y, isInfinite)
             self.master_outgoing_viewing_public_key.x,
             self.master_outgoing_viewing_public_key.y,
             Fr.from_int(@as(u256, if (self.master_outgoing_viewing_public_key.is_infinity()) 1 else 0)),
-            
+
             // Master tagging public key (x, y, isInfinite)
             self.master_tagging_public_key.x,
             self.master_tagging_public_key.y,
@@ -58,7 +59,8 @@ pub const PublicKeys = struct {
         };
     }
 
-    pub fn hash(self: PublicKeys) Fr {
+    pub fn hash(self: *const PublicKeys) Fr {
+        @constCast(self).normalize();
         const inputs = .{
             constants.GeneratorIndex.public_keys_hash,
             self.master_nullifier_public_key.x,
@@ -93,6 +95,13 @@ pub const PublicKeys = struct {
                 self.master_tagging_public_key,
             },
         );
+    }
+
+    fn normalize(self: *PublicKeys) void {
+        self.master_nullifier_public_key = self.master_nullifier_public_key.normalize();
+        self.master_incoming_viewing_public_key = self.master_incoming_viewing_public_key.normalize();
+        self.master_outgoing_viewing_public_key = self.master_outgoing_viewing_public_key.normalize();
+        self.master_tagging_public_key = self.master_tagging_public_key.normalize();
     }
 };
 
