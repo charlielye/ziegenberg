@@ -488,6 +488,18 @@ pub const DebugContext = struct {
                         });
                         frame_id += 1;
                     }
+                } else {
+                    // Add frame without source location
+                    const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:pc", .{vm_idx});
+                    
+                    try frames.append(.{
+                        .id = frame_id,
+                        .name = frame_name,
+                        .source = null,
+                        .line = 0,
+                        .column = 0,
+                    });
+                    frame_id += 1;
                 }
 
                 // Add all callstack entries for this VM (in reverse order to show deepest first)
@@ -502,7 +514,7 @@ pub const DebugContext = struct {
                             const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
 
                             if (vm_info.debug_info.files.get(file_key)) |file_info| {
-                                const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:fr{}", .{ vm_idx, vm_info.callstack.len - idx });
+                                const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:fr{}", .{ vm_idx, idx });
 
                                 try frames.append(.{
                                     .id = frame_id,
@@ -516,6 +528,18 @@ pub const DebugContext = struct {
                                 });
                                 frame_id += 1;
                             }
+                        } else {
+                            // Add frame without source location
+                            const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:fr{}", .{ vm_idx, idx });
+                            
+                            try frames.append(.{
+                                .id = frame_id,
+                                .name = frame_name,
+                                .source = null,
+                                .line = 0,
+                                .column = 0,
+                            });
+                            frame_id += 1;
                         }
                     }
                 }
