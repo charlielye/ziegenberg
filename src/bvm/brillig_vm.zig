@@ -143,7 +143,10 @@ pub fn BrilligVm(ForeignCallDispatcher: type) type {
 
                 // Call debug hook if provided
                 if (options.debug_ctx) |ctx| {
-                    ctx.afterOpcode(self.pc, opcode.*, self.ops_executed, self);
+                    if (!ctx.afterOpcode(self.pc, opcode.*, self.ops_executed, self)) {
+                        // Debug context requested termination
+                        return error.DebuggerTerminated;
+                    }
                 }
             }
 

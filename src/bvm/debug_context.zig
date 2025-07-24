@@ -165,7 +165,7 @@ pub const DebugContext = struct {
         }
     }
 
-    pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64, vm: anytype) void {
+    pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64, vm: anytype) bool {
         // Update current VM's PC and callstack
         if (self.vm_info_stack.items.len > 0) {
             self.vm_info_stack.items[self.vm_info_stack.items.len - 1].pc = pc;
@@ -175,10 +175,10 @@ pub const DebugContext = struct {
         const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
 
         switch (self.mode) {
-            .none => return,
+            .none => {},
             .trace => {
                 const stdout = std.io.getStdOut().writer();
-                stdout.print("{:0>4}: {:0>4}: {any}\n", .{ ops_executed, pc, opcode }) catch return;
+                stdout.print("{:0>4}: {:0>4}: {any}\n", .{ ops_executed, pc, opcode }) catch {};
             },
             .step_by_line => {
                 const source_loc = debug_info.getSourceLocation(pc);
@@ -190,12 +190,15 @@ pub const DebugContext = struct {
 
                     // Show the source line
                     const stdout = std.io.getStdOut().writer();
-                    stdout.print("\n", .{}) catch return;
+                    stdout.print("\n", .{}) catch {};
                     debug_info.printSourceLocationWithOptions(pc, 0, false);
                 }
             },
             .dap => self.handleDapMode(pc, ops_executed, vm),
         }
+        
+        // Return true to continue execution, false to stop
+        return self.execution_state != .terminated;
     }
 
     fn initDap(self: *DebugContext) !void {
