@@ -183,14 +183,15 @@ pub const DebugInfo = struct {
         return lines;
     }
     
-    /// Find the next line with opcodes at or after the given line
+    /// Find the next line with opcodes at or after the given line (max 10 lines ahead)
     pub fn findNextLineWithOpcodes(self: *const DebugInfo, file_path: []const u8, target_line: u32) !?u32 {
         const lines_with_opcodes = try self.getLinesWithOpcodes(file_path);
         defer lines_with_opcodes.deinit();
         
-        // Find the first line >= target_line
+        // Find the first line >= target_line, but only within 10 lines
+        const max_line = target_line + 10;
         for (lines_with_opcodes.items) |line| {
-            if (line >= target_line) {
+            if (line >= target_line and line <= max_line) {
                 return line;
             }
         }

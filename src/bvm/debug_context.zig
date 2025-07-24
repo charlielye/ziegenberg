@@ -577,9 +577,9 @@ pub const DebugContext = struct {
         // Check if we have validated breakpoints for this file in current VM
         const breakpoint_lines = current_vm.validated_breakpoints.get(file_info.path) orelse return false;
 
-        // Check if current line has a breakpoint
+        // Check if current line has a breakpoint (ignore invalid breakpoints with line 0)
         for (breakpoint_lines.items) |bp_line| {
-            if (bp_line == loc.line) {
+            if (bp_line != 0 and bp_line == loc.line) {
                 return true;
             }
         }
@@ -620,11 +620,18 @@ pub const DebugContext = struct {
             errdefer validated_lines.deinit();
 
             for (requested_lines.items) |requested_line| {
-                // Find the next valid line with opcodes
-                const actual_line = try vm_info.debug_info.findNextLineWithOpcodes(file_path, requested_line) orelse requested_line;
-                try validated_lines.append(actual_line);
+                // Find the next valid line with opcodes (within 10 lines)
+                if (try vm_info.debug_info.findNextLineWithOpcodes(file_path, requested_line)) |actual_line| {
+                    std.debug.print("Validating breakpoint at {s}:{} -> {}\n", .{ file_path, requested_line, actual_line });
+                    try validated_lines.append(actual_line);
+                } else {
+                    // No valid line found within 10 lines - store 0 to indicate invalid
+                    std.debug.print("Breakpoint at {s}:{} is invalid in this VM (no opcodes within 10 lines)\n", .{ file_path, requested_line });
+                    try validated_lines.append(0);
+                }
             }
-
+            
+            // Always store the validated lines (with 0 for invalid breakpoints)
             try vm_info.validated_breakpoints.put(file_path, validated_lines);
         }
     }
@@ -642,29 +649,42 @@ pub const DebugContext = struct {
             const requested_line = bp.object.get("line") orelse continue;
             const line_num: u32 = @intCast(requested_line.integer);
 
-            // Find the next valid line with opcodes
-            const actual_line = try vm_info.debug_info.findNextLineWithOpcodes(file_path, line_num) orelse line_num;
-
-            try validated_lines.append(actual_line);
-
+            // Find the next valid line with opcodes (within 10 lines)
             const bp_id = try self.getOrCreateBreakpointId(file_path, line_num);
-            verified[i] = .{
-                .id = bp_id,
-                .verified = actual_line != 0,
-                .line = actual_line,
-                .source = .{ .path = file_path },
-            };
-
-            // If the actual line differs from requested, add a message
-            if (actual_line != line_num and actual_line != 0) {
-                var msg_buf: [256]u8 = undefined;
-                const msg = try std.fmt.bufPrint(&msg_buf, "Breakpoint moved from line {} to {}", .{ line_num, actual_line });
-                verified[i].message = try self.allocator.dupe(u8, msg);
+            
+            if (try vm_info.debug_info.findNextLineWithOpcodes(file_path, line_num)) |actual_line| {
+                try validated_lines.append(actual_line);
+                verified[i] = .{
+                    .id = bp_id,
+                    .verified = true,
+                    .line = actual_line,
+                    .source = .{ .path = file_path },
+                };
+                
+                // If the actual line differs from requested, add a message
+                if (actual_line != line_num) {
+                    var msg_buf: [256]u8 = undefined;
+                    const msg = try std.fmt.bufPrint(&msg_buf, "Breakpoint moved from line {} to {}", .{ line_num, actual_line });
+                    verified[i].message = try self.allocator.dupe(u8, msg);
+                }
+            } else {
+                // No valid line found - mark as unverified
+                verified[i] = .{
+                    .id = bp_id,
+                    .verified = false,
+                    .line = line_num,
+                    .source = .{ .path = file_path },
+                    .message = try self.allocator.dupe(u8, "No executable code found within 10 lines"),
+                };
             }
         }
 
-        // Store validated breakpoints for this VM
-        try vm_info.validated_breakpoints.put(file_path, validated_lines);
+        // Store validated breakpoints for this VM only if we have any
+        if (validated_lines.items.len > 0) {
+            try vm_info.validated_breakpoints.put(file_path, validated_lines);
+        } else {
+            validated_lines.deinit();
+        }
 
         return verified;
     }
@@ -688,20 +708,34 @@ pub const DebugContext = struct {
             var breakpoints = try self.allocator.alloc(dap.Breakpoint, requested_lines.items.len);
             defer self.allocator.free(breakpoints);
 
+            // Now requested_lines and validated_lines have the same length
             for (requested_lines.items, validated_lines.items, 0..) |requested, validated, i| {
                 const bp_id = try self.getOrCreateBreakpointId(file_path, requested);
-                breakpoints[i] = .{
-                    .id = bp_id,
-                    .verified = true,
-                    .line = validated,
-                    .source = .{ .path = file_path },
-                };
-
-                if (requested != validated) {
-                    var msg_buf: [256]u8 = undefined;
-                    std.debug.print("Breakpoint moved from line {} to {}\n", .{ requested, validated });
-                    const msg = try std.fmt.bufPrint(&msg_buf, "Breakpoint moved from line {} to {}", .{ requested, validated });
-                    breakpoints[i].message = try self.allocator.dupe(u8, msg);
+                
+                if (validated == 0) {
+                    // Invalid breakpoint (no opcodes found within 10 lines)
+                    breakpoints[i] = .{
+                        .id = bp_id,
+                        .verified = false,
+                        .line = requested,
+                        .source = .{ .path = file_path },
+                        .message = try self.allocator.dupe(u8, "No executable code found within 10 lines"),
+                    };
+                } else {
+                    // Valid breakpoint
+                    breakpoints[i] = .{
+                        .id = bp_id,
+                        .verified = true,
+                        .line = validated,
+                        .source = .{ .path = file_path },
+                    };
+                    
+                    if (requested != validated) {
+                        var msg_buf: [256]u8 = undefined;
+                        std.debug.print("Breakpoint moved from line {} to {}\n", .{ requested, validated });
+                        const msg = try std.fmt.bufPrint(&msg_buf, "Breakpoint moved from line {} to {}", .{ requested, validated });
+                        breakpoints[i].message = try self.allocator.dupe(u8, msg);
+                    }
                 }
             }
 
