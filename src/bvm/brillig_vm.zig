@@ -137,7 +137,7 @@ pub fn BrilligVm(ForeignCallDispatcher: type) type {
 
                 // Call debug hook if provided
                 if (options.debug_ctx) |ctx| {
-                    ctx.afterOpcode(current_pc, opcode.*, self.ops_executed);
+                    ctx.afterOpcode(self.pc, opcode.*, self.ops_executed, self);
                 }
             }
 

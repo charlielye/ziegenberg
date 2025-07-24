@@ -15,6 +15,7 @@ pub const ExecutionState = enum {
     paused,
     step_over,
     step_into,
+    step_out,
     terminated,
 };
 
@@ -23,11 +24,14 @@ pub const DebugContext = struct {
     debug_info: *const nargo_debug_info.DebugInfo,
     mode: DebugMode,
     last_line: ?u32 = null,
-    
+
     // DAP-specific fields
     dap_protocol: ?*dap.DapProtocol = null,
     execution_state: ExecutionState = .paused,
     current_thread_id: u32 = 1,
+
+    // Step out tracking
+    step_out_target_depth: ?usize = null,
 
     pub fn init(allocator: std.mem.Allocator, mode: DebugMode, debug_info: *const nargo_debug_info.DebugInfo) !DebugContext {
         var ctx = DebugContext{
@@ -35,15 +39,15 @@ pub const DebugContext = struct {
             .mode = mode,
             .debug_info = debug_info,
         };
-        
+
         // Initialize DAP if in DAP mode
         if (mode == .dap) {
             try ctx.initDap();
         }
-        
+
         return ctx;
     }
-    
+
     pub fn deinit(self: *DebugContext) void {
         if (self.dap_protocol) |protocol| {
             protocol.deinit();
@@ -51,7 +55,7 @@ pub const DebugContext = struct {
         }
     }
 
-    pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64) void {
+    pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64, vm: anytype) void {
         switch (self.mode) {
             .none => return,
             .trace => {
@@ -72,53 +76,54 @@ pub const DebugContext = struct {
                     self.debug_info.printSourceLocationWithOptions(pc, 0, false);
                 }
             },
-            .dap => self.handleDapMode(pc, ops_executed),
+            .dap => self.handleDapMode(pc, ops_executed, vm),
         }
+        std.debug.print("{any}\n", .{vm.callstack.items});
     }
-    
+
     fn initDap(self: *DebugContext) !void {
         self.dap_protocol = try self.allocator.create(dap.DapProtocol);
         self.dap_protocol.?.* = dap.DapProtocol.init(self.allocator);
-        
+
         // Handle DAP initialization sequence
         try self.handleDapInitialization();
     }
-    
+
     fn handleDapInitialization(self: *DebugContext) !void {
         const protocol = self.dap_protocol.?;
-        
+
         // Wait for initialize request
         const init_msg = try protocol.readMessage(self.allocator);
         defer init_msg.deinit();
-        
+
         const obj = init_msg.value.object;
         const req_type = obj.get("type").?.string;
         if (!std.mem.eql(u8, req_type, "request")) return error.UnexpectedMessage;
-        
+
         const command = obj.get("command").?.string;
         if (!std.mem.eql(u8, command, "initialize")) return error.UnexpectedCommand;
-        
+
         const seq: u32 = @intCast(obj.get("seq").?.integer);
-        
+
         // Send initialize response with capabilities
         const capabilities = dap.Capabilities{};
         try protocol.sendResponse(seq, "initialize", true, capabilities);
-        
+
         // Send initialized event
         try protocol.sendEvent("initialized", .{});
-        
+
         // Handle initial DAP requests until we get configurationDone
         while (true) {
             const msg = try protocol.readMessage(self.allocator);
             defer msg.deinit();
-            
+
             const msg_obj = msg.value.object;
             const msg_type = msg_obj.get("type").?.string;
             if (!std.mem.eql(u8, msg_type, "request")) continue;
-            
+
             const cmd_seq: u32 = @intCast(msg_obj.get("seq").?.integer);
             const cmd = msg_obj.get("command").?.string;
-            
+
             if (std.mem.eql(u8, cmd, "launch") or std.mem.eql(u8, cmd, "attach")) {
                 // Send response
                 try protocol.sendResponse(cmd_seq, cmd, true, .{});
@@ -144,61 +149,80 @@ pub const DebugContext = struct {
             }
         }
     }
-    
-    fn handleDapMode(self: *DebugContext, pc: usize, ops_executed: u64) void {
+
+    fn handleDapMode(self: *DebugContext, pc: usize, ops_executed: u64, vm: anytype) void {
         _ = ops_executed;
-        
+
         const source_loc = self.debug_info.getSourceLocation(pc);
         const current_line = if (source_loc) |loc| loc.line else null;
-        
+
+        // For step out, check if we've returned to the target depth
+        if (self.execution_state == .step_out) {
+            if (self.step_out_target_depth) |target_depth| {
+                const current_depth = vm.callstack.items.len;
+                if (current_depth <= target_depth) {
+                    // We've stepped out - update the current line so VSCode knows where we are
+                    if (current_line) |line| {
+                        self.last_line = line;
+                    }
+                    self.execution_state = .paused;
+                    self.step_out_target_depth = null;
+                    self.sendStoppedEvent("step", pc) catch {};
+                    self.waitForDapCommands(pc, vm);
+                }
+            }
+            return; // Don't check for new lines during step out
+        }
+
         // Check if we've reached a new source line
         if (current_line != null and (self.last_line == null or current_line.? != self.last_line.?)) {
             self.last_line = current_line;
-            
+
             switch (self.execution_state) {
                 .running => {
                     // TODO: Check for breakpoints
                     // For now, just continue
                 },
                 .paused => {
-                    self.waitForDapCommands(pc);
+                    self.waitForDapCommands(pc, vm);
                 },
                 .step_over, .step_into => {
                     self.execution_state = .paused;
                     self.sendStoppedEvent("step", pc) catch {};
-                    self.waitForDapCommands(pc);
+                    self.waitForDapCommands(pc, vm);
                 },
+                .step_out => unreachable, // Handled above
                 .terminated => {},
             }
         }
     }
-    
-    fn waitForDapCommands(self: *DebugContext, current_pc: usize) void {
+
+    fn waitForDapCommands(self: *DebugContext, current_pc: usize, vm: anytype) void {
         const protocol = self.dap_protocol.?;
-        
+
         while (self.execution_state == .paused) {
             const msg = protocol.readMessage(self.allocator) catch |err| {
                 std.debug.print("DAP read error: {}\n", .{err});
                 continue;
             };
             defer msg.deinit();
-            
-            self.processDapCommand(msg.value, current_pc) catch |err| {
+
+            self.processDapCommand(msg.value, current_pc, vm) catch |err| {
                 std.debug.print("DAP command error: {}\n", .{err});
             };
         }
     }
-    
-    fn processDapCommand(self: *DebugContext, msg: std.json.Value, current_pc: usize) !void {
+
+    fn processDapCommand(self: *DebugContext, msg: std.json.Value, current_pc: usize, vm: anytype) !void {
         const protocol = self.dap_protocol.?;
         const obj = msg.object;
-        
+
         const msg_type = obj.get("type").?.string;
         if (!std.mem.eql(u8, msg_type, "request")) return;
-        
+
         const seq: u32 = @intCast(obj.get("seq").?.integer);
         const command = obj.get("command").?.string;
-        
+
         if (std.mem.eql(u8, command, "continue")) {
             self.execution_state = .running;
             try protocol.sendResponse(seq, command, true, .{ .allThreadsContinued = true });
@@ -207,6 +231,17 @@ pub const DebugContext = struct {
             try protocol.sendResponse(seq, command, true, .{});
         } else if (std.mem.eql(u8, command, "stepIn")) {
             self.execution_state = .step_into;
+            try protocol.sendResponse(seq, command, true, .{});
+        } else if (std.mem.eql(u8, command, "stepOut")) {
+            // Set target depth to one less than current depth
+            const current_depth = vm.callstack.items.len;
+            if (current_depth > 1) {
+                self.step_out_target_depth = current_depth - 1;
+                self.execution_state = .step_out;
+            } else {
+                // Already at top level.
+                self.execution_state = .step_over;
+            }
             try protocol.sendResponse(seq, command, true, .{});
         } else if (std.mem.eql(u8, command, "threads")) {
             const threads = .{ .threads = &[_]dap.Thread{.{ .id = 1, .name = "main" }} };
@@ -227,7 +262,7 @@ pub const DebugContext = struct {
             try protocol.sendResponse(seq, command, false, .{ .message = "Unsupported command" });
         }
     }
-    
+
     fn sendStoppedEvent(self: *DebugContext, reason: []const u8, pc: usize) !void {
         _ = pc;
         const protocol = self.dap_protocol.?;
@@ -237,18 +272,18 @@ pub const DebugContext = struct {
         };
         try protocol.sendEvent("stopped", body);
     }
-    
+
     fn sendStackTrace(self: *DebugContext, request_seq: u32, current_pc: usize) !void {
         const protocol = self.dap_protocol.?;
-        
+
         var frames = std.ArrayList(dap.StackFrame).init(self.allocator);
         defer frames.deinit();
-        
+
         // Add current frame
         if (self.debug_info.getSourceLocation(current_pc)) |loc| {
             var file_key_buf: [32]u8 = undefined;
             const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
-            
+
             if (self.debug_info.files.get(file_key)) |file_info| {
                 try frames.append(.{
                     .id = 0,
@@ -262,12 +297,12 @@ pub const DebugContext = struct {
                 });
             }
         }
-        
+
         const response_body = .{
             .stackFrames = frames.items,
             .totalFrames = frames.items.len,
         };
-        
+
         try protocol.sendResponse(request_seq, "stackTrace", true, response_body);
     }
 };
