@@ -47,6 +47,10 @@ pub const DebugContext = struct {
 
     // Step out tracking
     step_out_target_depth: ?usize = null,
+    
+    // Step over tracking
+    step_over_initial_depth: ?usize = null,
+    step_over_initial_line: ?u32 = null,
 
     // Stack of Brillig VMs (CVM → BVM → CVM → BVM pattern)
     vm_info_stack: std.ArrayList(VmInfo),
@@ -354,7 +358,29 @@ pub const DebugContext = struct {
                 .paused => {
                     self.waitForDapCommands(pc, vm);
                 },
-                .step_over, .step_into => {
+                .step_over => {
+                    // Hybrid step over logic
+                    const current_depth = vm.callstack.items.len;
+                    if (self.step_over_initial_depth) |initial_depth| {
+                        if (current_depth < initial_depth) {
+                            // We've returned from the function - stop
+                            self.execution_state = .paused;
+                            self.step_over_initial_depth = null;
+                            self.step_over_initial_line = null;
+                            self.sendStoppedEvent("step", pc) catch {};
+                            self.waitForDapCommands(pc, vm);
+                        } else if (current_depth == initial_depth and current_line != self.step_over_initial_line) {
+                            // Same depth, different line - stop
+                            self.execution_state = .paused;
+                            self.step_over_initial_depth = null;
+                            self.step_over_initial_line = null;
+                            self.sendStoppedEvent("step", pc) catch {};
+                            self.waitForDapCommands(pc, vm);
+                        }
+                        // Otherwise (deeper depth or same line), keep running
+                    }
+                },
+                .step_into => {
                     self.execution_state = .paused;
                     self.sendStoppedEvent("step", pc) catch {};
                     self.waitForDapCommands(pc, vm);
@@ -412,6 +438,12 @@ pub const DebugContext = struct {
             self.execution_state = .running;
             try protocol.sendResponse(seq, command, true, .{ .allThreadsContinued = true });
         } else if (std.mem.eql(u8, command, "next")) {
+            // Initialize step over tracking
+            self.step_over_initial_depth = vm.callstack.items.len;
+            const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
+            const source_loc = debug_info.getSourceLocation(current_pc);
+            self.step_over_initial_line = if (source_loc) |loc| loc.line else null;
+            
             self.execution_state = .step_over;
             try protocol.sendResponse(seq, command, true, .{});
         } else if (std.mem.eql(u8, command, "stepIn")) {

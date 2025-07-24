@@ -20,7 +20,7 @@
       "type": "noir",
       "request": "launch",
       "cwd": "${workspaceFolder}",
-      "artifactPath": "${workspaceFolder}/aztec-packages/noir-projects/noir-contracts/target/tests/Counter__extended_incrementing_and_decrementing_inline0_pass.json",
+      "artifactPath": "${workspaceFolder}/aztec-packages/noir-projects/noir-contracts/target/tests/Counter__extended_incrementing_and_decrementing_pass.json",
       "zbPath": "zb",
       "preLaunchTask": ""
     }
