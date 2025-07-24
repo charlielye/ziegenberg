@@ -662,7 +662,6 @@ pub const TxeImpl = struct {
 
         if (self.debug_ctx) |*ctx| {
             ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map));
-            defer ctx.onVmExit();
         }
 
         std.debug.print("callPrivateFunction: Entering nested cvm (function: {s})\n", .{function.name});

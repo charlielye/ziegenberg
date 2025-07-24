@@ -146,3 +146,22 @@ pub const Capabilities = struct {
     supportsDelayedStackTraceLoading: bool = false,
     supportsTerminateRequest: bool = true,
 };
+
+pub const SourceBreakpoint = struct {
+    line: u32,
+    column: ?u32 = null,
+    condition: ?[]const u8 = null,
+    hitCondition: ?[]const u8 = null,
+    logMessage: ?[]const u8 = null,
+};
+
+pub const Breakpoint = struct {
+    id: ?u32 = null,
+    verified: bool,
+    message: ?[]const u8 = null,
+    source: ?Source = null,
+    line: ?u32 = null,
+    column: ?u32 = null,
+    endLine: ?u32 = null,
+    endColumn: ?u32 = null,
+};

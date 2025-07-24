@@ -63,6 +63,7 @@ pub fn main() !void {
         try run_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
         try run_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
         try run_cmd.addArg(Arg.booleanOption("debug", 'd', "Step through execution by source line."));
+        try run_cmd.addArg(Arg.booleanOption("debug-dap", null, "Enable DAP debugging mode for VSCode."));
         try run_cmd.addArg(Arg.booleanOption("binary", 'b', "Output the witness as binary."));
         // run_cmd.setProperty(.help_on_empty_args);
 
@@ -184,6 +185,7 @@ fn handleCvm(matches: ArgMatches) !void {
             .show_stats = cmd_matches.containsArg("stats"),
             .show_trace = cmd_matches.containsArg("trace"),
             .debug_mode = cmd_matches.containsArg("debug"),
+            .debug_dap = cmd_matches.containsArg("debug-dap"),
             .binary = cmd_matches.containsArg("binary"),
         }) catch |err| {
             // std.debug.print("Exiting due to error: {}\n", .{err});

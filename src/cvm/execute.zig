@@ -8,6 +8,8 @@ const nargo_artifact = @import("../nargo/artifact.zig");
 const toml = @import("toml");
 const bvm = @import("../bvm/package.zig");
 const CircuitVm = @import("circuit_vm.zig").CircuitVm;
+const DebugContext = @import("../bvm/debug_context.zig").DebugContext;
+const DebugMode = @import("../bvm/debug_context.zig").DebugMode;
 
 pub const ExecuteOptions = struct {
     // If null, the current working directory is used.
@@ -20,6 +22,7 @@ pub const ExecuteOptions = struct {
     show_stats: bool = false,
     show_trace: bool = false,
     debug_mode: bool = false,
+    debug_dap: bool = false,
     binary: bool = false,
 };
 
@@ -85,12 +88,28 @@ pub fn execute(options: ExecuteOptions) !void {
     defer circuit_vm.deinit();
     std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
+    // Create debug context if debug mode is enabled
+    var debug_ctx: ?DebugContext = null;
+    if (options.debug_dap) {
+        debug_ctx = try DebugContext.init(allocator, .dap);
+    } else if (options.debug_mode) {
+        debug_ctx = try DebugContext.init(allocator, .step_by_line);
+    }
+    defer if (debug_ctx) |*ctx| ctx.deinit();
+
+    // Register the initial VM with its debug info if using artifacts
+    if (debug_ctx != null and options.artifact_path != null) {
+        const artifact = try nargo_artifact.ArtifactAbi.load(allocator, artifact_path);
+        const debug_info = try artifact.getDebugInfo(allocator);
+        debug_ctx.?.onVmEnter(debug_info);
+    }
+
     // Execute.
     std.debug.print("Executing...\n", .{});
     t.reset();
     const result = circuit_vm.executeVm(0, .{
         .show_trace = options.show_trace,
-        .debug_ctx = null,
+        .debug_ctx = if (debug_ctx) |*ctx| ctx else null,
     });
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
     result catch |err| {

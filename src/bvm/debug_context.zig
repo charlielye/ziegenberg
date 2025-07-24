@@ -27,6 +27,12 @@ pub const VmInfo = struct {
     stepping_out: bool = false,
 };
 
+// Breakpoint information stored per file
+pub const FileBreakpoints = struct {
+    file_path: []const u8,
+    lines: std.ArrayList(u32),
+};
+
 pub const DebugContext = struct {
     allocator: std.mem.Allocator,
     mode: DebugMode,
@@ -43,11 +49,15 @@ pub const DebugContext = struct {
     // Stack of Brillig VMs (CVM → BVM → CVM → BVM pattern)
     vm_info_stack: std.ArrayList(VmInfo),
 
+    // Breakpoints: map from file path to list of line numbers
+    breakpoints: std.StringHashMap(std.ArrayList(u32)),
+
     pub fn init(allocator: std.mem.Allocator, mode: DebugMode) !DebugContext {
         var ctx = DebugContext{
             .allocator = allocator,
             .mode = mode,
             .vm_info_stack = std.ArrayList(VmInfo).init(allocator),
+            .breakpoints = std.StringHashMap(std.ArrayList(u32)).init(allocator),
         };
 
         // Initialize DAP if in DAP mode
@@ -64,6 +74,13 @@ pub const DebugContext = struct {
             self.allocator.destroy(protocol);
         }
         self.vm_info_stack.deinit();
+        
+        // Clean up breakpoints
+        var iter = self.breakpoints.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.breakpoints.deinit();
     }
 
     pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo) void {
@@ -111,7 +128,6 @@ pub const DebugContext = struct {
             },
             .dap => self.handleDapMode(pc, ops_executed, vm),
         }
-        std.debug.print("{any}\n", .{vm.callstack.items});
     }
 
     fn initDap(self: *DebugContext) !void {
@@ -161,9 +177,18 @@ pub const DebugContext = struct {
                 // Send response
                 try protocol.sendResponse(cmd_seq, cmd, true, .{});
             } else if (std.mem.eql(u8, cmd, "setBreakpoints")) {
-                // For now, just acknowledge but don't actually set breakpoints
-                const breakpoints = .{ .breakpoints = &[_]struct {}{} };
-                try protocol.sendResponse(cmd_seq, cmd, true, breakpoints);
+                // Parse the request arguments
+                const args = msg_obj.get("arguments") orelse return error.NoArguments;
+                const source = args.object.get("source") orelse return error.NoSource;
+                const path = source.object.get("path") orelse return error.NoPath;
+                const source_breakpoints = args.object.get("breakpoints") orelse return error.NoBreakpoints;
+                
+                // Set breakpoints and send response
+                const verified_breakpoints = try self.setBreakpoints(path.string, source_breakpoints.array.items);
+                defer self.allocator.free(verified_breakpoints);
+                
+                const response = .{ .breakpoints = verified_breakpoints };
+                try protocol.sendResponse(cmd_seq, cmd, true, response);
             } else if (std.mem.eql(u8, cmd, "threads")) {
                 const threads = .{ .threads = &[_]dap.Thread{.{ .id = 1, .name = "main" }} };
                 try protocol.sendResponse(cmd_seq, cmd, true, threads);
@@ -214,8 +239,12 @@ pub const DebugContext = struct {
 
             switch (self.execution_state) {
                 .running => {
-                    // TODO: Check for breakpoints
-                    // For now, just continue
+                    // Check for breakpoints
+                    if (self.checkBreakpoint(source_loc)) {
+                        self.execution_state = .paused;
+                        self.sendStoppedEvent("breakpoint", pc) catch {};
+                        self.waitForDapCommands(pc, vm);
+                    }
                 },
                 .paused => {
                     self.waitForDapCommands(pc, vm);
@@ -292,9 +321,18 @@ pub const DebugContext = struct {
             self.execution_state = .terminated;
             try protocol.sendResponse(seq, command, true, .{});
         } else if (std.mem.eql(u8, command, "setBreakpoints")) {
-            // For now, just acknowledge but don't actually set breakpoints
-            const breakpoints = .{ .breakpoints = &[_]struct {}{} };
-            try protocol.sendResponse(seq, command, true, breakpoints);
+            // Parse the request arguments
+            const args = obj.get("arguments") orelse return error.NoArguments;
+            const source = args.object.get("source") orelse return error.NoSource;
+            const path = source.object.get("path") orelse return error.NoPath;
+            const source_breakpoints = args.object.get("breakpoints") orelse return error.NoBreakpoints;
+            
+            // Set breakpoints and send response
+            const verified_breakpoints = try self.setBreakpoints(path.string, source_breakpoints.array.items);
+            defer self.allocator.free(verified_breakpoints);
+            
+            const response = .{ .breakpoints = verified_breakpoints };
+            try protocol.sendResponse(seq, command, true, response);
         } else if (std.mem.eql(u8, command, "configurationDone")) {
             try protocol.sendResponse(seq, command, true, .{});
         } else {
@@ -399,5 +437,62 @@ pub const DebugContext = struct {
         };
 
         try protocol.sendResponse(request_seq, "stackTrace", true, response_body);
+    }
+
+    fn setBreakpoints(self: *DebugContext, file_path: []const u8, source_breakpoints: []const std.json.Value) ![]dap.Breakpoint {
+        // Remove existing breakpoints for this file
+        if (self.breakpoints.fetchRemove(file_path)) |existing| {
+            existing.value.deinit();
+        }
+        
+        // Create new breakpoint list
+        var line_list = std.ArrayList(u32).init(self.allocator);
+        errdefer line_list.deinit();
+        
+        // Parse source breakpoints and add lines
+        for (source_breakpoints) |bp| {
+            const line = bp.object.get("line") orelse continue;
+            try line_list.append(@intCast(line.integer));
+        }
+        
+        // Store the breakpoints
+        try self.breakpoints.put(file_path, line_list);
+        
+        // Create verified breakpoints response
+        var verified = try self.allocator.alloc(dap.Breakpoint, source_breakpoints.len);
+        for (source_breakpoints, 0..) |bp, i| {
+            const line = bp.object.get("line") orelse continue;
+            verified[i] = .{
+                .id = @intCast(i + 1),
+                .verified = true,
+                .line = @intCast(line.integer),
+                .source = .{ .path = file_path },
+            };
+        }
+        
+        return verified;
+    }
+    
+    fn checkBreakpoint(self: *const DebugContext, source_loc: ?nargo_debug_info.SourceLocation) bool {
+        const loc = source_loc orelse return false;
+        
+        // Get the file path for this location
+        var file_key_buf: [32]u8 = undefined;
+        const file_key = std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id}) catch return false;
+        
+        const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
+        const file_info = debug_info.files.get(file_key) orelse return false;
+        
+        // Check if we have breakpoints for this file
+        const breakpoint_lines = self.breakpoints.get(file_info.path) orelse return false;
+        
+        // Check if current line has a breakpoint
+        for (breakpoint_lines.items) |bp_line| {
+            if (bp_line == loc.line) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 };
