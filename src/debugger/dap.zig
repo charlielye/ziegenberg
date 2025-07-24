@@ -43,6 +43,23 @@ pub const DapProtocol = struct {
         return try std.json.parseFromSlice(std.json.Value, allocator, json_body, .{});
     }
 
+    pub fn readMessageNonBlocking(self: *DapProtocol, allocator: std.mem.Allocator) !std.json.Parsed(std.json.Value) {
+        // Check if data is available using poll
+        var pfd = [_]std.posix.pollfd{.{
+            .fd = std.io.getStdIn().handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        
+        const ready = try std.posix.poll(&pfd, 0); // 0 timeout = non-blocking
+        if (ready == 0) {
+            return error.WouldBlock;
+        }
+
+        // Data is available, read it
+        return self.readMessage(allocator);
+    }
+
     /// Send a response to a request
     pub fn sendResponse(self: *DapProtocol, request_seq: u32, command: []const u8, success: bool, body: anytype) !void {
         const response = .{
@@ -145,6 +162,7 @@ pub const Capabilities = struct {
     supportsModulesRequest: bool = false,
     supportsDelayedStackTraceLoading: bool = false,
     supportsTerminateRequest: bool = true,
+    supportsPauseRequest: bool = true,
 };
 
 pub const SourceBreakpoint = struct {

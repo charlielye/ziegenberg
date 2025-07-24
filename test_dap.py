@@ -341,6 +341,142 @@ def test_multiple_files():
     return True
 
 
+def test_terminate_command():
+    """Test that the terminate command works (VSCode stop button)."""
+    print("\n=== Test: Terminate Command (VSCode Stop Button) ===")
+    
+    # Use TXE test which runs longer
+    client = DapClient([
+        './zig-out/bin/zb', 'txe',
+        './aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__extended_incrementing_and_decrementing_pass.json',
+        '--debug-dap'
+    ])
+    
+    try:
+        # Initialize
+        seq = client.send_request("initialize", {"clientID": "test"})
+        client.wait_for_response(seq)
+        client.wait_for_event("initialized")
+        
+        seq = client.send_request("launch", {})
+        client.wait_for_response(seq)
+        
+        seq = client.send_request("configurationDone")
+        client.wait_for_response(seq)
+        
+        # Wait for initial stop
+        stopped = client.wait_for_event("stopped")
+        assert stopped is not None, "No initial stopped event"
+        print("✓ Stopped at entry point")
+        
+        # Continue execution to let it run
+        print("\nContinuing execution...")
+        seq = client.send_request("continue", {"threadId": 1})
+        response = client.wait_for_response(seq)
+        assert response is not None, "No continue response"
+        print("✓ Continue command accepted")
+        
+        # Give it a moment to start running
+        time.sleep(0.5)
+        
+        # Send terminate command (what VSCode sends when stop button is clicked)
+        print("\nSending terminate command...")
+        terminate_seq = client.send_request("terminate")
+        
+        # Wait for terminate response
+        terminate_response = client.wait_for_response(terminate_seq, timeout=1.0)
+        assert terminate_response is not None, "No terminate response received"
+        assert terminate_response.get('success'), "Terminate command failed"
+        print("✓ Terminate command accepted")
+        
+        # Wait for terminated event
+        terminated = client.wait_for_event("terminated", timeout=2.0)
+        assert terminated is not None, "No terminated event after terminate"
+        print("✓ Terminated event received")
+        
+        return True
+        
+    finally:
+        client.shutdown()
+
+
+def test_pause_command():
+    """Test that the pause command works when debugger is running."""
+    print("\n=== Test: Pause Command (Stop Button) ===")
+    
+    # Use TXE test which runs longer
+    client = DapClient([
+        './zig-out/bin/zb', 'txe',
+        './aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__extended_incrementing_and_decrementing_pass.json',
+        '--debug-dap'
+    ])
+    
+    try:
+        # Initialize
+        seq = client.send_request("initialize", {"clientID": "test"})
+        client.wait_for_response(seq)
+        client.wait_for_event("initialized")
+        
+        seq = client.send_request("launch", {})
+        client.wait_for_response(seq)
+        
+        seq = client.send_request("configurationDone")
+        client.wait_for_response(seq)
+        
+        # Wait for initial stop
+        stopped = client.wait_for_event("stopped")
+        assert stopped is not None, "No initial stopped event"
+        print("✓ Stopped at entry point")
+        
+        # Continue execution to let it run
+        print("\nContinuing execution...")
+        seq = client.send_request("continue", {"threadId": 1})
+        response = client.wait_for_response(seq)
+        assert response is not None, "No continue response"
+        print("✓ Continue command accepted")
+        
+        # Give it a moment to start running
+        time.sleep(0.5)
+        
+        # Send pause command while running
+        print("\nSending pause command...")
+        pause_seq = client.send_request("pause", {"threadId": 1})
+        
+        # Wait for pause response
+        pause_response = client.wait_for_response(pause_seq, timeout=1.0)
+        if pause_response is None:
+            # Process might have terminated already
+            print("! Program may have completed before pause command")
+            # Check if we got a terminated event
+            messages = client.get_all_messages()
+            terminated = any(m.get('type') == 'event' and m.get('event') == 'terminated' for m in messages)
+            if terminated:
+                print("✓ Program terminated (too fast to pause)")
+                return True
+            else:
+                assert False, "No pause response and no termination"
+        
+        assert pause_response.get('success'), "Pause command failed"
+        print("✓ Pause command accepted")
+        
+        # Wait for stopped event
+        stopped = client.wait_for_event("stopped", timeout=2.0)
+        assert stopped is not None, "No stopped event after pause"
+        assert stopped['body']['reason'] == 'pause', f"Wrong stop reason: {stopped['body']['reason']}"
+        print("✓ Stopped event received with reason 'pause'")
+        
+        # Verify we can continue again
+        seq = client.send_request("continue", {"threadId": 1})
+        response = client.wait_for_response(seq)
+        assert response is not None, "No continue response after pause"
+        print("✓ Can continue after pause")
+        
+        return True
+        
+    finally:
+        client.shutdown()
+
+
 def main():
     """Run all tests."""
     print("=== Ziegenberg DAP Test Suite ===")
@@ -351,6 +487,8 @@ def main():
         ("Breakpoint Line Adjustment", test_breakpoint_line_adjustment),
         ("Stepping", test_stepping),
         ("Multiple Files", test_multiple_files),
+        ("Terminate Command", test_terminate_command),
+        ("Pause Command", test_pause_command),
     ]
     
     passed = 0

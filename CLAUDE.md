@@ -40,7 +40,7 @@ When writing code:
 
 IMPORTANT FOR TESTING:
 At present your main test iteration command is:
-zig build build-exe -freference-trace && zb txe ./aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter\_\_extended_incrementing_and_decrementing_pass.json
+zig build build-exe -freference-trace && zb txe ./aztec-packages/noir-projects/noir-contracts/contracts/target/tests/Counter\_\_extended_incrementing_and_decrementing_pass.json
 Do not waste time running other test related commands without asking first.
 
 IMPORTANT FOR CLEANUP:

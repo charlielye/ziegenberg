@@ -308,6 +308,11 @@ pub const DebugContext = struct {
     fn handleDapMode(self: *DebugContext, pc: usize, ops_executed: u64, vm: anytype) void {
         _ = ops_executed;
 
+        // Check for DAP commands even when running
+        if (self.execution_state == .running) {
+            self.checkForDapCommand(pc, vm);
+        }
+
         const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
         const source_loc = debug_info.getSourceLocation(pc);
         const current_line = if (source_loc) |loc| loc.line else null;
@@ -373,6 +378,23 @@ pub const DebugContext = struct {
         }
     }
 
+    fn checkForDapCommand(self: *DebugContext, current_pc: usize, vm: anytype) void {
+        const protocol = self.dap_protocol.?;
+
+        // Try to read a message non-blocking
+        const msg = protocol.readMessageNonBlocking(self.allocator) catch |err| {
+            if (err != error.WouldBlock) {
+                std.debug.print("DAP read error: {}\n", .{err});
+            }
+            return;
+        };
+        defer msg.deinit();
+
+        self.processDapCommand(msg.value, current_pc, vm) catch |err| {
+            std.debug.print("DAP command error: {}\n", .{err});
+        };
+    }
+
     fn processDapCommand(self: *DebugContext, msg: std.json.Value, current_pc: usize, vm: anytype) !void {
         const protocol = self.dap_protocol.?;
         const obj = msg.object;
@@ -414,6 +436,18 @@ pub const DebugContext = struct {
             try protocol.sendResponse(seq, command, true, threads);
         } else if (std.mem.eql(u8, command, "stackTrace")) {
             try self.sendStackTrace(seq, current_pc);
+        } else if (std.mem.eql(u8, command, "pause")) {
+            // Handle pause request - stop execution
+            self.execution_state = .paused;
+            try protocol.sendResponse(seq, command, true, .{});
+            // Send stopped event
+            try self.sendStoppedEvent("pause", current_pc);
+        } else if (std.mem.eql(u8, command, "terminate")) {
+            // Handle terminate request (VSCode stop button)
+            self.execution_state = .terminated;
+            try protocol.sendResponse(seq, command, true, .{});
+            // Send terminated event
+            try protocol.sendEvent("terminated", .{});
         } else if (std.mem.eql(u8, command, "disconnect")) {
             self.execution_state = .terminated;
             try protocol.sendResponse(seq, command, true, .{});
