@@ -294,8 +294,8 @@ pub const DebugContext = struct {
                 try protocol.sendResponse(cmd_seq, cmd, true, threads);
             } else if (std.mem.eql(u8, cmd, "configurationDone")) {
                 try protocol.sendResponse(cmd_seq, cmd, true, .{});
-                // Send stopped event for entry after configuration is done
-                try self.sendStoppedEvent("entry", 0);
+                // Don't stop at entry - let it run until a breakpoint
+                self.execution_state = .running;
                 break;
             } else if (std.mem.eql(u8, cmd, "disconnect")) {
                 self.execution_state = .terminated;

@@ -172,6 +172,11 @@ def test_initialization():
         assert response is not None, "No configurationDone response"
         print("✓ Configuration done")
         
+        # Verify we don't get a stopped event (should just run)
+        stopped = client.wait_for_event("stopped", timeout=0.5)
+        assert stopped is None, "Should not stop at entry anymore"
+        print("✓ Did not stop at entry (correct behavior)")
+        
         return True
         
     finally:
@@ -220,10 +225,11 @@ def test_breakpoint_line_adjustment():
         seq = client.send_request("configurationDone")
         client.wait_for_response(seq)
         
-        # Wait for initial stopped event - this comes right after configurationDone
+        # Should hit the first breakpoint (line 6 after adjustment from line 5)
         stopped_event = client.wait_for_event("stopped", timeout=2.0)
-        assert stopped_event is not None, "No initial stopped event"
-        print("\n✓ Stopped at entry point")
+        assert stopped_event is not None, "Should hit first breakpoint"
+        assert stopped_event['body']['reason'] == 'breakpoint', "Should stop for breakpoint"
+        print("\n✓ Hit first breakpoint")
         
         # Now collect breakpoint events that were sent
         print("\nCollecting breakpoint adjustment events...")
@@ -245,7 +251,7 @@ def test_breakpoint_line_adjustment():
         
         if response and response.get('body', {}).get('stackFrames'):
             line = response['body']['stackFrames'][0].get('line')
-            print(f"\nStopped at line {line} (entry point)")
+            print(f"\nStopped at line {line} (first breakpoint)")
         
         # Continue and check breakpoint hits
         breakpoint_hits = []
@@ -294,15 +300,26 @@ def test_stepping():
         client.wait_for_response(seq)
         client.wait_for_event("initialized")
         
+        # Set a breakpoint at line 6 to have somewhere to stop
+        seq = client.send_request("setBreakpoints", {
+            "source": {
+                "path": "/mnt/user-data/charlie/ziegenberg/simple_test/src/main.nr"
+            },
+            "breakpoints": [{"line": 6}]
+        })
+        client.wait_for_response(seq)
+        
         seq = client.send_request("launch", {})
         client.wait_for_response(seq)
         
         seq = client.send_request("configurationDone")
         client.wait_for_response(seq)
         
-        # Wait for initial stop
+        # Should hit the breakpoint
         stopped = client.wait_for_event("stopped")
-        assert stopped is not None, "No initial stopped event"
+        assert stopped is not None, "No stopped event"
+        assert stopped['body']['reason'] == 'breakpoint', "Should stop at breakpoint"
+        print("✓ Hit breakpoint at line 6")
         
         # Test step over
         print("\nTesting step over...")
@@ -364,17 +381,18 @@ def test_terminate_command():
         seq = client.send_request("configurationDone")
         client.wait_for_response(seq)
         
-        # Wait for initial stop
-        stopped = client.wait_for_event("stopped")
-        assert stopped is not None, "No initial stopped event"
-        print("✓ Stopped at entry point")
-        
-        # Continue execution to let it run
-        print("\nContinuing execution...")
-        seq = client.send_request("continue", {"threadId": 1})
-        response = client.wait_for_response(seq)
-        assert response is not None, "No continue response"
-        print("✓ Continue command accepted")
+        # TXE might stop at entry or run (depends on if it has debug info)
+        stopped = client.wait_for_event("stopped", timeout=1.0)
+        if stopped:
+            print("✓ Stopped (TXE test)")
+            # Continue execution to let it run
+            print("\nContinuing execution...")
+            seq = client.send_request("continue", {"threadId": 1})
+            response = client.wait_for_response(seq)
+            assert response is not None, "No continue response"
+            print("✓ Continue command accepted")
+        else:
+            print("✓ Already running (no breakpoints set)")
         
         # Give it a moment to start running
         time.sleep(0.5)
@@ -423,17 +441,18 @@ def test_pause_command():
         seq = client.send_request("configurationDone")
         client.wait_for_response(seq)
         
-        # Wait for initial stop
-        stopped = client.wait_for_event("stopped")
-        assert stopped is not None, "No initial stopped event"
-        print("✓ Stopped at entry point")
-        
-        # Continue execution to let it run
-        print("\nContinuing execution...")
-        seq = client.send_request("continue", {"threadId": 1})
-        response = client.wait_for_response(seq)
-        assert response is not None, "No continue response"
-        print("✓ Continue command accepted")
+        # TXE might stop at entry or run (depends on if it has debug info)
+        stopped = client.wait_for_event("stopped", timeout=1.0)
+        if stopped:
+            print("✓ Stopped (TXE test)")
+            # Continue execution to let it run
+            print("\nContinuing execution...")
+            seq = client.send_request("continue", {"threadId": 1})
+            response = client.wait_for_response(seq)
+            assert response is not None, "No continue response"
+            print("✓ Continue command accepted")
+        else:
+            print("✓ Already running (no breakpoints set)")
         
         # Give it a moment to start running
         time.sleep(0.5)
