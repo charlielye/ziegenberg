@@ -141,6 +141,63 @@ pub const DebugInfo = struct {
         self.printSourceLocationWithOptions(pc, context_lines, true);
     }
     
+    /// Get all lines in a file that have associated opcodes
+    pub fn getLinesWithOpcodes(self: *const DebugInfo, file_path: []const u8) !std.ArrayList(u32) {
+        var lines = std.ArrayList(u32).init(self.allocator);
+        errdefer lines.deinit();
+        
+        // Find the file_id for this path
+        var target_file_id: ?u32 = null;
+        var iter = self.files.iterator();
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.path, file_path)) {
+                target_file_id = std.fmt.parseInt(u32, entry.key_ptr.*, 10) catch continue;
+                break;
+            }
+        }
+        
+        if (target_file_id == null) return lines;
+        
+        // Collect all lines that have PC mappings
+        var pc_iter = self.pc_to_location_idx.iterator();
+        while (pc_iter.next()) |entry| {
+            const loc = self.getSourceLocation(entry.key_ptr.*) orelse continue;
+            if (loc.file_id == target_file_id.?) {
+                // Check if we already have this line
+                var found = false;
+                for (lines.items) |line| {
+                    if (line == loc.line) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    try lines.append(loc.line);
+                }
+            }
+        }
+        
+        // Sort the lines
+        std.mem.sort(u32, lines.items, {}, std.sort.asc(u32));
+        
+        return lines;
+    }
+    
+    /// Find the next line with opcodes at or after the given line
+    pub fn findNextLineWithOpcodes(self: *const DebugInfo, file_path: []const u8, target_line: u32) !?u32 {
+        const lines_with_opcodes = try self.getLinesWithOpcodes(file_path);
+        defer lines_with_opcodes.deinit();
+        
+        // Find the first line >= target_line
+        for (lines_with_opcodes.items) |line| {
+            if (line >= target_line) {
+                return line;
+            }
+        }
+        
+        return null;
+    }
+    
     pub fn printSourceLocationWithOptions(self: *const DebugInfo, pc: usize, context_lines: usize, show_column_indicator: bool) void {
         const loc = self.getSourceLocation(pc) orelse {
             std.debug.print("        (source not found)\n", .{});

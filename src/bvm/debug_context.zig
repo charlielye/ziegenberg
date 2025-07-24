@@ -25,6 +25,8 @@ pub const VmInfo = struct {
     debug_info: *const nargo_debug_info.DebugInfo,
     // Track if we're stepping out of this VM
     stepping_out: bool = false,
+    // Validated breakpoints for this specific VM
+    validated_breakpoints: std.StringHashMap(std.ArrayList(u32)),
 };
 
 // Breakpoint information stored per file
@@ -49,15 +51,21 @@ pub const DebugContext = struct {
     // Stack of Brillig VMs (CVM → BVM → CVM → BVM pattern)
     vm_info_stack: std.ArrayList(VmInfo),
 
-    // Breakpoints: map from file path to list of line numbers
-    breakpoints: std.StringHashMap(std.ArrayList(u32)),
+    // Requested breakpoints from the client: map from file path to list of line numbers
+    requested_breakpoints: std.StringHashMap(std.ArrayList(u32)),
+
+    // Breakpoint ID counter for generating unique IDs
+    next_breakpoint_id: u32 = 1,
+    // Map from file path + line to breakpoint ID for stable IDs
+    breakpoint_id_map: std.StringHashMap(u32),
 
     pub fn init(allocator: std.mem.Allocator, mode: DebugMode) !DebugContext {
         var ctx = DebugContext{
             .allocator = allocator,
             .mode = mode,
             .vm_info_stack = std.ArrayList(VmInfo).init(allocator),
-            .breakpoints = std.StringHashMap(std.ArrayList(u32)).init(allocator),
+            .requested_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(allocator),
+            .breakpoint_id_map = std.StringHashMap(u32).init(allocator),
         };
 
         // Initialize DAP if in DAP mode
@@ -73,33 +81,74 @@ pub const DebugContext = struct {
             protocol.deinit();
             self.allocator.destroy(protocol);
         }
+
+        // Clean up VM stack and their validated breakpoints
+        for (self.vm_info_stack.items) |*vm_info| {
+            var iter = vm_info.validated_breakpoints.iterator();
+            while (iter.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            vm_info.validated_breakpoints.deinit();
+        }
         self.vm_info_stack.deinit();
-        
-        // Clean up breakpoints
-        var iter = self.breakpoints.iterator();
+
+        // Clean up requested breakpoints
+        var iter = self.requested_breakpoints.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
-        self.breakpoints.deinit();
+        self.requested_breakpoints.deinit();
+
+        // Clean up breakpoint ID map
+        var id_iter = self.breakpoint_id_map.iterator();
+        while (id_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.breakpoint_id_map.deinit();
     }
 
     pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo) void {
         // When entering a new Brillig VM, push it onto the stack
-        self.vm_info_stack.append(.{
+        var vm_info = VmInfo{
             .pc = 0,
             .callstack = &.{},
             .debug_info = debug_info,
-        }) catch unreachable;
+            .validated_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(self.allocator),
+        };
+
+        // Validate requested breakpoints for this VM
+        self.validateBreakpointsForVm(&vm_info) catch {};
+
+        self.vm_info_stack.append(vm_info) catch unreachable;
+
+        // Send DAP event to update breakpoints if we have a protocol
+        if (self.dap_protocol != null and self.vm_info_stack.items.len == 1) {
+            // Only send update for the first VM to avoid spam
+            self.sendBreakpointUpdate() catch {};
+            self.sendBreakpointUpdate() catch {};
+        }
     }
 
     pub fn onVmExit(self: *DebugContext) void {
-        const current_vm = self.vm_info_stack.pop().?;
+        var current_vm = self.vm_info_stack.pop() orelse return;
+
+        // Clean up validated breakpoints for this VM
+        var iter = current_vm.validated_breakpoints.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        current_vm.validated_breakpoints.deinit();
 
         // If we were stepping out of this VM and there's a parent VM
         if (current_vm.stepping_out and self.vm_info_stack.items.len > 0) {
             // Mark that we should pause when the parent VM resumes
             self.execution_state = .paused;
             self.step_out_target_depth = null;
+        }
+
+        // Send DAP event to restore parent VM's breakpoints if applicable
+        if (self.dap_protocol != null and self.vm_info_stack.items.len > 0) {
+            self.sendBreakpointUpdate() catch {};
         }
     }
 
@@ -182,13 +231,42 @@ pub const DebugContext = struct {
                 const source = args.object.get("source") orelse return error.NoSource;
                 const path = source.object.get("path") orelse return error.NoPath;
                 const source_breakpoints = args.object.get("breakpoints") orelse return error.NoBreakpoints;
-                
-                // Set breakpoints and send response
-                const verified_breakpoints = try self.setBreakpoints(path.string, source_breakpoints.array.items);
-                defer self.allocator.free(verified_breakpoints);
-                
-                const response = .{ .breakpoints = verified_breakpoints };
-                try protocol.sendResponse(cmd_seq, cmd, true, response);
+
+                // During initialization, we might not have debug info yet, so just accept the breakpoints
+                if (self.vm_info_stack.items.len == 0) {
+                    // Store requested breakpoints for later validation
+                    var line_list = std.ArrayList(u32).init(self.allocator);
+                    for (source_breakpoints.array.items) |bp| {
+                        const line = bp.object.get("line") orelse continue;
+                        try line_list.append(@intCast(line.integer));
+                    }
+                    try self.requested_breakpoints.put(path.string, line_list);
+
+                    // Return simple verified response
+                    var verified = try self.allocator.alloc(dap.Breakpoint, source_breakpoints.array.items.len);
+                    for (source_breakpoints.array.items, 0..) |bp, i| {
+                        const line = bp.object.get("line") orelse continue;
+                        const line_num: u32 = @intCast(line.integer);
+                        // Get or create a stable ID for this breakpoint
+                        const bp_id = try self.getOrCreateBreakpointId(path.string, line_num);
+                        verified[i] = .{
+                            .id = bp_id,
+                            .verified = true,
+                            .line = line_num,
+                            .source = .{ .path = path.string },
+                        };
+                    }
+                    const response = .{ .breakpoints = verified };
+                    try protocol.sendResponse(cmd_seq, cmd, true, response);
+                    self.allocator.free(verified);
+                } else {
+                    // Set breakpoints with line adjustment
+                    const verified_breakpoints = try self.setBreakpoints(path.string, source_breakpoints.array.items);
+                    defer self.allocator.free(verified_breakpoints);
+
+                    const response = .{ .breakpoints = verified_breakpoints };
+                    try protocol.sendResponse(cmd_seq, cmd, true, response);
+                }
             } else if (std.mem.eql(u8, cmd, "threads")) {
                 const threads = .{ .threads = &[_]dap.Thread{.{ .id = 1, .name = "main" }} };
                 try protocol.sendResponse(cmd_seq, cmd, true, threads);
@@ -326,11 +404,11 @@ pub const DebugContext = struct {
             const source = args.object.get("source") orelse return error.NoSource;
             const path = source.object.get("path") orelse return error.NoPath;
             const source_breakpoints = args.object.get("breakpoints") orelse return error.NoBreakpoints;
-            
+
             // Set breakpoints and send response
             const verified_breakpoints = try self.setBreakpoints(path.string, source_breakpoints.array.items);
             defer self.allocator.free(verified_breakpoints);
-            
+
             const response = .{ .breakpoints = verified_breakpoints };
             try protocol.sendResponse(seq, command, true, response);
         } else if (std.mem.eql(u8, command, "configurationDone")) {
@@ -440,59 +518,204 @@ pub const DebugContext = struct {
     }
 
     fn setBreakpoints(self: *DebugContext, file_path: []const u8, source_breakpoints: []const std.json.Value) ![]dap.Breakpoint {
-        // Remove existing breakpoints for this file
-        if (self.breakpoints.fetchRemove(file_path)) |existing| {
+        // Update requested breakpoints for this file
+        if (self.requested_breakpoints.fetchRemove(file_path)) |existing| {
             existing.value.deinit();
         }
-        
-        // Create new breakpoint list
+
+        // Store new requested breakpoints
         var line_list = std.ArrayList(u32).init(self.allocator);
         errdefer line_list.deinit();
-        
-        // Parse source breakpoints and add lines
+
         for (source_breakpoints) |bp| {
             const line = bp.object.get("line") orelse continue;
             try line_list.append(@intCast(line.integer));
         }
-        
-        // Store the breakpoints
-        try self.breakpoints.put(file_path, line_list);
-        
-        // Create verified breakpoints response
-        var verified = try self.allocator.alloc(dap.Breakpoint, source_breakpoints.len);
-        for (source_breakpoints, 0..) |bp, i| {
-            const line = bp.object.get("line") orelse continue;
-            verified[i] = .{
-                .id = @intCast(i + 1),
-                .verified = true,
-                .line = @intCast(line.integer),
-                .source = .{ .path = file_path },
-            };
+        try self.requested_breakpoints.put(file_path, line_list);
+
+        // If no VM is active yet, return unvalidated response
+        if (self.vm_info_stack.items.len == 0) {
+            var verified = try self.allocator.alloc(dap.Breakpoint, source_breakpoints.len);
+            for (source_breakpoints, 0..) |bp, i| {
+                const line = bp.object.get("line") orelse continue;
+                const line_num: u32 = @intCast(line.integer);
+                const bp_id = try self.getOrCreateBreakpointId(file_path, line_num);
+                verified[i] = .{
+                    .id = bp_id,
+                    .verified = true,
+                    .line = line_num,
+                    .source = .{ .path = file_path },
+                };
+            }
+            return verified;
         }
-        
-        return verified;
+
+        // Revalidate for current VM
+        var current_vm = &self.vm_info_stack.items[self.vm_info_stack.items.len - 1];
+
+        // Remove existing validated breakpoints for this file
+        if (current_vm.validated_breakpoints.fetchRemove(file_path)) |existing| {
+            existing.value.deinit();
+        }
+
+        // Validate and return response
+        return self.validateBreakpointsForFile(current_vm, file_path, source_breakpoints);
     }
-    
+
     fn checkBreakpoint(self: *const DebugContext, source_loc: ?nargo_debug_info.SourceLocation) bool {
         const loc = source_loc orelse return false;
-        
+
+        // Get the current VM's validated breakpoints
+        if (self.vm_info_stack.items.len == 0) return false;
+        const current_vm = &self.vm_info_stack.items[self.vm_info_stack.items.len - 1];
+
         // Get the file path for this location
         var file_key_buf: [32]u8 = undefined;
         const file_key = std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id}) catch return false;
-        
-        const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
-        const file_info = debug_info.files.get(file_key) orelse return false;
-        
-        // Check if we have breakpoints for this file
-        const breakpoint_lines = self.breakpoints.get(file_info.path) orelse return false;
-        
+
+        const file_info = current_vm.debug_info.files.get(file_key) orelse return false;
+
+        // Check if we have validated breakpoints for this file in current VM
+        const breakpoint_lines = current_vm.validated_breakpoints.get(file_info.path) orelse return false;
+
         // Check if current line has a breakpoint
         for (breakpoint_lines.items) |bp_line| {
             if (bp_line == loc.line) {
                 return true;
             }
         }
-        
+
         return false;
+    }
+
+    fn getOrCreateBreakpointId(self: *DebugContext, file_path: []const u8, line: u32) !u32 {
+        // Create a key from file path and line number
+        var key_buf: [4096]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "{s}:{}", .{ file_path, line });
+
+        // Check if we already have an ID for this breakpoint
+        if (self.breakpoint_id_map.get(key)) |id| {
+            return id;
+        }
+
+        // Generate a new ID
+        const id = self.next_breakpoint_id;
+        self.next_breakpoint_id += 1;
+
+        // Store the mapping (we need to duplicate the key)
+        const key_copy = try self.allocator.dupe(u8, key);
+        try self.breakpoint_id_map.put(key_copy, id);
+
+        return id;
+    }
+
+    fn validateBreakpointsForVm(self: *DebugContext, vm_info: *VmInfo) !void {
+        // Validate all requested breakpoints for this VM
+        var iter = self.requested_breakpoints.iterator();
+        while (iter.next()) |entry| {
+            const file_path = entry.key_ptr.*;
+            const requested_lines = entry.value_ptr.*;
+
+            // Create validated line list for this file
+            var validated_lines = std.ArrayList(u32).init(self.allocator);
+            errdefer validated_lines.deinit();
+
+            for (requested_lines.items) |requested_line| {
+                // Find the next valid line with opcodes
+                const actual_line = try vm_info.debug_info.findNextLineWithOpcodes(file_path, requested_line) orelse requested_line;
+                try validated_lines.append(actual_line);
+            }
+
+            try vm_info.validated_breakpoints.put(file_path, validated_lines);
+        }
+    }
+
+    fn validateBreakpointsForFile(self: *DebugContext, vm_info: *VmInfo, file_path: []const u8, source_breakpoints: []const std.json.Value) ![]dap.Breakpoint {
+        // Create validated line list for this file
+        var validated_lines = std.ArrayList(u32).init(self.allocator);
+        errdefer validated_lines.deinit();
+
+        // Create verified breakpoints response
+        var verified = try self.allocator.alloc(dap.Breakpoint, source_breakpoints.len);
+
+        // Validate each requested breakpoint
+        for (source_breakpoints, 0..) |bp, i| {
+            const requested_line = bp.object.get("line") orelse continue;
+            const line_num: u32 = @intCast(requested_line.integer);
+
+            // Find the next valid line with opcodes
+            const actual_line = try vm_info.debug_info.findNextLineWithOpcodes(file_path, line_num) orelse line_num;
+
+            try validated_lines.append(actual_line);
+
+            const bp_id = try self.getOrCreateBreakpointId(file_path, line_num);
+            verified[i] = .{
+                .id = bp_id,
+                .verified = actual_line != 0,
+                .line = actual_line,
+                .source = .{ .path = file_path },
+            };
+
+            // If the actual line differs from requested, add a message
+            if (actual_line != line_num and actual_line != 0) {
+                var msg_buf: [256]u8 = undefined;
+                const msg = try std.fmt.bufPrint(&msg_buf, "Breakpoint moved from line {} to {}", .{ line_num, actual_line });
+                verified[i].message = try self.allocator.dupe(u8, msg);
+            }
+        }
+
+        // Store validated breakpoints for this VM
+        try vm_info.validated_breakpoints.put(file_path, validated_lines);
+
+        return verified;
+    }
+
+    fn sendBreakpointUpdate(self: *DebugContext) !void {
+        // Send a breakpoint event to notify VSCode about validated breakpoints
+        if (self.dap_protocol == null or self.vm_info_stack.items.len == 0) return;
+
+        const current_vm = &self.vm_info_stack.items[self.vm_info_stack.items.len - 1];
+
+        // For each file with breakpoints, send an update
+        var iter = current_vm.validated_breakpoints.iterator();
+        while (iter.next()) |entry| {
+            const file_path = entry.key_ptr.*;
+            const validated_lines = entry.value_ptr.*;
+
+            // Get corresponding requested lines
+            const requested_lines = self.requested_breakpoints.get(file_path) orelse continue;
+
+            // Create breakpoint array for DAP event
+            var breakpoints = try self.allocator.alloc(dap.Breakpoint, requested_lines.items.len);
+            defer self.allocator.free(breakpoints);
+
+            for (requested_lines.items, validated_lines.items, 0..) |requested, validated, i| {
+                const bp_id = try self.getOrCreateBreakpointId(file_path, requested);
+                breakpoints[i] = .{
+                    .id = bp_id,
+                    .verified = true,
+                    .line = validated,
+                    .source = .{ .path = file_path },
+                };
+
+                if (requested != validated) {
+                    var msg_buf: [256]u8 = undefined;
+                    std.debug.print("Breakpoint moved from line {} to {}\n", .{ requested, validated });
+                    const msg = try std.fmt.bufPrint(&msg_buf, "Breakpoint moved from line {} to {}", .{ requested, validated });
+                    breakpoints[i].message = try self.allocator.dupe(u8, msg);
+                }
+            }
+
+            // Send breakpoint event with the correct structure
+            // According to DAP spec, we need to send one event per breakpoint
+            // Add a small delay between events to ensure VSCode processes them correctly
+            for (breakpoints) |bp| {
+                const body = .{
+                    .reason = "changed",
+                    .breakpoint = bp,
+                };
+                try self.dap_protocol.?.sendEvent("breakpoint", body);
+            }
+        }
     }
 };
