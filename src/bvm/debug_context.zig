@@ -125,7 +125,6 @@ pub const DebugContext = struct {
         if (self.dap_protocol != null and self.vm_info_stack.items.len == 1) {
             // Only send update for the first VM to avoid spam
             self.sendBreakpointUpdate() catch {};
-            self.sendBreakpointUpdate() catch {};
         }
     }
 

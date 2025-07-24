@@ -119,9 +119,7 @@ pub fn CircuitVm(Dispatcher: type) type {
                         brillig_vm.executeVm(self.program.unconstrained_functions[op.id], .{
                             .debug_ctx = options.debug_ctx,
                         }) catch |err| {
-                            if (err == error.Trapped) {
-                                self.brillig_error_context = try brillig_vm.getErrorContext(self.allocator);
-                            }
+                            self.brillig_error_context = try brillig_vm.getErrorContext(self.allocator);
                             return err;
                         };
 

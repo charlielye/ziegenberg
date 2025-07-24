@@ -88,10 +88,6 @@ pub const Txe = struct {
         circuit_vm.executeVm(0, .{ .debug_ctx = if (self.impl.debug_ctx) |*ctx| ctx else null }) catch |err| {
             std.debug.print("Execution failed: {}\n", .{err});
 
-            if (err != error.Trapped) {
-                return err;
-            }
-
             // If this was a Brillig trap, show debug info.
             std.debug.print("\nExecution Stack Trace:\n", .{});
 

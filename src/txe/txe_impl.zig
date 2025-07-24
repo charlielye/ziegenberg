@@ -669,8 +669,7 @@ pub const TxeImpl = struct {
             0,
             .{ .debug_ctx = if (self.debug_ctx) |*ctx| ctx else null },
         ) catch |err| {
-            // If this was a trap, capture the error context in the child state
-            if (err == error.Trapped and circuit_vm.brillig_error_context != null) {
+            if (circuit_vm.brillig_error_context != null) {
                 child_state.execution_error = circuit_vm.brillig_error_context;
             }
             return err;
