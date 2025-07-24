@@ -1,5 +1,12 @@
 const std = @import("std");
 
+// ANSI color codes
+const RESET = "\x1b[0m";
+const YELLOW = "\x1b[33m";
+const GREEN = "\x1b[32m";
+const BLUE = "\x1b[34m";
+const PURPLE = "\x1b[35m";
+
 /// Represents a position in source code
 pub const SourceLocation = struct {
     file_id: u32,
@@ -286,9 +293,15 @@ pub const DebugInfo = struct {
         while (i <= end_line) : (i += 1) {
             if (i - 1 < lines.items.len) {
                 if (i == target_line) {
-                    std.debug.print(">>> {}: {s}\n", .{ i, lines.items[i - 1] });
+                    // Current line: blue indicator, yellow line number, purple code
+                    std.debug.print("{s}>>> {s}{}: {s}{s}{s}\n", .{ 
+                        BLUE, YELLOW, i, PURPLE, lines.items[i - 1], RESET 
+                    });
                 } else {
-                    std.debug.print("    {}: {s}\n", .{ i, lines.items[i - 1] });
+                    // Context lines: yellow line number
+                    std.debug.print("    {s}{}: {s}{s}\n", .{ 
+                        YELLOW, i, RESET, lines.items[i - 1] 
+                    });
                 }
             }
         }
@@ -306,6 +319,6 @@ pub const DebugInfo = struct {
         while (i < column + line_digits + 1) : (i += 1) {
             std.debug.print(" ", .{});
         }
-        std.debug.print("^\n", .{});
+        std.debug.print("{s}^{s}\n", .{ BLUE, RESET });
     }
 };

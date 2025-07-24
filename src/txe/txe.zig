@@ -93,13 +93,17 @@ pub const Txe = struct {
 
             var level: usize = 0;
             var current_state: ?*CallState = self.impl.state.current_state;
+            while (current_state) |state| : (current_state = state.parent) {
+                level += 1;
+            }
 
             // We have nested vm instances, walk the chain.
+            current_state = self.impl.state.current_state;
             while (current_state) |state| : ({
                 current_state = state.parent;
-                level += 1;
+                level -= 1;
             }) {
-                std.debug.print("\n[{}] ", .{level});
+                std.debug.print("\n[{}] ", .{level - 1});
 
                 if (state.contract_abi) |abi| {
                     std.debug.print("Contract: {s} @ {x}\n", .{
@@ -117,16 +121,16 @@ pub const Txe = struct {
                     // Pass the contract's file_map
                     const fn_debug_info = try f.getDebugInfo(allocator, abi.file_map);
 
-                    // Print source location for current PC.
-                    std.debug.print("      [0] PC: {}\n", .{error_ctx.pc});
+                    // Print source location for current PC (top of stack).
+                    std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len, error_ctx.pc });
                     fn_debug_info.printSourceLocation(error_ctx.pc, 2);
 
-                    // Print source locations for callstack entries in reverse order.
+                    // Print source locations for callstack entries from top to bottom.
                     var i: usize = error_ctx.callstack.len;
                     while (i > 0) : (i -= 1) {
                         const return_addr = error_ctx.callstack[i - 1];
                         const pc = return_addr - 1;
-                        std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len - i + 1, pc });
+                        std.debug.print("      [{d}] PC: {}\n", .{ i - 1, pc });
                         fn_debug_info.printSourceLocation(pc, 2);
                     }
                 } else {
@@ -135,15 +139,15 @@ pub const Txe = struct {
                     const error_ctx = circuit_vm.brillig_error_context orelse return error.NoExecutionError;
                     // Print source location for current PC
                     std.debug.print("Source location:\n", .{});
-                    std.debug.print("      [0] PC: {}\n", .{error_ctx.pc});
+                    std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len, error_ctx.pc });
                     debug_info.printSourceLocation(error_ctx.pc, 2);
 
-                    // Print callstack in reverse order
+                    // Print callstack from top to bottom
                     var i: usize = error_ctx.callstack.len;
                     while (i > 0) : (i -= 1) {
                         const return_addr = error_ctx.callstack[i - 1];
                         const pc = return_addr - 1;
-                        std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len - i + 1, pc });
+                        std.debug.print("      [{d}] PC: {}\n", .{ i - 1, pc });
                         debug_info.printSourceLocation(pc, 2);
                     }
                 }
