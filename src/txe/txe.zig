@@ -70,22 +70,22 @@ pub const Txe = struct {
         defer circuit_vm.deinit();
         std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
-        // Create debug context if debug mode is enabled
-        self.impl.debug_mode = options.debug_mode or options.debug_dap;
-        var debug_ctx: ?DebugContext = null;
+        // Create debug context if debug mode is enabled. TODO: cli arg to enum?
         if (options.debug_dap) {
-            debug_ctx = try DebugContext.init(allocator, .dap, try artifact.getDebugInfo(allocator));
+            self.impl.debug_ctx = try DebugContext.init(allocator, .dap);
         } else if (options.debug_mode) {
-            debug_ctx = try DebugContext.init(allocator, .step_by_line, try artifact.getDebugInfo(allocator));
+            self.impl.debug_ctx = try DebugContext.init(allocator, .step_by_line);
+        }
+        // Register the initial VM with its debug info.
+        if (self.impl.debug_ctx) |*ctx| {
+            ctx.onVmEnter(try artifact.getDebugInfo(allocator));
         }
 
         std.debug.print("Executing...\n", .{});
         t.reset();
         defer std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 
-        defer if (debug_ctx) |*ctx| ctx.deinit();
-        
-        circuit_vm.executeVm(0, .{ .debug_ctx = if (debug_ctx) |*ctx| ctx else null }) catch |err| {
+        circuit_vm.executeVm(0, .{ .debug_ctx = if (self.impl.debug_ctx) |*ctx| ctx else null }) catch |err| {
             std.debug.print("Execution failed: {}\n", .{err});
 
             if (err != error.Trapped) {

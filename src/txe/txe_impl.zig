@@ -361,8 +361,7 @@ pub const TxeImpl = struct {
     prng: *std.Random.DefaultPrng,
     state: TxeState,
     contract_artifacts_path: []const u8,
-    // Debug mode flag (passed down to nested calls)
-    debug_mode: bool = false,
+    debug_ctx: ?bvm.DebugContext = null,
 
     pub fn init(allocator: std.mem.Allocator, contract_artifacts_path: []const u8) !TxeImpl {
         const prng = try allocator.create(std.Random.DefaultPrng);
@@ -375,13 +374,13 @@ pub const TxeImpl = struct {
             .prng = prng,
             .state = txe_state,
             .contract_artifacts_path = contract_artifacts_path,
-            .debug_mode = false,
         };
     }
 
     pub fn deinit(self: *TxeImpl) void {
         self.state.deinit();
         self.allocator.destroy(self.prng);
+        if (self.debug_ctx) |*ctx| ctx.deinit();
     }
 
     pub fn reset(self: *TxeImpl, _: std.mem.Allocator) !void {
@@ -661,16 +660,15 @@ pub const TxeImpl = struct {
         circuit_vm.artifact_path = contract_instance.abi.artifact_path;
         circuit_vm.function_name = function.name;
 
-        // Create debug context if debug mode is enabled.
-        var debug_ctx: ?bvm.DebugContext = null;
-        if (self.debug_mode) {
-            debug_ctx = try bvm.DebugContext.init(allocator, .step_by_line, try function.getDebugInfo(allocator, contract_instance.abi.file_map));
+        if (self.debug_ctx) |*ctx| {
+            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map));
+            defer ctx.onVmExit();
         }
 
         std.debug.print("callPrivateFunction: Entering nested cvm (function: {s})\n", .{function.name});
         circuit_vm.executeVm(
             0,
-            .{ .debug_ctx = if (debug_ctx) |*ctx| ctx else null },
+            .{ .debug_ctx = if (self.debug_ctx) |*ctx| ctx else null },
         ) catch |err| {
             // If this was a trap, capture the error context in the child state
             if (err == error.Trapped and circuit_vm.brillig_error_context != null) {
@@ -679,6 +677,10 @@ pub const TxeImpl = struct {
             return err;
         };
         std.debug.print("callPrivateFunction: Exited nested cvm\n", .{});
+
+        if (self.debug_ctx) |*ctx| {
+            defer ctx.onVmExit();
+        }
 
         // Extract public inputs from execution result.
         const start = function.sizeInFields() + constants.PRIVATE_CONTEXT_INPUTS_LENGTH;
@@ -948,18 +950,17 @@ pub const TxeImpl = struct {
         // Execute utility function in nested circuit vm.
         var circuit_vm = try cvm.CircuitVm(Dispatcher).init(allocator, &program, calldata, self.fc_handler);
 
-        // Create debug context if debug mode is enabled
-        var debug_ctx_storage: ?@import("../bvm/debug_context.zig").DebugContext = null;
-        var debug_ctx_ptr: ?*@import("../bvm/debug_context.zig").DebugContext = null;
-        if (self.debug_mode) {
-            const fn_debug_info = try function.getDebugInfo(allocator, contract_instance.abi.file_map);
-            debug_ctx_storage = try @import("../bvm/debug_context.zig").DebugContext.init(allocator, .step_by_line, fn_debug_info);
-            debug_ctx_ptr = &debug_ctx_storage.?;
+        if (self.debug_ctx) |*ctx| {
+            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map));
         }
-        defer if (debug_ctx_storage) |*ctx| ctx.deinit();
 
-        std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{self.state.current_state.contract_address});
-        circuit_vm.executeVm(0, .{ .debug_ctx = debug_ctx_ptr }) catch |err| {
+        std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{
+            self.state.current_state.contract_address,
+        });
+        circuit_vm.executeVm(
+            0,
+            .{ .debug_ctx = if (self.debug_ctx) |*ctx| ctx else null },
+        ) catch |err| {
             // If this was a trap, capture the error context in the child state
             if (err == error.Trapped and circuit_vm.brillig_error_context != null) {
                 child_state.execution_error = circuit_vm.brillig_error_context;
@@ -967,6 +968,9 @@ pub const TxeImpl = struct {
             return err;
         };
         std.debug.print("simulateUtilityFunction: Exited nested cvm\n", .{});
+        if (self.debug_ctx) |*ctx| {
+            defer ctx.onVmExit();
+        }
 
         const return_values = program.functions[0].return_values;
         // Assert program return value witness indices are contiguous.

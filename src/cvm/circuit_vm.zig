@@ -124,6 +124,7 @@ pub fn CircuitVm(Dispatcher: type) type {
                             }
                             return err;
                         };
+
                         var return_data_idx: u32 = 0;
                         for (op.outputs) |o| {
                             const witnesses = switch (o) {

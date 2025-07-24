@@ -19,9 +19,16 @@ pub const ExecutionState = enum {
     terminated,
 };
 
+pub const VmInfo = struct {
+    pc: usize,
+    callstack: []const usize,
+    debug_info: *const nargo_debug_info.DebugInfo,
+    // Track if we're stepping out of this VM
+    stepping_out: bool = false,
+};
+
 pub const DebugContext = struct {
     allocator: std.mem.Allocator,
-    debug_info: *const nargo_debug_info.DebugInfo,
     mode: DebugMode,
     last_line: ?u32 = null,
 
@@ -33,11 +40,14 @@ pub const DebugContext = struct {
     // Step out tracking
     step_out_target_depth: ?usize = null,
 
-    pub fn init(allocator: std.mem.Allocator, mode: DebugMode, debug_info: *const nargo_debug_info.DebugInfo) !DebugContext {
+    // Stack of Brillig VMs (CVM → BVM → CVM → BVM pattern)
+    vm_info_stack: std.ArrayList(VmInfo),
+
+    pub fn init(allocator: std.mem.Allocator, mode: DebugMode) !DebugContext {
         var ctx = DebugContext{
             .allocator = allocator,
             .mode = mode,
-            .debug_info = debug_info,
+            .vm_info_stack = std.ArrayList(VmInfo).init(allocator),
         };
 
         // Initialize DAP if in DAP mode
@@ -53,9 +63,32 @@ pub const DebugContext = struct {
             protocol.deinit();
             self.allocator.destroy(protocol);
         }
+        self.vm_info_stack.deinit();
+    }
+
+    pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo) void {
+        // When entering a new Brillig VM, push it onto the stack
+        self.vm_info_stack.append(.{
+            .pc = 0,
+            .callstack = &.{},
+            .debug_info = debug_info,
+        }) catch unreachable;
+    }
+
+    pub fn onVmExit(self: *DebugContext) void {
+        const current_vm = self.vm_info_stack.pop().?;
+
+        // If we were stepping out of this VM and there's a parent VM
+        if (current_vm.stepping_out and self.vm_info_stack.items.len > 0) {
+            // Mark that we should pause when the parent VM resumes
+            self.execution_state = .paused;
+            self.step_out_target_depth = null;
+        }
     }
 
     pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64, vm: anytype) void {
+        const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
+
         switch (self.mode) {
             .none => return,
             .trace => {
@@ -63,7 +96,7 @@ pub const DebugContext = struct {
                 stdout.print("{:0>4}: {:0>4}: {any}\n", .{ ops_executed, pc, opcode }) catch return;
             },
             .step_by_line => {
-                const source_loc = self.debug_info.getSourceLocation(pc);
+                const source_loc = debug_info.getSourceLocation(pc);
                 const current_line = if (source_loc) |loc| loc.line else null;
 
                 // Check if we've reached a new source line
@@ -73,7 +106,7 @@ pub const DebugContext = struct {
                     // Show the source line
                     const stdout = std.io.getStdOut().writer();
                     stdout.print("\n", .{}) catch return;
-                    self.debug_info.printSourceLocationWithOptions(pc, 0, false);
+                    debug_info.printSourceLocationWithOptions(pc, 0, false);
                 }
             },
             .dap => self.handleDapMode(pc, ops_executed, vm),
@@ -153,7 +186,8 @@ pub const DebugContext = struct {
     fn handleDapMode(self: *DebugContext, pc: usize, ops_executed: u64, vm: anytype) void {
         _ = ops_executed;
 
-        const source_loc = self.debug_info.getSourceLocation(pc);
+        const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
+        const source_loc = debug_info.getSourceLocation(pc);
         const current_line = if (source_loc) |loc| loc.line else null;
 
         // For step out, check if we've returned to the target depth
@@ -236,10 +270,16 @@ pub const DebugContext = struct {
             // Set target depth to one less than current depth
             const current_depth = vm.callstack.items.len;
             if (current_depth > 1) {
+                // Step out within the current VM
                 self.step_out_target_depth = current_depth - 1;
                 self.execution_state = .step_out;
+            } else if (self.vm_info_stack.items.len > 1) {
+                // At top level of current VM but there are outer Brillig VMs
+                // Mark the current VM as stepping out
+                self.vm_info_stack.items[self.vm_info_stack.items.len - 1].stepping_out = true;
+                self.execution_state = .running; // Let it run until VM exits
             } else {
-                // Already at top level.
+                // Already at top level of top VM.
                 self.execution_state = .step_over;
             }
             try protocol.sendResponse(seq, command, true, .{});
@@ -279,22 +319,77 @@ pub const DebugContext = struct {
         var frames = std.ArrayList(dap.StackFrame).init(self.allocator);
         defer frames.deinit();
 
-        // Add current frame
-        if (self.debug_info.getSourceLocation(current_pc)) |loc| {
-            var file_key_buf: [32]u8 = undefined;
-            const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+        var frame_id: u32 = 0;
 
-            if (self.debug_info.files.get(file_key)) |file_info| {
-                try frames.append(.{
-                    .id = 0,
-                    .name = "main",
-                    .source = .{
-                        .path = file_info.path,
-                        .name = std.fs.path.basename(file_info.path),
-                    },
-                    .line = loc.line,
-                    .column = loc.column,
-                });
+        // If we have Brillig VMs on the stack, process them from innermost to outermost
+        if (self.vm_info_stack.items.len > 0) {
+            // Add frames for the current VM (innermost)
+            const current_vm = &self.vm_info_stack.items[self.vm_info_stack.items.len - 1];
+
+            // Add current frame
+            if (current_vm.debug_info.getSourceLocation(current_pc)) |loc| {
+                var file_key_buf: [32]u8 = undefined;
+                const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+
+                if (current_vm.debug_info.files.get(file_key)) |file_info| {
+                    try frames.append(.{
+                        .id = frame_id,
+                        .name = "brillig_current",
+                        .source = .{
+                            .path = file_info.path,
+                            .name = std.fs.path.basename(file_info.path),
+                        },
+                        .line = loc.line,
+                        .column = loc.column,
+                    });
+                    frame_id += 1;
+                }
+            }
+
+            // Add frames from the current VM's callstack
+            for (current_vm.callstack) |return_pc| {
+                if (current_vm.debug_info.getSourceLocation(return_pc)) |loc| {
+                    var file_key_buf: [32]u8 = undefined;
+                    const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+
+                    if (current_vm.debug_info.files.get(file_key)) |file_info| {
+                        try frames.append(.{
+                            .id = frame_id,
+                            .name = "brillig_frame",
+                            .source = .{
+                                .path = file_info.path,
+                                .name = std.fs.path.basename(file_info.path),
+                            },
+                            .line = loc.line,
+                            .column = loc.column,
+                        });
+                        frame_id += 1;
+                    }
+                }
+            }
+
+            // Add frames from outer VMs
+            var i = self.vm_info_stack.items.len - 1;
+            while (i > 0) : (i -= 1) {
+                const outer_vm = &self.vm_info_stack.items[i - 1];
+                if (outer_vm.debug_info.getSourceLocation(outer_vm.pc)) |loc| {
+                    var file_key_buf: [32]u8 = undefined;
+                    const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+
+                    if (outer_vm.debug_info.files.get(file_key)) |file_info| {
+                        try frames.append(.{
+                            .id = frame_id,
+                            .name = "brillig_caller",
+                            .source = .{
+                                .path = file_info.path,
+                                .name = std.fs.path.basename(file_info.path),
+                            },
+                            .line = loc.line,
+                            .column = loc.column,
+                        });
+                        frame_id += 1;
+                    }
+                }
             }
         }
 
