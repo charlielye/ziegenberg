@@ -474,10 +474,7 @@ pub const DebugContext = struct {
                     const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
 
                     if (vm_info.debug_info.files.get(file_key)) |file_info| {
-                        const frame_name = if (vm_idx == self.vm_info_stack.items.len - 1)
-                            "main"
-                        else
-                            "caller";
+                        const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:pc", .{vm_idx});
 
                         try frames.append(.{
                             .id = frame_id,
@@ -498,14 +495,14 @@ pub const DebugContext = struct {
                     var i: i32 = @intCast(vm_info.callstack.len - 1);
                     while (i >= 0) : (i -= 1) {
                         const idx: usize = @intCast(i);
-                        const return_pc = vm_info.callstack[idx];
+                        const call_pc = vm_info.callstack[idx] - 1;
 
-                        if (vm_info.debug_info.getSourceLocation(return_pc)) |loc| {
+                        if (vm_info.debug_info.getSourceLocation(call_pc)) |loc| {
                             var file_key_buf: [32]u8 = undefined;
                             const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
 
                             if (vm_info.debug_info.files.get(file_key)) |file_info| {
-                                const frame_name = "frame";
+                                const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:fr{}", .{ vm_idx, vm_info.callstack.len - idx });
 
                                 try frames.append(.{
                                     .id = frame_id,
@@ -529,6 +526,8 @@ pub const DebugContext = struct {
             .stackFrames = frames.items,
             .totalFrames = frames.items.len,
         };
+
+        std.debug.print("Stack trace: {} frames, {} VMs\n", .{ frames.items.len, self.vm_info_stack.items.len });
 
         try protocol.sendResponse(request_seq, "stackTrace", true, response_body);
     }
