@@ -109,8 +109,14 @@ pub const DebugContext = struct {
 
     pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo) void {
         // When entering a new Brillig VM, push it onto the stack
+        // Store the current VM's PC before pushing the new VM
+        const parent_pc: usize = if (self.vm_info_stack.items.len > 0)
+            self.vm_info_stack.items[self.vm_info_stack.items.len - 1].pc
+        else
+            0;
+
         var vm_info = VmInfo{
-            .pc = 0,
+            .pc = parent_pc, // Store where we were in the parent VM
             .callstack = &.{},
             .debug_info = debug_info,
             .validated_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(self.allocator),
@@ -124,6 +130,15 @@ pub const DebugContext = struct {
         // Send DAP event to update breakpoints if we have a protocol
         if (self.dap_protocol != null) {
             self.sendBreakpointUpdate() catch {};
+        }
+    }
+
+    pub fn onError(self: *DebugContext, pc: usize, vm: anytype) void {
+        // When an error occurs, pause execution and notify VSCode
+        if (self.mode == .dap) {
+            self.execution_state = .paused;
+            self.sendStoppedEvent("exception", pc) catch {};
+            self.waitForDapCommands(pc, vm);
         }
     }
 
@@ -151,6 +166,12 @@ pub const DebugContext = struct {
     }
 
     pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64, vm: anytype) void {
+        // Update current VM's PC and callstack
+        if (self.vm_info_stack.items.len > 0) {
+            self.vm_info_stack.items[self.vm_info_stack.items.len - 1].pc = pc;
+            self.vm_info_stack.items[self.vm_info_stack.items.len - 1].callstack = vm.callstack.items;
+        }
+
         const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
 
         switch (self.mode) {
@@ -435,41 +456,32 @@ pub const DebugContext = struct {
 
         var frame_id: u32 = 0;
 
-        // If we have Brillig VMs on the stack, process them from innermost to outermost
+        // Process all VMs from innermost to outermost
         if (self.vm_info_stack.items.len > 0) {
-            // Add frames for the current VM (innermost)
-            const current_vm = &self.vm_info_stack.items[self.vm_info_stack.items.len - 1];
+            // Start with the innermost (current) VM
+            var vm_index: i32 = @intCast(self.vm_info_stack.items.len - 1);
+            while (vm_index >= 0) : (vm_index -= 1) {
+                const vm_idx: usize = @intCast(vm_index);
+                const vm_info = &self.vm_info_stack.items[vm_idx];
 
-            // Add current frame
-            if (current_vm.debug_info.getSourceLocation(current_pc)) |loc| {
-                var file_key_buf: [32]u8 = undefined;
-                const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+                // For the innermost VM, use the passed current_pc
+                // For outer VMs, use their stored pc
+                const vm_pc = if (vm_idx == self.vm_info_stack.items.len - 1) current_pc else vm_info.pc;
 
-                if (current_vm.debug_info.files.get(file_key)) |file_info| {
-                    try frames.append(.{
-                        .id = frame_id,
-                        .name = "brillig_current",
-                        .source = .{
-                            .path = file_info.path,
-                            .name = std.fs.path.basename(file_info.path),
-                        },
-                        .line = loc.line,
-                        .column = loc.column,
-                    });
-                    frame_id += 1;
-                }
-            }
-
-            // Add frames from the current VM's callstack
-            for (current_vm.callstack) |return_pc| {
-                if (current_vm.debug_info.getSourceLocation(return_pc)) |loc| {
+                // Add current location for this VM
+                if (vm_info.debug_info.getSourceLocation(vm_pc)) |loc| {
                     var file_key_buf: [32]u8 = undefined;
                     const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
 
-                    if (current_vm.debug_info.files.get(file_key)) |file_info| {
+                    if (vm_info.debug_info.files.get(file_key)) |file_info| {
+                        const frame_name = if (vm_idx == self.vm_info_stack.items.len - 1)
+                            "main"
+                        else
+                            "caller";
+
                         try frames.append(.{
                             .id = frame_id,
-                            .name = "brillig_frame",
+                            .name = frame_name,
                             .source = .{
                                 .path = file_info.path,
                                 .name = std.fs.path.basename(file_info.path),
@@ -480,28 +492,34 @@ pub const DebugContext = struct {
                         frame_id += 1;
                     }
                 }
-            }
 
-            // Add frames from outer VMs
-            var i = self.vm_info_stack.items.len - 1;
-            while (i > 0) : (i -= 1) {
-                const outer_vm = &self.vm_info_stack.items[i - 1];
-                if (outer_vm.debug_info.getSourceLocation(outer_vm.pc)) |loc| {
-                    var file_key_buf: [32]u8 = undefined;
-                    const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+                // Add all callstack entries for this VM (in reverse order to show deepest first)
+                if (vm_info.callstack.len > 0) {
+                    var i: i32 = @intCast(vm_info.callstack.len - 1);
+                    while (i >= 0) : (i -= 1) {
+                        const idx: usize = @intCast(i);
+                        const return_pc = vm_info.callstack[idx];
 
-                    if (outer_vm.debug_info.files.get(file_key)) |file_info| {
-                        try frames.append(.{
-                            .id = frame_id,
-                            .name = "brillig_caller",
-                            .source = .{
-                                .path = file_info.path,
-                                .name = std.fs.path.basename(file_info.path),
-                            },
-                            .line = loc.line,
-                            .column = loc.column,
-                        });
-                        frame_id += 1;
+                        if (vm_info.debug_info.getSourceLocation(return_pc)) |loc| {
+                            var file_key_buf: [32]u8 = undefined;
+                            const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
+
+                            if (vm_info.debug_info.files.get(file_key)) |file_info| {
+                                const frame_name = "frame";
+
+                                try frames.append(.{
+                                    .id = frame_id,
+                                    .name = frame_name,
+                                    .source = .{
+                                        .path = file_info.path,
+                                        .name = std.fs.path.basename(file_info.path),
+                                    },
+                                    .line = loc.line,
+                                    .column = loc.column,
+                                });
+                                frame_id += 1;
+                            }
+                        }
                     }
                 }
             }
@@ -642,7 +660,7 @@ pub const DebugContext = struct {
             for (requested_lines.items) |requested_line| {
                 // Find the next valid line with opcodes (within 10 lines)
                 const actual_line = findNextLineInCache(lines_with_opcodes.items, requested_line, 10);
-                
+
                 if (actual_line) |line| {
                     std.debug.print("Validating breakpoint at {s}:{} -> {}\n", .{ file_path, requested_line, line });
                     try validated_lines.append(line);
@@ -657,15 +675,15 @@ pub const DebugContext = struct {
             try vm_info.validated_breakpoints.put(file_path, validated_lines);
         }
     }
-    
+
     fn findNextLineInCache(lines_with_opcodes: []const u32, target_line: u32, max_distance: u32) ?u32 {
         // Since lines_with_opcodes is sorted, we can use binary search for efficiency
         const max_line = target_line + max_distance;
-        
+
         // Find the first line >= target_line using binary search
         var left: usize = 0;
         var right: usize = lines_with_opcodes.len;
-        
+
         while (left < right) {
             const mid = left + (right - left) / 2;
             if (lines_with_opcodes[mid] < target_line) {
@@ -674,12 +692,12 @@ pub const DebugContext = struct {
                 right = mid;
             }
         }
-        
+
         // Check if the found line is within max_distance
         if (left < lines_with_opcodes.len and lines_with_opcodes[left] <= max_line) {
             return lines_with_opcodes[left];
         }
-        
+
         return null;
     }
 

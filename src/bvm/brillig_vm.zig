@@ -127,7 +127,13 @@ pub fn BrilligVm(ForeignCallDispatcher: type) type {
                 }
 
                 // Execute opcode.
-                try Self.jump_table[i](self, opcode);
+                Self.jump_table[i](self, opcode) catch |err| {
+                    // Notify debug context about the error before propagating
+                    if (options.debug_ctx) |ctx| {
+                        ctx.onError(current_pc, self);
+                    }
+                    return err;
+                };
 
                 if (options.sample_rate > 0 and self.ops_executed % options.sample_rate == 0) {
                     self.opcode_time[idx] += rdtsc() - before;
