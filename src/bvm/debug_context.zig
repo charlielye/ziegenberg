@@ -122,8 +122,7 @@ pub const DebugContext = struct {
         self.vm_info_stack.append(vm_info) catch unreachable;
 
         // Send DAP event to update breakpoints if we have a protocol
-        if (self.dap_protocol != null and self.vm_info_stack.items.len == 1) {
-            // Only send update for the first VM to avoid spam
+        if (self.dap_protocol != null) {
             self.sendBreakpointUpdate() catch {};
         }
     }
@@ -609,11 +608,32 @@ pub const DebugContext = struct {
     }
 
     fn validateBreakpointsForVm(self: *DebugContext, vm_info: *VmInfo) !void {
-        // Validate all requested breakpoints for this VM
+        // Cache lines with opcodes for each file to avoid redundant lookups
+        var file_opcodes_cache = std.StringHashMap(std.ArrayList(u32)).init(self.allocator);
+        defer {
+            var cache_iter = file_opcodes_cache.iterator();
+            while (cache_iter.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            file_opcodes_cache.deinit();
+        }
+
+        // Build cache for each file that has breakpoints
         var iter = self.requested_breakpoints.iterator();
         while (iter.next()) |entry| {
             const file_path = entry.key_ptr.*;
+            if (!file_opcodes_cache.contains(file_path)) {
+                const lines_with_opcodes = try vm_info.debug_info.getLinesWithOpcodes(file_path);
+                try file_opcodes_cache.put(file_path, lines_with_opcodes);
+            }
+        }
+
+        // Now validate all breakpoints using the cache
+        iter = self.requested_breakpoints.iterator();
+        while (iter.next()) |entry| {
+            const file_path = entry.key_ptr.*;
             const requested_lines = entry.value_ptr.*;
+            const lines_with_opcodes = file_opcodes_cache.get(file_path).?;
 
             // Create validated line list for this file
             var validated_lines = std.ArrayList(u32).init(self.allocator);
@@ -621,19 +641,46 @@ pub const DebugContext = struct {
 
             for (requested_lines.items) |requested_line| {
                 // Find the next valid line with opcodes (within 10 lines)
-                if (try vm_info.debug_info.findNextLineWithOpcodes(file_path, requested_line)) |actual_line| {
-                    std.debug.print("Validating breakpoint at {s}:{} -> {}\n", .{ file_path, requested_line, actual_line });
-                    try validated_lines.append(actual_line);
+                const actual_line = findNextLineInCache(lines_with_opcodes.items, requested_line, 10);
+                
+                if (actual_line) |line| {
+                    std.debug.print("Validating breakpoint at {s}:{} -> {}\n", .{ file_path, requested_line, line });
+                    try validated_lines.append(line);
                 } else {
                     // No valid line found within 10 lines - store 0 to indicate invalid
                     std.debug.print("Breakpoint at {s}:{} is invalid in this VM (no opcodes within 10 lines)\n", .{ file_path, requested_line });
                     try validated_lines.append(0);
                 }
             }
-            
+
             // Always store the validated lines (with 0 for invalid breakpoints)
             try vm_info.validated_breakpoints.put(file_path, validated_lines);
         }
+    }
+    
+    fn findNextLineInCache(lines_with_opcodes: []const u32, target_line: u32, max_distance: u32) ?u32 {
+        // Since lines_with_opcodes is sorted, we can use binary search for efficiency
+        const max_line = target_line + max_distance;
+        
+        // Find the first line >= target_line using binary search
+        var left: usize = 0;
+        var right: usize = lines_with_opcodes.len;
+        
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            if (lines_with_opcodes[mid] < target_line) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+        
+        // Check if the found line is within max_distance
+        if (left < lines_with_opcodes.len and lines_with_opcodes[left] <= max_line) {
+            return lines_with_opcodes[left];
+        }
+        
+        return null;
     }
 
     fn validateBreakpointsForFile(self: *DebugContext, vm_info: *VmInfo, file_path: []const u8, source_breakpoints: []const std.json.Value) ![]dap.Breakpoint {
@@ -651,7 +698,7 @@ pub const DebugContext = struct {
 
             // Find the next valid line with opcodes (within 10 lines)
             const bp_id = try self.getOrCreateBreakpointId(file_path, line_num);
-            
+
             if (try vm_info.debug_info.findNextLineWithOpcodes(file_path, line_num)) |actual_line| {
                 try validated_lines.append(actual_line);
                 verified[i] = .{
@@ -660,7 +707,7 @@ pub const DebugContext = struct {
                     .line = actual_line,
                     .source = .{ .path = file_path },
                 };
-                
+
                 // If the actual line differs from requested, add a message
                 if (actual_line != line_num) {
                     var msg_buf: [256]u8 = undefined;
@@ -711,7 +758,7 @@ pub const DebugContext = struct {
             // Now requested_lines and validated_lines have the same length
             for (requested_lines.items, validated_lines.items, 0..) |requested, validated, i| {
                 const bp_id = try self.getOrCreateBreakpointId(file_path, requested);
-                
+
                 if (validated == 0) {
                     // Invalid breakpoint (no opcodes found within 10 lines)
                     breakpoints[i] = .{
@@ -729,7 +776,7 @@ pub const DebugContext = struct {
                         .line = validated,
                         .source = .{ .path = file_path },
                     };
-                    
+
                     if (requested != validated) {
                         var msg_buf: [256]u8 = undefined;
                         std.debug.print("Breakpoint moved from line {} to {}\n", .{ requested, validated });
