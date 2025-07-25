@@ -206,16 +206,24 @@ class NoirDebugAdapter {
     });
 
     // Handle zb stderr (debug output)
+    // Buffer to handle partial lines
+    let stderrBuffer = "";
     this.zbProcess.stderr?.on("data", (data: Buffer) => {
       const text = data.toString("utf8");
-      const lines = text.split("\n");
-      for (const line of lines) {
-        if (line.trim()) {
-          this.sendEvent("output", {
-            category: "console",
-            output: line + "\n",
-          });
-        }
+      stderrBuffer += text;
+      
+      // Process complete lines only
+      let lastNewline = stderrBuffer.lastIndexOf("\n");
+      if (lastNewline >= 0) {
+        // Send all complete lines
+        const completeText = stderrBuffer.substring(0, lastNewline + 1);
+        stderrBuffer = stderrBuffer.substring(lastNewline + 1);
+        
+        // Send as-is to preserve formatting
+        this.sendEvent("output", {
+          category: "console",
+          output: completeText,
+        });
       }
     });
 

@@ -147,6 +147,9 @@ pub fn BrilligVm(ForeignCallDispatcher: type) type {
                         // Debug context requested termination
                         return error.DebuggerTerminated;
                     }
+                    if (self.trapped) {
+                        ctx.onError(current_pc, self);
+                    }
                 }
             }
 
@@ -476,14 +479,7 @@ pub fn BrilligVm(ForeignCallDispatcher: type) type {
             self.return_data = self.mem.memory[slot .. slot + size];
             for (self.return_data) |*v| fieldOps.bn254_fr_normalize(@ptrCast(v));
             std.debug.print("Trap! PC: {}, Ops executed: {}\n", .{ self.pc, self.ops_executed });
-            std.debug.print("Callstack depth: {}\n", .{self.callstack.items.len});
-            if (self.callstack.items.len > 0) {
-                std.debug.print("Callstack: ", .{});
-                for (self.callstack.items) |addr| {
-                    std.debug.print("{} ", .{addr});
-                }
-                std.debug.print("\n", .{});
-            }
+            std.debug.print("Callstack ({} items): {any}\n", .{ self.callstack.items.len, self.callstack.items });
         }
 
         pub fn dumpStats(self: *Self) void {

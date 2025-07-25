@@ -151,6 +151,11 @@ pub const Txe = struct {
                         std.debug.print("      [{d}] PC: {}\n", .{ i - 1, pc });
                         debug_info.printSourceLocation(pc, 2);
                     }
+
+                    std.debug.print("Revert data: \n", .{});
+                    for (error_ctx.return_data, 0..) |data, j| {
+                        std.debug.print("  [{d:0>2}]: 0x{x:0>64}\n", .{ j, data });
+                    }
                 }
             }
 
