@@ -163,6 +163,8 @@ pub const Capabilities = struct {
     supportsDelayedStackTraceLoading: bool = false,
     supportsTerminateRequest: bool = true,
     supportsPauseRequest: bool = true,
+    supportsVariableType: bool = true,
+    supportsVariablePaging: bool = false,
 };
 
 pub const SourceBreakpoint = struct {
@@ -182,4 +184,29 @@ pub const Breakpoint = struct {
     column: ?u32 = null,
     endLine: ?u32 = null,
     endColumn: ?u32 = null,
+};
+
+pub const Scope = struct {
+    name: []const u8,
+    presentationHint: ?[]const u8 = null,
+    variablesReference: u32,
+    namedVariables: ?u32 = null,
+    indexedVariables: ?u32 = null,
+    expensive: bool = false,
+};
+
+pub const Variable = struct {
+    name: []const u8,
+    value: []const u8,
+    type: ?[]const u8 = null,
+    presentationHint: ?struct {
+        kind: ?[]const u8 = null,
+        attributes: ?[]const []const u8 = null,
+        visibility: ?[]const u8 = null,
+    } = null,
+    evaluateName: ?[]const u8 = null,
+    variablesReference: u32 = 0,
+    namedVariables: ?u32 = null,
+    indexedVariables: ?u32 = null,
+    memoryReference: ?[]const u8 = null,
 };

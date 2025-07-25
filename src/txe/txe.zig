@@ -72,9 +72,11 @@ pub const Txe = struct {
 
         // Create debug context if debug mode is enabled. TODO: cli arg to enum?
         if (options.debug_dap) {
-            self.impl.debug_ctx = try DebugContext.init(allocator, .dap);
+            var provider = self.impl.state.getDebugVariableProvider();
+            self.impl.debug_ctx = try DebugContext.initWithVariableProvider(allocator, .dap, &provider);
         } else if (options.debug_mode) {
-            self.impl.debug_ctx = try DebugContext.init(allocator, .step_by_line);
+            var provider = self.impl.state.getDebugVariableProvider();
+            self.impl.debug_ctx = try DebugContext.initWithVariableProvider(allocator, .step_by_line, &provider);
         }
         // Register the initial VM with its debug info.
         if (self.impl.debug_ctx) |*ctx| {

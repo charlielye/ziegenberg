@@ -89,6 +89,18 @@ pub const NoteCache = struct {
         const nullifier_map = self.nullifiers.get(contract_address) orelse return false;
         return nullifier_map.contains(nullifier);
     }
+
+    pub fn getTotalNoteCount(self: *const NoteCache) usize {
+        var count: usize = 0;
+        var it = self.notes.iterator();
+        while (it.next()) |contract_entry| {
+            var storage_it = contract_entry.value_ptr.iterator();
+            while (storage_it.next()) |storage_entry| {
+                count += storage_entry.value_ptr.items.len;
+            }
+        }
+        return count;
+    }
 };
 
 // Helper functions for note selection

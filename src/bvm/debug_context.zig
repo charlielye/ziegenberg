@@ -2,6 +2,7 @@ const std = @import("std");
 const nargo_debug_info = @import("../nargo/debug_info.zig");
 const BrilligVm = @import("brillig_vm.zig").BrilligVm;
 const dap = @import("../debugger/dap.zig");
+const debug_var = @import("debug_variable_provider.zig");
 
 pub const DebugMode = enum {
     none,
@@ -65,13 +66,25 @@ pub const DebugContext = struct {
     // Map from file path + line to breakpoint ID for stable IDs
     breakpoint_id_map: std.StringHashMap(u32),
 
+    // Debug variable provider for DAP variable inspection
+    variable_provider: ?*const debug_var.DebugVariableProvider = null,
+
     pub fn init(allocator: std.mem.Allocator, mode: DebugMode) !DebugContext {
+        return initWithVariableProvider(allocator, mode, null);
+    }
+
+    pub fn initWithVariableProvider(
+        allocator: std.mem.Allocator,
+        mode: DebugMode,
+        variable_provider: ?*const debug_var.DebugVariableProvider,
+    ) !DebugContext {
         var ctx = DebugContext{
             .allocator = allocator,
             .mode = mode,
             .vm_info_stack = std.ArrayList(VmInfo).init(allocator),
             .requested_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(allocator),
             .breakpoint_id_map = std.StringHashMap(u32).init(allocator),
+            .variable_provider = variable_provider,
         };
 
         // Initialize DAP if in DAP mode
@@ -233,7 +246,9 @@ pub const DebugContext = struct {
         const seq: u32 = @intCast(obj.get("seq").?.integer);
 
         // Send initialize response with capabilities
-        const capabilities = dap.Capabilities{};
+        const capabilities = dap.Capabilities{
+            .supportsVariableType = true,
+        };
         try protocol.sendResponse(seq, "initialize", true, capabilities);
 
         // Send initialized event
@@ -504,6 +519,14 @@ pub const DebugContext = struct {
             try protocol.sendResponse(seq, command, true, response);
         } else if (std.mem.eql(u8, command, "configurationDone")) {
             try protocol.sendResponse(seq, command, true, .{});
+        } else if (std.mem.eql(u8, command, "scopes")) {
+            const args = obj.get("arguments") orelse return error.NoArguments;
+            const frame_id = args.object.get("frameId") orelse return error.NoFrameId;
+            try self.sendScopes(seq, @intCast(frame_id.integer));
+        } else if (std.mem.eql(u8, command, "variables")) {
+            const args = obj.get("arguments") orelse return error.NoArguments;
+            const var_ref = args.object.get("variablesReference") orelse return error.NoVariablesReference;
+            try self.sendVariables(seq, @intCast(var_ref.integer));
         } else {
             // Unknown command - send error response
             try protocol.sendResponse(seq, command, false, .{ .message = "Unsupported command" });
@@ -906,6 +929,70 @@ pub const DebugContext = struct {
                 };
                 try self.dap_protocol.?.sendEvent("breakpoint", body);
             }
+        }
+    }
+
+    fn sendScopes(self: *DebugContext, request_seq: u32, frame_id: u32) !void {
+        const protocol = self.dap_protocol.?;
+
+        if (self.variable_provider) |provider| {
+            // Get scopes from the provider
+            const scopes = try provider.getScopes(self.allocator, frame_id);
+            defer self.allocator.free(scopes);
+
+            // Convert to DAP scopes
+            var dap_scopes = try self.allocator.alloc(dap.Scope, scopes.len);
+            defer self.allocator.free(dap_scopes);
+
+            for (scopes, 0..) |scope, i| {
+                dap_scopes[i] = .{
+                    .name = scope.name,
+                    .presentationHint = scope.presentationHint,
+                    .variablesReference = scope.variablesReference,
+                    .namedVariables = scope.namedVariables,
+                    .indexedVariables = scope.indexedVariables,
+                    .expensive = scope.expensive,
+                };
+            }
+
+            const response_body = .{ .scopes = dap_scopes };
+            try protocol.sendResponse(request_seq, "scopes", true, response_body);
+        } else {
+            // No variable provider, return empty scopes
+            const response_body = .{ .scopes = &[_]dap.Scope{} };
+            try protocol.sendResponse(request_seq, "scopes", true, response_body);
+        }
+    }
+
+    fn sendVariables(self: *DebugContext, request_seq: u32, variables_reference: u32) !void {
+        const protocol = self.dap_protocol.?;
+
+        if (self.variable_provider) |provider| {
+            // Get variables from the provider
+            const variables = try provider.getVariables(self.allocator, variables_reference);
+            defer self.allocator.free(variables);
+
+            // Convert to DAP variables
+            var dap_variables = try self.allocator.alloc(dap.Variable, variables.len);
+            defer self.allocator.free(dap_variables);
+
+            for (variables, 0..) |variable, i| {
+                dap_variables[i] = .{
+                    .name = variable.name,
+                    .value = variable.value,
+                    .type = variable.type,
+                    .variablesReference = variable.variablesReference,
+                    .namedVariables = variable.namedVariables,
+                    .indexedVariables = variable.indexedVariables,
+                };
+            }
+
+            const response_body = .{ .variables = dap_variables };
+            try protocol.sendResponse(request_seq, "variables", true, response_body);
+        } else {
+            // No variable provider, return empty variables
+            const response_body = .{ .variables = &[_]dap.Variable{} };
+            try protocol.sendResponse(request_seq, "variables", true, response_body);
         }
     }
 };
