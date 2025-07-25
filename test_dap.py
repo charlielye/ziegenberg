@@ -737,7 +737,11 @@ def test_variables_txe():
         # Verify we have TXE scopes
         scope_names = [s['name'] for s in scopes]
         assert "TXE Global State" in scope_names, "Missing TXE Global State scope"
-        assert "Current Call State" in scope_names, "Missing Current Call State scope"
+        
+        # Should have at least one call state (current)
+        call_state_scopes = [s for s in scope_names if "Call State" in s]
+        assert len(call_state_scopes) >= 1, f"Expected at least one Call State scope, got {call_state_scopes}"
+        print(f"  Found {len(call_state_scopes)} Call State scope(s)")
 
         # Get variables for each scope
         for scope in scopes:
@@ -770,6 +774,10 @@ def test_variables_txe():
                     elif var_name == "is_static_call":
                         assert var_type == "bool", f"is_static_call should be bool, got {var_type}"
                         assert var_value in ["true", "false"], f"is_static_call should be true/false, got {var_value}"
+                    elif var_name == "num_storage_writes":
+                        assert var_type == "usize", f"num_storage_writes should be usize, got {var_type}"
+                    elif var_name == "num_private_logs":
+                        assert var_type == "usize", f"num_private_logs should be usize, got {var_type}"
 
         print("\n✓ Variables inspection verified")
         return True

@@ -91,7 +91,7 @@ pub const TxeState = struct {
     }
 
     fn getScopesImpl(context: *anyopaque, allocator: std.mem.Allocator, frame_id: u32) anyerror![]debug_var.DebugScope {
-        _ = context; // We don't need the context for scopes
+        const self = @as(*TxeState, @ptrCast(@alignCast(context)));
         
         var scopes = std.ArrayList(debug_var.DebugScope).init(allocator);
         defer scopes.deinit();
@@ -109,13 +109,28 @@ pub const TxeState = struct {
             .expensive = false,
         });
 
-        // Add Current Call State scope
-        try scopes.append(.{
-            .name = "Current Call State",
-            .presentationHint = "locals",
-            .variablesReference = var_ref_base + 2,
-            .expensive = false,
-        });
+        // Add scopes for each CallState in the chain
+        var current_state: ?*call_state.CallState = self.current_state;
+        var call_depth: u32 = 0;
+        while (current_state) |state| {
+            // Determine the name for this call state
+            const scope_name = if (call_depth == 0)
+                try std.fmt.allocPrint(allocator, "Current Call State", .{})
+            else if (state.contract_abi) |abi|
+                try std.fmt.allocPrint(allocator, "Call State #{} - {s}", .{ call_depth, abi.name })
+            else
+                try std.fmt.allocPrint(allocator, "Call State #{}", .{call_depth});
+
+            try scopes.append(.{
+                .name = scope_name,
+                .presentationHint = if (call_depth == 0) "locals" else "arguments",
+                .variablesReference = var_ref_base + 2 + call_depth,
+                .expensive = false,
+            });
+
+            current_state = state.parent;
+            call_depth += 1;
+        }
 
         return scopes.toOwnedSlice();
     }
@@ -163,54 +178,22 @@ pub const TxeState = struct {
                 .type = "HashMap",
                 .variablesReference = variables_reference + 100, // Sub-reference for account list
             });
-        } else if (scope_type == 2) {
-            // Current Call State
-            const current_state = self.current_state;
-
-            try variables.append(.{
-                .name = "contract_address",
-                .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{current_state.contract_address.value.to_int()}),
-                .type = "AztecAddress",
-            });
-
-            try variables.append(.{
-                .name = "msg_sender",
-                .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{current_state.msg_sender.value.to_int()}),
-                .type = "AztecAddress",
-            });
-
-            try variables.append(.{
-                .name = "function_selector",
-                .value = try std.fmt.allocPrint(allocator, "0x{x:0>8}", .{current_state.function_selector}),
-                .type = "u32",
-            });
-
-            try variables.append(.{
-                .name = "is_static_call",
-                .value = if (current_state.is_static_call) "true" else "false",
-                .type = "bool",
-            });
-
-            try variables.append(.{
-                .name = "side_effect_counter",
-                .value = try std.fmt.allocPrint(allocator, "{}", .{current_state.side_effect_counter}),
-                .type = "u32",
-            });
-
-            // Number of notes in cache
-            const num_notes = current_state.note_cache.getTotalNoteCount();
-            try variables.append(.{
-                .name = "num_notes",
-                .value = try std.fmt.allocPrint(allocator, "{}", .{num_notes}),
-                .type = "usize",
-            });
-
-            // Number of nullifiers
-            try variables.append(.{
-                .name = "num_nullifiers",
-                .value = try std.fmt.allocPrint(allocator, "{}", .{current_state.nullifiers.items.len}),
-                .type = "usize",
-            });
+        } else if (scope_type >= 2 and scope_type < 100) {
+            // Call State at specific depth (2 = current, 3 = parent, etc.)
+            const call_depth = scope_type - 2;
+            
+            // Walk the chain to find the CallState at the requested depth
+            var current_state: ?*call_state.CallState = self.current_state;
+            var depth: u32 = 0;
+            while (current_state) |state| {
+                if (depth == call_depth) {
+                    // Found the right CallState, add its variables
+                    try appendCallStateVariables(&variables, allocator, state, variables_reference);
+                    break;
+                }
+                current_state = state.parent;
+                depth += 1;
+            }
         } else if (scope_type == 101) {
             // Account list sub-reference (from clicking on "accounts")
             var iter = self.accounts.iterator();
@@ -224,8 +207,136 @@ pub const TxeState = struct {
                 });
                 index += 1;
             }
+        } else if (scope_type >= 200 and scope_type < 300) {
+            // Sub-references for CallState collections
+            const sub_type = scope_type % 100;
+            const call_depth = (scope_type / 100 - 2);
+            
+            // Walk to the right CallState
+            var current_state: ?*call_state.CallState = self.current_state;
+            var depth: u32 = 0;
+            while (current_state) |state| {
+                if (depth == call_depth) {
+                    if (sub_type == 0) {
+                        // Storage writes
+                        var iter = state.storage_writes.iterator();
+                        var index: usize = 0;
+                        while (iter.next()) |entry| {
+                            const name = try std.fmt.allocPrint(allocator, "[{}] {s}", .{ index, entry.key_ptr.* });
+                            const value_str = if (entry.value_ptr.*.len > 0)
+                                try std.fmt.allocPrint(allocator, "[{}]F = 0x{x:0>64}...", .{ entry.value_ptr.*.len, entry.value_ptr.*[0].to_int() })
+                            else
+                                try std.fmt.allocPrint(allocator, "[0]F", .{});
+                            try variables.append(.{
+                                .name = name,
+                                .value = value_str,
+                                .type = "[]F",
+                            });
+                            index += 1;
+                        }
+                    } else if (sub_type == 1) {
+                        // Nullifiers
+                        for (state.nullifiers.items, 0..) |nullifier, i| {
+                            const name = try std.fmt.allocPrint(allocator, "[{}]", .{i});
+                            try variables.append(.{
+                                .name = name,
+                                .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{nullifier.to_int()}),
+                                .type = "Field",
+                            });
+                        }
+                    }
+                    break;
+                }
+                current_state = state.parent;
+                depth += 1;
+            }
         }
 
         return variables.toOwnedSlice();
+    }
+
+    fn appendCallStateVariables(
+        variables: *std.ArrayList(debug_var.DebugVariable),
+        allocator: std.mem.Allocator,
+        state: *call_state.CallState,
+        base_ref: u32,
+    ) !void {
+        try variables.append(.{
+            .name = "contract_address",
+            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{state.contract_address.value.to_int()}),
+            .type = "AztecAddress",
+        });
+
+        try variables.append(.{
+            .name = "msg_sender",
+            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{state.msg_sender.value.to_int()}),
+            .type = "AztecAddress",
+        });
+
+        try variables.append(.{
+            .name = "function_selector",
+            .value = try std.fmt.allocPrint(allocator, "0x{x:0>8}", .{state.function_selector}),
+            .type = "u32",
+        });
+
+        try variables.append(.{
+            .name = "is_static_call",
+            .value = if (state.is_static_call) "true" else "false",
+            .type = "bool",
+        });
+
+        try variables.append(.{
+            .name = "side_effect_counter",
+            .value = try std.fmt.allocPrint(allocator, "{}", .{state.side_effect_counter}),
+            .type = "u32",
+        });
+
+        // Number of notes in cache
+        const num_notes = state.note_cache.getTotalNoteCount();
+        try variables.append(.{
+            .name = "num_notes",
+            .value = try std.fmt.allocPrint(allocator, "{}", .{num_notes}),
+            .type = "usize",
+        });
+
+        // Number of nullifiers
+        try variables.append(.{
+            .name = "num_nullifiers",
+            .value = try std.fmt.allocPrint(allocator, "{}", .{state.nullifiers.items.len}),
+            .type = "usize",
+        });
+
+        // Number of storage writes
+        try variables.append(.{
+            .name = "num_storage_writes",
+            .value = try std.fmt.allocPrint(allocator, "{}", .{state.storage_writes.count()}),
+            .type = "usize",
+        });
+
+        // Number of private logs
+        try variables.append(.{
+            .name = "num_private_logs",
+            .value = try std.fmt.allocPrint(allocator, "{}", .{state.private_logs.items.len}),
+            .type = "usize",
+        });
+
+        // Add expandable references for collections if they have items
+        if (state.storage_writes.count() > 0) {
+            try variables.append(.{
+                .name = "storage_writes",
+                .value = try std.fmt.allocPrint(allocator, "{} writes", .{state.storage_writes.count()}),
+                .type = "StringHashMap",
+                .variablesReference = base_ref + 200, // Sub-reference for storage writes
+            });
+        }
+
+        if (state.nullifiers.items.len > 0) {
+            try variables.append(.{
+                .name = "nullifiers_list",
+                .value = try std.fmt.allocPrint(allocator, "{} nullifiers", .{state.nullifiers.items.len}),
+                .type = "ArrayList",
+                .variablesReference = base_ref + 201, // Sub-reference for nullifiers
+            });
+        }
     }
 };
