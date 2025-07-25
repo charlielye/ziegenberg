@@ -907,7 +907,7 @@ pub const TxeImpl = struct {
         _: std.mem.Allocator,
         pk_m_hash: F,
         key_index: F,
-    ) ![4]F {
+    ) !KeyValidationRequest {
         std.debug.print("getKeyValidationRequest called with pk_m_hash: {x}, key_index: {x}\n", .{ pk_m_hash, key_index });
 
         // Print all accounts we have
@@ -967,12 +967,14 @@ pub const TxeImpl = struct {
                     sk_app,
                 });
 
-                // Return the KeyValidationRequest as [pk_m.x, pk_m.y, is_infinite, sk_app]
-                return [4]F{
-                    pk_m_normalized.x,
-                    pk_m_normalized.y,
-                    F.from_int(@intFromBool(pk_m_normalized.is_infinity())),
-                    sk_app,
+                // Return the KeyValidationRequest struct
+                return KeyValidationRequest{
+                    .pk_m = Point{
+                        .x = pk_m_normalized.x,
+                        .y = pk_m_normalized.y,
+                        .i = pk_m_normalized.is_infinity(),
+                    },
+                    .sk_app = sk_app,
                 };
             }
         }
