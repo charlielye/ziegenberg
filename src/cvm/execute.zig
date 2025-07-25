@@ -101,7 +101,7 @@ pub fn execute(options: ExecuteOptions) !void {
     if (debug_ctx != null and options.artifact_path != null) {
         const artifact = try nargo_artifact.ArtifactAbi.load(allocator, artifact_path);
         const debug_info = try artifact.getDebugInfo(allocator);
-        debug_ctx.?.onVmEnter(debug_info);
+        debug_ctx.?.onVmEnter(debug_info, "");
     }
 
     // Execute.

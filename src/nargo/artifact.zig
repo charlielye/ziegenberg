@@ -41,6 +41,7 @@ const JsonArtifactAbi = struct {
     bytecode: []const u8,
     debug_symbols: ?[]const u8 = null,
     file_map: ?std.json.Value = null,
+    names: ?[][]const u8 = null,
 };
 
 pub const ArtifactAbi = struct {
@@ -50,6 +51,7 @@ pub const ArtifactAbi = struct {
     bytecode: []const u8,
     debug_symbols: ?[]const u8 = null,
     file_map: ?std.json.Value = null,
+    names: ?[][]const u8 = null,
     // Lazy loaded.
     debug_info: ?debug_info.DebugInfo = null,
 
@@ -81,6 +83,7 @@ pub const ArtifactAbi = struct {
             .bytecode = json_abi.bytecode,
             .debug_symbols = json_abi.debug_symbols,
             .file_map = json_abi.file_map,
+            .names = json_abi.names,
             .debug_info = null,
         };
     }

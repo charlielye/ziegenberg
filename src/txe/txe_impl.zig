@@ -410,6 +410,10 @@ pub const TxeImpl = struct {
         // Store the account for later retrieval
         try self.state.accounts.put(complete_address.aztec_address, complete_address);
 
+        // Store the secret key with the account for later key derivation
+        // This is a hack - we should store the secret separately, but for now we'll derive it back
+        // Note: In test mode, partial_address = secret, so we can recover the secret
+
         return .{
             .address = complete_address.aztec_address,
             .public_keys = complete_address.public_keys,
@@ -661,7 +665,11 @@ pub const TxeImpl = struct {
         circuit_vm.function_name = function.name;
 
         if (self.debug_ctx) |*ctx| {
-            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map));
+            const display_name = try std.fmt.allocPrint(allocator, "{s}:{s}", .{
+                contract_instance.abi.name,
+                function.name,
+            });
+            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map), display_name[0..16]);
         }
 
         std.debug.print("callPrivateFunction: Entering nested cvm (function: {s})\n", .{function.name});
@@ -894,6 +902,84 @@ pub const TxeImpl = struct {
         };
     }
 
+    pub fn getKeyValidationRequest(
+        self: *TxeImpl,
+        _: std.mem.Allocator,
+        pk_m_hash: F,
+        key_index: F,
+    ) ![4]F {
+        std.debug.print("getKeyValidationRequest called with pk_m_hash: {x}, key_index: {x}\n", .{ pk_m_hash, key_index });
+
+        // Print all accounts we have
+        std.debug.print("Total accounts in state: {}\n", .{self.state.accounts.count()});
+
+        // Find the account that has a public key matching this hash
+        var it = self.state.accounts.iterator();
+        while (it.next()) |entry| {
+            const complete_address = entry.value_ptr.*;
+            const keys = proto.deriveKeys(complete_address.partial_address.value);
+
+            // Determine which key type based on key_index
+            // From the Noir code: NULLIFIER_INDEX = 0, OUTGOING_INDEX = 1
+            const KeyGenerators = @import("../protocol/key_derivation.zig").KeyGenerators;
+            const G1Element = @import("../grumpkin/g1.zig").G1.Element;
+            const GrumpkinFr = @import("../grumpkin/fr.zig").Fr;
+
+            const key_prefix: KeyGenerators = switch (@as(u32, @intCast(key_index.to_int()))) {
+                0 => .n, // NULLIFIER_INDEX
+                1 => .ov, // OUTGOING_INDEX
+                else => return error.InvalidKeyIndex,
+            };
+
+            const pk_m: G1Element = switch (@as(u32, @intCast(key_index.to_int()))) {
+                0 => keys.public_keys.master_nullifier_public_key,
+                1 => keys.public_keys.master_outgoing_viewing_public_key,
+                else => unreachable,
+            };
+
+            const sk_m: GrumpkinFr = switch (@as(u32, @intCast(key_index.to_int()))) {
+                0 => keys.master_nullifier_secret_key,
+                1 => keys.master_outgoing_viewing_secret_key,
+                else => unreachable,
+            };
+
+            // Normalize the point before hashing
+            const pk_m_normalized = pk_m.normalize();
+            const pk_m_hash_computed = poseidon.hash(&[_]F{ pk_m_normalized.x, pk_m_normalized.y, F.from_int(@intFromBool(pk_m_normalized.is_infinity())) });
+
+            std.debug.print("Checking account {x}, pk_m.x: {x}, pk_m.y: {x}, is_infinity: {}, computed hash: {x}, looking for: {x}\n", .{
+                complete_address.aztec_address,
+                pk_m_normalized.x,
+                pk_m_normalized.y,
+                pk_m_normalized.is_infinity(),
+                pk_m_hash_computed,
+                pk_m_hash,
+            });
+
+            if (pk_m_hash_computed.eql(pk_m_hash)) {
+                // Found the matching key, compute sk_app
+                const computeAppSecretKey = @import("../protocol/key_derivation.zig").computeAppSecretKey;
+                const sk_app = computeAppSecretKey(sk_m, self.state.current_state.contract_address, key_prefix);
+
+                std.debug.print("Found matching key for account {x}, key index: {}, sk_app: {x}\n", .{
+                    complete_address.aztec_address,
+                    key_index.to_int(),
+                    sk_app,
+                });
+
+                // Return the KeyValidationRequest as [pk_m.x, pk_m.y, is_infinite, sk_app]
+                return [4]F{
+                    pk_m_normalized.x,
+                    pk_m_normalized.y,
+                    F.from_int(@intFromBool(pk_m_normalized.is_infinity())),
+                    sk_app,
+                };
+            }
+        }
+
+        return error.KeyNotFound;
+    }
+
     pub fn getPublicKeysAndPartialAddress(
         self: *TxeImpl,
         _: std.mem.Allocator,
@@ -949,7 +1035,11 @@ pub const TxeImpl = struct {
         var circuit_vm = try cvm.CircuitVm(Dispatcher).init(allocator, &program, calldata, self.fc_handler);
 
         if (self.debug_ctx) |*ctx| {
-            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map));
+            const display_name = try std.fmt.allocPrint(allocator, "{s}:{s}", .{
+                contract_instance.abi.name,
+                function.name,
+            });
+            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map), display_name[0..16]);
         }
 
         std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{

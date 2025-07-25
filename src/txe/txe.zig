@@ -78,7 +78,8 @@ pub const Txe = struct {
         }
         // Register the initial VM with its debug info.
         if (self.impl.debug_ctx) |*ctx| {
-            ctx.onVmEnter(try artifact.getDebugInfo(allocator));
+            const display_name = if (artifact.names) |names| names[0] else "";
+            ctx.onVmEnter(try artifact.getDebugInfo(allocator), display_name[0..16]);
         }
 
         std.debug.print("Executing...\n", .{});

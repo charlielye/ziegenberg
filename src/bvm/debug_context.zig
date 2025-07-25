@@ -27,6 +27,8 @@ pub const VmInfo = struct {
     stepping_out: bool = false,
     // Validated breakpoints for this specific VM
     validated_breakpoints: std.StringHashMap(std.ArrayList(u32)),
+    // Pre-constructed display name for stack traces
+    display_name: []const u8,
 };
 
 // Breakpoint information stored per file
@@ -47,7 +49,7 @@ pub const DebugContext = struct {
 
     // Step out tracking
     step_out_target_depth: ?usize = null,
-    
+
     // Step over tracking
     step_over_initial_depth: ?usize = null,
     step_over_initial_line: ?u32 = null,
@@ -111,7 +113,7 @@ pub const DebugContext = struct {
         self.breakpoint_id_map.deinit();
     }
 
-    pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo) void {
+    pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo, display_name: []const u8) void {
         // When entering a new Brillig VM, push it onto the stack
         // Store the current VM's PC before pushing the new VM
         const parent_pc: usize = if (self.vm_info_stack.items.len > 0)
@@ -124,6 +126,7 @@ pub const DebugContext = struct {
             .callstack = &.{},
             .debug_info = debug_info,
             .validated_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(self.allocator),
+            .display_name = display_name,
         };
 
         // Validate requested breakpoints for this VM
@@ -200,7 +203,7 @@ pub const DebugContext = struct {
             },
             .dap => self.handleDapMode(pc, ops_executed, vm),
         }
-        
+
         // Return true to continue execution, false to stop
         return self.execution_state != .terminated;
     }
@@ -443,7 +446,7 @@ pub const DebugContext = struct {
             const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
             const source_loc = debug_info.getSourceLocation(current_pc);
             self.step_over_initial_line = if (source_loc) |loc| loc.line else null;
-            
+
             self.execution_state = .step_over;
             try protocol.sendResponse(seq, command, true, .{});
         } else if (std.mem.eql(u8, command, "stepIn")) {
@@ -536,6 +539,7 @@ pub const DebugContext = struct {
                 // For the innermost VM, use the passed current_pc
                 // For outer VMs, use their stored pc
                 const vm_pc = if (vm_idx == self.vm_info_stack.items.len - 1) current_pc else vm_info.pc;
+                const frame_name = try std.fmt.allocPrint(self.allocator, "{}:- {s}", .{ vm_idx, vm_info.display_name });
 
                 // Add current location for this VM
                 if (vm_info.debug_info.getSourceLocation(vm_pc)) |loc| {
@@ -543,8 +547,6 @@ pub const DebugContext = struct {
                     const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
 
                     if (vm_info.debug_info.files.get(file_key)) |file_info| {
-                        const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:pc", .{vm_idx});
-
                         try frames.append(.{
                             .id = frame_id,
                             .name = frame_name,
@@ -555,12 +557,9 @@ pub const DebugContext = struct {
                             .line = loc.line,
                             .column = loc.column,
                         });
-                        frame_id += 1;
                     }
                 } else {
                     // Add frame without source location
-                    const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:pc", .{vm_idx});
-                    
                     try frames.append(.{
                         .id = frame_id,
                         .name = frame_name,
@@ -568,8 +567,8 @@ pub const DebugContext = struct {
                         .line = 0,
                         .column = 0,
                     });
-                    frame_id += 1;
                 }
+                frame_id += 1;
 
                 // Add all callstack entries for this VM (in reverse order to show deepest first)
                 if (vm_info.callstack.len > 0) {
@@ -577,17 +576,20 @@ pub const DebugContext = struct {
                     while (i >= 0) : (i -= 1) {
                         const idx: usize = @intCast(i);
                         const call_pc = vm_info.callstack[idx] - 1;
+                        const cframe_name = try std.fmt.allocPrint(self.allocator, "{}:{} {s}", .{
+                            vm_idx,
+                            idx,
+                            vm_info.display_name,
+                        });
 
                         if (vm_info.debug_info.getSourceLocation(call_pc)) |loc| {
                             var file_key_buf: [32]u8 = undefined;
                             const file_key = try std.fmt.bufPrint(&file_key_buf, "{}", .{loc.file_id});
 
                             if (vm_info.debug_info.files.get(file_key)) |file_info| {
-                                const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:fr{}", .{ vm_idx, idx });
-
                                 try frames.append(.{
                                     .id = frame_id,
-                                    .name = frame_name,
+                                    .name = cframe_name,
                                     .source = .{
                                         .path = file_info.path,
                                         .name = std.fs.path.basename(file_info.path),
@@ -599,11 +601,9 @@ pub const DebugContext = struct {
                             }
                         } else {
                             // Add frame without source location
-                            const frame_name = try std.fmt.allocPrint(self.allocator, "vm{}:fr{}", .{ vm_idx, idx });
-                            
                             try frames.append(.{
                                 .id = frame_id,
-                                .name = frame_name,
+                                .name = cframe_name,
                                 .source = null,
                                 .line = 0,
                                 .column = 0,
