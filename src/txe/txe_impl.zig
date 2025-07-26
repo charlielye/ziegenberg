@@ -386,10 +386,18 @@ pub const TxeImpl = struct {
     pub fn reset(self: *TxeImpl, _: std.mem.Allocator) !void {
         std.debug.print("reset called!\n", .{});
 
-        // By the time reset is called, we should already be at the root state
-        // since child states are cleaned up in defer blocks
-        self.state.current_state.deinit();
-        self.state.current_state.* = call_state.CallState.init(self.allocator);
+        // Reset to a single initial state
+        // First clear all existing states
+        for (self.state.vm_state_stack.items) |state| {
+            state.deinit();
+            self.allocator.destroy(state);
+        }
+        self.state.vm_state_stack.clearRetainingCapacity();
+
+        // Create new initial state
+        const initial_state = try self.allocator.create(call_state.CallState);
+        initial_state.* = call_state.CallState.init(self.allocator);
+        try self.state.vm_state_stack.append(initial_state);
 
         std.debug.print("reset: cleared capsule storage and reset state\n", .{});
     }
@@ -421,11 +429,11 @@ pub const TxeImpl = struct {
     }
 
     pub fn getContractAddress(self: *TxeImpl, _: std.mem.Allocator) !proto.AztecAddress {
-        return self.state.current_state.contract_address;
+        return self.state.getCurrentState().contract_address;
     }
 
     pub fn setContractAddress(self: *TxeImpl, _: std.mem.Allocator, address: proto.AztecAddress) !void {
-        self.state.current_state.contract_address = address;
+        self.state.getCurrentState().contract_address = address;
         std.debug.print("setContractAddress: {x}\n", .{address});
     }
 
@@ -518,7 +526,7 @@ pub const TxeImpl = struct {
             allocator,
             block_number,
             timestamp,
-            self.state.current_state.side_effect_counter,
+            self.state.getCurrentState().side_effect_counter,
             false,
         );
     }
@@ -531,6 +539,7 @@ pub const TxeImpl = struct {
         side_effect_counter: u32,
         is_static_call: bool,
     ) !PrivateContextInputs {
+        const current_state = self.state.getCurrentState();
         const result = PrivateContextInputs{
             .tx_context = .{
                 .chain_id = F.from_int(TxeState.CHAIN_ID),
@@ -541,9 +550,9 @@ pub const TxeImpl = struct {
                 .timestamp = timestamp orelse self.state.timestamp - TxeState.AZTEC_SLOT_DURATION,
             } },
             .call_context = .{
-                .msg_sender = self.state.current_state.msg_sender,
-                .contract_address = self.state.current_state.contract_address,
-                .function_selector = self.state.current_state.function_selector,
+                .msg_sender = current_state.msg_sender,
+                .contract_address = current_state.contract_address,
+                .function_selector = current_state.function_selector,
                 .is_static_call = is_static_call,
             },
             .start_side_effect_counter = side_effect_counter,
@@ -563,7 +572,8 @@ pub const TxeImpl = struct {
             args,
             hash,
         });
-        try self.state.current_state.execution_cache.put(hash, try self.allocator.dupe(F, args));
+        const current_state = self.state.getCurrentState();
+        try current_state.execution_cache.put(hash, try self.allocator.dupe(F, args));
     }
 
     pub fn loadFromExecutionCache(
@@ -576,7 +586,8 @@ pub const TxeImpl = struct {
             return &[_]F{};
         }
 
-        if (self.state.current_state.getFromExecutionCache(args_hash)) |result| {
+        const current_state = self.state.getCurrentState();
+        if (current_state.getFromExecutionCache(args_hash)) |result| {
             std.debug.print("loadFromExecutionCache: Found cached args with hash {x}\n", .{args_hash});
             return result;
         }
@@ -600,20 +611,16 @@ pub const TxeImpl = struct {
         std.debug.print("  args_hash: {x}\n", .{args_hash});
         std.debug.print("  side_effect_counter: {}\n", .{side_effect_counter});
         std.debug.print("  is_static_call: {}\n", .{is_static_call});
-        std.debug.print("  current_state.parent: {}\n", .{self.state.current_state.parent != null});
+        std.debug.print("  current_depth: {}\n", .{self.state.vm_state_stack.items.len});
 
         // Create child state for the nested call
-        const child_state = try self.state.current_state.createChild(
+        const child_state = try self.state.getCurrentState().createChild(
             self.allocator,
             target_contract_address,
             function_selector,
             is_static_call,
         );
         child_state.side_effect_counter = side_effect_counter;
-
-        // Save current state and switch to child
-        const saved_current = self.state.current_state;
-        self.state.current_state = child_state;
 
         // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.state.contract_instance_cache.get(target_contract_address) orelse {
@@ -628,13 +635,17 @@ pub const TxeImpl = struct {
         // Set the contract ABI reference for debugging
         child_state.contract_abi = &contract_instance.abi;
 
+        // Push child state onto the stack
+        try self.state.pushState(child_state);
+        const current_state = child_state;
+
         std.debug.print("Executing external function: {s}@{x} (static: {})\n", .{
             function.name,
             target_contract_address,
             is_static_call,
         });
 
-        const args = self.state.current_state.getFromExecutionCache(args_hash) orelse {
+        const args = current_state.getFromExecutionCache(args_hash) orelse {
             std.debug.print("No args found for hash {x}\n", .{args_hash});
             return error.ArgsNotFound;
         };
@@ -678,7 +689,9 @@ pub const TxeImpl = struct {
             .{ .debug_ctx = if (self.debug_ctx) |*ctx| ctx else null },
         ) catch |err| {
             if (circuit_vm.brillig_error_context != null) {
-                child_state.execution_error = circuit_vm.brillig_error_context;
+                // Store error in child state before it gets popped
+                const child_state_for_error = self.state.getCurrentState();
+                child_state_for_error.execution_error = circuit_vm.brillig_error_context;
             }
             return err;
         };
@@ -703,32 +716,36 @@ pub const TxeImpl = struct {
         const end_side_effect_counter = private_circuit_public_inputs.end_side_effect_counter;
         const returns_hash = private_circuit_public_inputs.returns_hash;
 
-        // Apply side effects to child state.
-        child_state.side_effect_counter = @intCast(end_side_effect_counter.to_int() + 1);
+        // Apply side effects to child state (still current).
+        const child_state_for_effects = self.state.getCurrentState();
+        child_state_for_effects.side_effect_counter = @intCast(end_side_effect_counter.to_int() + 1);
 
         // Add private logs to child state.
         for (private_circuit_public_inputs.private_logs.items()) |private_log| {
             var log = private_log.log;
             log.fields[0] = poseidon.hash(&[_]F{ target_contract_address.value, log.fields[0] });
-            try child_state.private_logs.append(log);
+            try child_state_for_effects.private_logs.append(log);
         }
 
         // Add nullifiers from public inputs to child state
         for (private_circuit_public_inputs.nullifiers.items()) |nullifier| {
             if (!nullifier.value.eql(F.zero)) {
-                try child_state.nullifiers.append(nullifier.value);
+                try child_state_for_effects.nullifiers.append(nullifier.value);
             }
         }
 
-        // Success path: merge state and cleanup
-        if (!is_static_call) {
-            try saved_current.mergeChild(child_state);
+        // Success path: pop child state and merge if not static
+        const popped_child = self.state.popState();
+        defer {
+            popped_child.deinit();
+            self.allocator.destroy(popped_child);
         }
-        child_state.deinit();
-        self.allocator.destroy(child_state);
 
-        // Restore parent state only on success
-        self.state.current_state = saved_current;
+        if (!is_static_call) {
+            // Now we're back in parent context
+            const parent_state = self.state.getCurrentState();
+            try parent_state.mergeChild(popped_child);
+        }
 
         return [2]F{ end_side_effect_counter, returns_hash };
     }
@@ -765,17 +782,19 @@ pub const TxeImpl = struct {
         slot: F,
         capsule: []F,
     ) !void {
+        const current_state = self.state.getCurrentState();
+
         // Check if contract is allowed to access this storage.
-        if (!contract_address.eql(self.state.current_state.contract_address)) {
+        if (!contract_address.eql(current_state.contract_address)) {
             std.debug.print("Contract {x} is not allowed to access {x}'s storage\n", .{
-                self.state.current_state.contract_address,
+                current_state.contract_address,
                 contract_address,
             });
             return error.UnauthorizedContractAccess;
         }
 
         // Store using the new CallState method
-        try self.state.current_state.storeCapsuleAtSlot(allocator, slot, capsule);
+        try current_state.storeCapsuleAtSlot(allocator, slot, capsule);
     }
 
     pub fn loadCapsule(
@@ -787,16 +806,18 @@ pub const TxeImpl = struct {
     ) !?[]F {
         _ = response_len;
 
+        const current_state = self.state.getCurrentState();
+
         // Authorization check - contracts can only access their own capsule storage
-        if (!contract_address.eql(self.state.current_state.contract_address)) {
+        if (!contract_address.eql(current_state.contract_address)) {
             std.debug.print("Capsule access denied: Contract {x} is not allowed to access {x}'s storage\n", .{
-                self.state.current_state.contract_address,
+                current_state.contract_address,
                 contract_address,
             });
             return error.UnauthorizedCapsuleAccess;
         }
 
-        return try self.state.current_state.loadCapsuleAtSlot(allocator, slot);
+        return try current_state.loadCapsuleAtSlot(allocator, slot);
     }
 
     pub fn debugLog(
@@ -825,8 +846,9 @@ pub const TxeImpl = struct {
         // For our minimal implementation, we'll store an empty array.
         var empty_array = [_]F{F.zero};
 
+        const current_state = self.state.getCurrentState();
         // Store the empty array at the base slot.
-        try self.state.current_state.storeCapsuleAtSlot(allocator, pending_tagged_log_array_base_slot, empty_array[0..]);
+        try current_state.storeCapsuleAtSlot(allocator, pending_tagged_log_array_base_slot, empty_array[0..]);
     }
 
     pub fn bulkRetrieveLogs(
@@ -836,10 +858,12 @@ pub const TxeImpl = struct {
         log_retrieval_requests_array_base_slot: F,
         log_retrieval_responses_array_base_slot: F,
     ) !void {
+        const current_state = self.state.getCurrentState();
+
         // Authorization check - contracts can only access their own capsule storage
-        if (!contract_address.eql(self.state.current_state.contract_address)) {
+        if (!contract_address.eql(current_state.contract_address)) {
             std.debug.print("Capsule access denied: Contract {x} is not allowed to access {x}'s storage\n", .{
-                self.state.current_state.contract_address,
+                current_state.contract_address,
                 contract_address,
             });
             return error.UnauthorizedCapsuleAccess;
@@ -847,7 +871,7 @@ pub const TxeImpl = struct {
 
         // Load the requests array to get the count
         var num_requests: u32 = 0;
-        if (try self.state.current_state.loadCapsuleAtSlot(allocator, log_retrieval_requests_array_base_slot)) |data| {
+        if (try current_state.loadCapsuleAtSlot(allocator, log_retrieval_requests_array_base_slot)) |data| {
             defer allocator.free(data);
             if (data.len > 0) {
                 num_requests = @intCast(data[0].to_int());
@@ -856,14 +880,14 @@ pub const TxeImpl = struct {
 
         // For minimal implementation, create empty responses for each request
         var length_array = [_]F{F.from_int(num_requests)};
-        try self.state.current_state.storeCapsuleAtSlot(allocator, log_retrieval_responses_array_base_slot, length_array[0..]);
+        try current_state.storeCapsuleAtSlot(allocator, log_retrieval_responses_array_base_slot, length_array[0..]);
 
         // Store Option::none for each response
         var none_response = [_]F{F.zero};
         var i: u32 = 0;
         while (i < num_requests) : (i += 1) {
             const response_slot = log_retrieval_responses_array_base_slot.add(F.from_int(i + 1));
-            try self.state.current_state.storeCapsuleAtSlot(allocator, response_slot, none_response[0..]);
+            try current_state.storeCapsuleAtSlot(allocator, response_slot, none_response[0..]);
         }
     }
 
@@ -874,8 +898,9 @@ pub const TxeImpl = struct {
         _: F,
         _: F,
     ) !void {
+        const current_state = self.state.getCurrentState();
         // Check authorization.
-        if (!contract_address.eql(self.state.current_state.contract_address)) {
+        if (!contract_address.eql(current_state.contract_address)) {
             return error.UnauthorizedContractAccess;
         }
     }
@@ -959,7 +984,8 @@ pub const TxeImpl = struct {
             if (pk_m_hash_computed.eql(pk_m_hash)) {
                 // Found the matching key, compute sk_app
                 const computeAppSecretKey = @import("../protocol/key_derivation.zig").computeAppSecretKey;
-                const sk_app = computeAppSecretKey(sk_m, self.state.current_state.contract_address, key_prefix);
+                const current_state = self.state.getCurrentState();
+                const sk_app = computeAppSecretKey(sk_m, current_state.contract_address, key_prefix);
 
                 std.debug.print("Found matching key for account {x}, key index: {}, sk_app: {x}\n", .{
                     complete_address.aztec_address,
@@ -1002,13 +1028,11 @@ pub const TxeImpl = struct {
         function_selector: FunctionSelector,
         args_hash: F,
     ) !F {
-        // Create child state for the utility function (static call)
-        const child_state = try self.state.current_state.createChild(self.allocator, target_contract_address, function_selector, true);
-        child_state.side_effect_counter = self.state.current_state.side_effect_counter;
+        const current_state = self.state.getCurrentState();
 
-        // Save current state and switch to child
-        const saved_current = self.state.current_state;
-        self.state.current_state = child_state;
+        // Create child state for the utility function (static call)
+        const child_state = try current_state.createChild(self.allocator, target_contract_address, function_selector, true);
+        child_state.side_effect_counter = current_state.side_effect_counter;
 
         // Retrieve the function to execute from the target contract's ABI.
         const contract_instance = self.state.contract_instance_cache.get(target_contract_address) orelse {
@@ -1019,6 +1043,9 @@ pub const TxeImpl = struct {
 
         // Set the contract ABI reference for debugging
         child_state.contract_abi = &contract_instance.abi;
+
+        // Push child state onto the stack
+        try self.state.pushState(child_state);
         std.debug.print("simulateUtilityFunction called with target: {x}, selector: {x}, name: {s}, args_hash: {x}\n", .{
             target_contract_address,
             function_selector,
@@ -1026,7 +1053,9 @@ pub const TxeImpl = struct {
             args_hash,
         });
 
-        const calldata = self.state.current_state.getFromExecutionCache(args_hash) orelse {
+        // Now we're in child context, get calldata from it
+        const child_current_state = self.state.getCurrentState();
+        const calldata = child_current_state.getFromExecutionCache(args_hash) orelse {
             std.debug.print("No args found for hash {x}\n", .{args_hash});
             return error.ArgsNotFound;
         };
@@ -1045,7 +1074,7 @@ pub const TxeImpl = struct {
         }
 
         std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{
-            self.state.current_state.contract_address,
+            child_current_state.contract_address,
         });
         circuit_vm.executeVm(
             0,
@@ -1053,7 +1082,8 @@ pub const TxeImpl = struct {
         ) catch |err| {
             // If this was a trap, capture the error context in the child state
             if (err == error.Trapped and circuit_vm.brillig_error_context != null) {
-                child_state.execution_error = circuit_vm.brillig_error_context;
+                const child_state_for_error = self.state.getCurrentState();
+                child_state_for_error.execution_error = circuit_vm.brillig_error_context;
             }
             return err;
         };
@@ -1075,8 +1105,9 @@ pub const TxeImpl = struct {
         std.debug.print("simulateUtilityFunction: Retrieved return witness: {x}\n", .{return_witness});
         const return_hash = poseidon.hash_with_generator(allocator, return_witness, @intFromEnum(constants.GeneratorIndex.function_args));
 
-        // Store in the parent state's execution cache, not the child's
-        try saved_current.execution_cache.put(return_hash, return_witness);
+        // Store in the child state's execution cache (will be merged when popped)
+        const child_state_for_cache = self.state.getCurrentState();
+        try child_state_for_cache.execution_cache.put(return_hash, return_witness);
 
         std.debug.print("simulateUtilityFunction: Returning hash {x} for function {s} at address {x}\n", .{
             return_hash,
@@ -1084,12 +1115,15 @@ pub const TxeImpl = struct {
             target_contract_address,
         });
 
-        // Success path: cleanup (utility functions are always static)
-        child_state.deinit();
-        self.allocator.destroy(child_state);
+        // Success path: pop child state (utility functions are always static)
+        const popped_child = self.state.popState();
 
-        // Restore parent state only on success
-        self.state.current_state = saved_current;
+        // Need to merge execution cache even for static calls so return values are available
+        const parent_state = self.state.getCurrentState();
+        try parent_state.mergeChild(popped_child);
+
+        popped_child.deinit();
+        self.allocator.destroy(popped_child);
 
         return return_hash;
     }
@@ -1124,16 +1158,18 @@ pub const TxeImpl = struct {
     ) !BoundedVec(RetrievedNoteWithMetadata) {
         _ = status; // Not used in this minimal implementation
 
+        const current_state = self.state.getCurrentState();
+
         // Get pending notes from cache (already filtered for nullifiers)
-        const pending_notes = try self.state.current_state.getNotes(
+        const pending_notes = try current_state.getNotes(
             allocator,
-            self.state.current_state.contract_address,
+            current_state.contract_address,
             storage_slot,
         );
         defer allocator.free(pending_notes);
         std.debug.print("getNotes: Found {} notes for contract {x} at slot {x}\n", .{
             pending_notes.len,
-            self.state.current_state.contract_address,
+            current_state.contract_address,
             storage_slot,
         });
 
@@ -1191,7 +1227,7 @@ pub const TxeImpl = struct {
 
         std.debug.print("getNotes: Returning {} notes for contract {x} at slot {x}\n", .{
             result.len,
-            self.state.current_state.contract_address,
+            current_state.contract_address,
             storage_slot,
         });
 
@@ -1214,23 +1250,25 @@ pub const TxeImpl = struct {
     ) !void {
         _ = note_type_id; // Not used in this implementation
 
+        const current_state = self.state.getCurrentState();
+
         const note_data = proto.NoteData{
             .note = proto.Note.init(note_items),
-            .contract_address = self.state.current_state.contract_address,
+            .contract_address = current_state.contract_address,
             .storage_slot = storage_slot,
             .note_nonce = F.from_int(counter), // Using counter as nonce for simplicity
             .note_hash = note_hash,
             .siloed_nullifier = F.zero, // Will be computed when note is nullified
         };
 
-        try self.state.current_state.note_cache.addNote(note_data);
+        try current_state.note_cache.addNote(note_data);
         std.debug.print("notifyCreatedNote: note_cache.addNote completed\n", .{});
 
         std.debug.print("notifyCreatedNote: Added note with hash {x} at slot {x}, counter {}, contract_address {x}\n", .{
             note_hash,
             storage_slot,
             counter,
-            self.state.current_state.contract_address,
+            current_state.contract_address,
         });
     }
 
@@ -1239,19 +1277,21 @@ pub const TxeImpl = struct {
         _: std.mem.Allocator,
         inner_nullifier: F,
     ) !void {
+        const current_state = self.state.getCurrentState();
+
         // Silo the nullifier to the current contract
         const siloed_nullifier = poseidon.hash(&[_]F{
-            self.state.current_state.contract_address.value,
+            current_state.contract_address.value,
             inner_nullifier,
         });
 
         // Add the nullifier to the current state
-        try self.state.current_state.nullifiers.append(siloed_nullifier);
+        try current_state.nullifiers.append(siloed_nullifier);
 
         std.debug.print("notifyCreatedNullifier: Added nullifier {x} (siloed: {x}) for contract {x}\n", .{
             inner_nullifier,
             siloed_nullifier,
-            self.state.current_state.contract_address,
+            current_state.contract_address,
         });
     }
 
@@ -1348,13 +1388,15 @@ pub const TxeImpl = struct {
         // - Load calldata for each public call request from execution cache
         // - Create PrivateExecutionResult with all the data
 
+        const current_state = self.state.getCurrentState();
+
         // Use existing callPrivateFunction implementation (temporary)
         const result = try self.callPrivateFunction(
             allocator,
             target_contract_address,
             function_selector,
             args_hash,
-            self.state.current_state.side_effect_counter,
+            current_state.side_effect_counter,
             is_static_call,
         );
 

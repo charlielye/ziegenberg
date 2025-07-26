@@ -110,6 +110,11 @@ pub fn BrilligVm(ForeignCallDispatcher: type) type {
         pub fn executeVm(self: *Self, opcodes: []BrilligOpcode, options: ExecuteOptions) !void {
             var t = try std.time.Timer.start();
 
+            // Set debug context on memory if available
+            if (options.debug_ctx) |ctx| {
+                self.mem.setDebugContext(ctx);
+            }
+
             while (!self.halted) {
                 const current_pc = self.pc;
                 const opcode = &opcodes[current_pc];

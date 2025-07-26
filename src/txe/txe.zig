@@ -94,18 +94,11 @@ pub const Txe = struct {
             // If this was a Brillig trap, show debug info.
             std.debug.print("\nExecution Stack Trace:\n", .{});
 
-            var level: usize = 0;
-            var current_state: ?*CallState = self.impl.state.current_state;
-            while (current_state) |state| : (current_state = state.parent) {
-                level += 1;
-            }
-
-            // We have nested vm instances, walk the chain.
-            current_state = self.impl.state.current_state;
-            while (current_state) |state| : ({
-                current_state = state.parent;
-                level -= 1;
-            }) {
+            const depth = self.impl.state.vm_state_stack.items.len;
+            
+            // We have nested vm instances, walk the stack from bottom to top
+            for (self.impl.state.vm_state_stack.items, 0..) |state, index| {
+                const level = depth - index;
                 std.debug.print("\n[{}] ", .{level - 1});
 
                 if (state.contract_abi) |abi| {

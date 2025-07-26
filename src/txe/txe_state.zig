@@ -21,8 +21,8 @@ pub const TxeState = struct {
     // Account data.
     accounts: *std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress),
 
-    // Call state.
-    current_state: *call_state.CallState,
+    // Call state stack (bottom VM is at index 0, increases up the stack)
+    vm_state_stack: std.ArrayList(*call_state.CallState),
 
     pub const CHAIN_ID = 1;
     pub const ROLLUP_VERSION = 1;
@@ -49,26 +49,40 @@ pub const TxeState = struct {
             .contract_artifact_cache = contract_artifact_cache,
             .contract_instance_cache = contract_instance_cache,
             .accounts = accounts,
-            .current_state = undefined,
+            .vm_state_stack = std.ArrayList(*call_state.CallState).init(allocator),
         };
 
-        // Create initial state on heap
+        // Create initial state on heap and push to stack
         const initial_state = try allocator.create(call_state.CallState);
         initial_state.* = call_state.CallState.init(allocator);
-        txe.current_state = initial_state;
+        try txe.vm_state_stack.append(initial_state);
 
         return txe;
     }
 
+    /// Get the current (top) call state
+    pub fn getCurrentState(self: *TxeState) *call_state.CallState {
+        // The current state is always the last one on the stack
+        return self.vm_state_stack.items[self.vm_state_stack.items.len - 1];
+    }
+
+    /// Push a new call state onto the stack
+    pub fn pushState(self: *TxeState, state: *call_state.CallState) !void {
+        try self.vm_state_stack.append(state);
+    }
+
+    /// Pop the current call state from the stack
+    pub fn popState(self: *TxeState) *call_state.CallState {
+        return self.vm_state_stack.pop() orelse unreachable;
+    }
+
     pub fn deinit(self: *TxeState) void {
-        // Free state chain.
-        var state = self.current_state;
-        while (true) {
-            const parent = state.parent;
+        // Free all states in the stack
+        for (self.vm_state_stack.items) |state| {
             state.deinit();
-            if (parent == null) break;
-            state = parent.?;
+            self.allocator.destroy(state);
         }
+        self.vm_state_stack.deinit();
 
         // Deinit components
         self.contract_artifact_cache.deinit();
@@ -92,7 +106,7 @@ pub const TxeState = struct {
 
     fn getScopesImpl(context: *anyopaque, allocator: std.mem.Allocator, frame_id: u32) anyerror![]debug_var.DebugScope {
         const self = @as(*TxeState, @ptrCast(@alignCast(context)));
-        
+
         var scopes = std.ArrayList(debug_var.DebugScope).init(allocator);
         defer scopes.deinit();
 
@@ -109,27 +123,20 @@ pub const TxeState = struct {
             .expensive = false,
         });
 
-        // Add scopes for each CallState in the chain
-        var current_state: ?*call_state.CallState = self.current_state;
-        var call_depth: u32 = 0;
-        while (current_state) |state| {
-            // Determine the name for this call state
-            const scope_name = if (call_depth == 0)
-                try std.fmt.allocPrint(allocator, "Current Call State", .{})
-            else if (state.contract_abi) |abi|
-                try std.fmt.allocPrint(allocator, "Call State #{} - {s}", .{ call_depth, abi.name })
+        // Add scopes for each CallState in the stack (bottom to top)
+        for (self.vm_state_stack.items, 0..) |state, index| {
+            const vm_index: u32 = @intCast(index);  // Bottom VM is 0, increases up the stack
+            const scope_name = if (state.contract_abi) |abi|
+                try std.fmt.allocPrint(allocator, "[{}] VM State: {s}", .{ vm_index, abi.name })
             else
-                try std.fmt.allocPrint(allocator, "Call State #{}", .{call_depth});
+                try std.fmt.allocPrint(allocator, "[{}] VM State", .{vm_index});
 
             try scopes.append(.{
                 .name = scope_name,
-                .presentationHint = if (call_depth == 0) "locals" else "arguments",
-                .variablesReference = var_ref_base + 2 + call_depth,
+                .presentationHint = if (vm_index == 0) "locals" else "arguments",
+                .variablesReference = var_ref_base + 2 + vm_index,
                 .expensive = false,
             });
-
-            current_state = state.parent;
-            call_depth += 1;
         }
 
         return scopes.toOwnedSlice();
@@ -137,7 +144,7 @@ pub const TxeState = struct {
 
     fn getVariablesImpl(context: *anyopaque, allocator: std.mem.Allocator, variables_reference: u32) anyerror![]debug_var.DebugVariable {
         const self = @as(*TxeState, @ptrCast(@alignCast(context)));
-        
+
         var variables = std.ArrayList(debug_var.DebugVariable).init(allocator);
         defer variables.deinit();
 
@@ -158,17 +165,17 @@ pub const TxeState = struct {
                 .type = "u64",
             });
 
-            try variables.append(.{
-                .name = "chain_id",
-                .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{self.chain_id.to_int()}),
-                .type = "Field",
-            });
+            // try variables.append(.{
+            //     .name = "chain_id",
+            //     .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{self.chain_id.to_int()}),
+            //     .type = "Field",
+            // });
 
-            try variables.append(.{
-                .name = "version",
-                .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{self.version.to_int()}),
-                .type = "Field",
-            });
+            // try variables.append(.{
+            //     .name = "version",
+            //     .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{self.version.to_int()}),
+            //     .type = "Field",
+            // });
 
             // Accounts (list of addresses)
             const accounts_count = self.accounts.count();
@@ -181,18 +188,11 @@ pub const TxeState = struct {
         } else if (scope_type >= 2 and scope_type < 100) {
             // Call State at specific depth (2 = current, 3 = parent, etc.)
             const call_depth = scope_type - 2;
-            
-            // Walk the chain to find the CallState at the requested depth
-            var current_state: ?*call_state.CallState = self.current_state;
-            var depth: u32 = 0;
-            while (current_state) |state| {
-                if (depth == call_depth) {
-                    // Found the right CallState, add its variables
-                    try appendCallStateVariables(&variables, allocator, state, variables_reference);
-                    break;
-                }
-                current_state = state.parent;
-                depth += 1;
+
+            // Get the CallState at the requested index from the stack
+            if (call_depth < self.vm_state_stack.items.len) {
+                const state = self.vm_state_stack.items[@intCast(call_depth)];
+                try appendCallStateVariables(&variables, allocator, state, variables_reference);
             }
         } else if (scope_type == 101) {
             // Account list sub-reference (from clicking on "accounts")
@@ -211,44 +211,38 @@ pub const TxeState = struct {
             // Sub-references for CallState collections
             const sub_type = scope_type % 100;
             const call_depth = (scope_type / 100 - 2);
-            
-            // Walk to the right CallState
-            var current_state: ?*call_state.CallState = self.current_state;
-            var depth: u32 = 0;
-            while (current_state) |state| {
-                if (depth == call_depth) {
-                    if (sub_type == 0) {
-                        // Storage writes
-                        var iter = state.storage_writes.iterator();
-                        var index: usize = 0;
-                        while (iter.next()) |entry| {
-                            const name = try std.fmt.allocPrint(allocator, "[{}] {s}", .{ index, entry.key_ptr.* });
-                            const value_str = if (entry.value_ptr.*.len > 0)
-                                try std.fmt.allocPrint(allocator, "[{}]F = 0x{x:0>64}...", .{ entry.value_ptr.*.len, entry.value_ptr.*[0].to_int() })
-                            else
-                                try std.fmt.allocPrint(allocator, "[0]F", .{});
-                            try variables.append(.{
-                                .name = name,
-                                .value = value_str,
-                                .type = "[]F",
-                            });
-                            index += 1;
-                        }
-                    } else if (sub_type == 1) {
-                        // Nullifiers
-                        for (state.nullifiers.items, 0..) |nullifier, i| {
-                            const name = try std.fmt.allocPrint(allocator, "[{}]", .{i});
-                            try variables.append(.{
-                                .name = name,
-                                .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{nullifier.to_int()}),
-                                .type = "Field",
-                            });
-                        }
+
+            // Get the CallState at the requested index from the stack
+            if (call_depth < self.vm_state_stack.items.len) {
+                const state = self.vm_state_stack.items[@intCast(call_depth)];
+                if (sub_type == 0) {
+                    // Storage writes
+                    var iter = state.storage_writes.iterator();
+                    var index: usize = 0;
+                    while (iter.next()) |entry| {
+                        const name = try std.fmt.allocPrint(allocator, "[{}] {s}", .{ index, entry.key_ptr.* });
+                        const value_str = if (entry.value_ptr.*.len > 0)
+                            try std.fmt.allocPrint(allocator, "[{}]F = 0x{x:0>64}...", .{ entry.value_ptr.*.len, entry.value_ptr.*[0].to_int() })
+                        else
+                            try std.fmt.allocPrint(allocator, "[0]F", .{});
+                        try variables.append(.{
+                            .name = name,
+                            .value = value_str,
+                            .type = "[]F",
+                        });
+                        index += 1;
                     }
-                    break;
+                } else if (sub_type == 1) {
+                    // Nullifiers
+                    for (state.nullifiers.items, 0..) |nullifier, i| {
+                        const name = try std.fmt.allocPrint(allocator, "[{}]", .{i});
+                        try variables.append(.{
+                            .name = name,
+                            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{nullifier.to_int()}),
+                            .type = "Field",
+                        });
+                    }
                 }
-                current_state = state.parent;
-                depth += 1;
             }
         }
 

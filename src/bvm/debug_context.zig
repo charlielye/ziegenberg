@@ -69,6 +69,9 @@ pub const DebugContext = struct {
     // Debug variable provider for DAP variable inspection
     variable_provider: ?*const debug_var.DebugVariableProvider = null,
 
+    // Global memory writes tracking (slot index -> value)
+    memory_writes: std.AutoHashMap(usize, u256),
+
     pub fn init(allocator: std.mem.Allocator, mode: DebugMode) !DebugContext {
         return initWithVariableProvider(allocator, mode, null);
     }
@@ -85,6 +88,7 @@ pub const DebugContext = struct {
             .requested_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(allocator),
             .breakpoint_id_map = std.StringHashMap(u32).init(allocator),
             .variable_provider = variable_provider,
+            .memory_writes = std.AutoHashMap(usize, u256).init(allocator),
         };
 
         // Initialize DAP if in DAP mode
@@ -124,6 +128,9 @@ pub const DebugContext = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.breakpoint_id_map.deinit();
+
+        // Clean up memory writes
+        self.memory_writes.deinit();
     }
 
     pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo, display_name: []const u8) void {
@@ -454,6 +461,7 @@ pub const DebugContext = struct {
 
         if (std.mem.eql(u8, command, "continue")) {
             self.execution_state = .running;
+            self.clearAllMemoryWrites();
             try protocol.sendResponse(seq, command, true, .{ .allThreadsContinued = true });
         } else if (std.mem.eql(u8, command, "next")) {
             // Initialize step over tracking
@@ -463,9 +471,11 @@ pub const DebugContext = struct {
             self.step_over_initial_line = if (source_loc) |loc| loc.line else null;
 
             self.execution_state = .step_over;
+            self.clearAllMemoryWrites();
             try protocol.sendResponse(seq, command, true, .{});
         } else if (std.mem.eql(u8, command, "stepIn")) {
             self.execution_state = .step_into;
+            self.clearAllMemoryWrites();
             try protocol.sendResponse(seq, command, true, .{});
         } else if (std.mem.eql(u8, command, "stepOut")) {
             // Set target depth to one less than current depth
@@ -474,11 +484,13 @@ pub const DebugContext = struct {
                 // Step out within the current VM
                 self.step_out_target_depth = current_depth - 1;
                 self.execution_state = .step_out;
+                self.clearAllMemoryWrites();
             } else if (self.vm_info_stack.items.len > 1) {
                 // At top level of current VM but there are outer Brillig VMs
                 // Mark the current VM as stepping out
                 self.vm_info_stack.items[self.vm_info_stack.items.len - 1].stepping_out = true;
                 self.execution_state = .running; // Let it run until VM exits
+                self.clearAllMemoryWrites();
             } else {
                 // Already at top level of top VM.
                 self.execution_state = .step_over;
@@ -935,33 +947,40 @@ pub const DebugContext = struct {
     fn sendScopes(self: *DebugContext, request_seq: u32, frame_id: u32) !void {
         const protocol = self.dap_protocol.?;
 
+        var dap_scopes = std.ArrayList(dap.Scope).init(self.allocator);
+        defer dap_scopes.deinit();
+
         if (self.variable_provider) |provider| {
             // Get scopes from the provider
             const scopes = try provider.getScopes(self.allocator, frame_id);
             defer self.allocator.free(scopes);
 
-            // Convert to DAP scopes
-            var dap_scopes = try self.allocator.alloc(dap.Scope, scopes.len);
-            defer self.allocator.free(dap_scopes);
-
-            for (scopes, 0..) |scope, i| {
-                dap_scopes[i] = .{
+            // Add provider scopes
+            for (scopes) |scope| {
+                try dap_scopes.append(.{
                     .name = scope.name,
                     .presentationHint = scope.presentationHint,
                     .variablesReference = scope.variablesReference,
                     .namedVariables = scope.namedVariables,
                     .indexedVariables = scope.indexedVariables,
                     .expensive = scope.expensive,
-                };
+                });
             }
-
-            const response_body = .{ .scopes = dap_scopes };
-            try protocol.sendResponse(request_seq, "scopes", true, response_body);
-        } else {
-            // No variable provider, return empty scopes
-            const response_body = .{ .scopes = &[_]dap.Scope{} };
-            try protocol.sendResponse(request_seq, "scopes", true, response_body);
         }
+
+        // Add Memory Writes scope
+        const MEMORY_WRITES_REF = 900000;
+        const write_count = self.memory_writes.count();
+        try dap_scopes.append(.{
+            .name = "Memory Writes",
+            .presentationHint = "registers",
+            .variablesReference = MEMORY_WRITES_REF,
+            .namedVariables = @intCast(write_count),
+            .expensive = false,
+        });
+
+        const response_body = .{ .scopes = dap_scopes.items };
+        try protocol.sendResponse(request_seq, "scopes", true, response_body);
     }
 
     fn sendVariables(self: *DebugContext, request_seq: u32, variables_reference: u32) !void {
@@ -972,27 +991,89 @@ pub const DebugContext = struct {
             const variables = try provider.getVariables(self.allocator, variables_reference);
             defer self.allocator.free(variables);
 
-            // Convert to DAP variables
-            var dap_variables = try self.allocator.alloc(dap.Variable, variables.len);
-            defer self.allocator.free(dap_variables);
+            // Check if this is the memory writes reference
+            const MEMORY_WRITES_REF = 900000;
+            if (variables_reference == MEMORY_WRITES_REF) {
+                // This is a request for global memory writes
+                const write_map = self.getMemoryWrites();
+                // Define the type for slot entries
+                const SlotEntry = struct { slot: usize, value: u256 };
 
-            for (variables, 0..) |variable, i| {
-                dap_variables[i] = .{
+                // Collect and sort the slot indices with their values
+                var slots = std.ArrayList(SlotEntry).init(self.allocator);
+                defer slots.deinit();
+
+                var iter = write_map.iterator();
+                while (iter.next()) |entry| {
+                    try slots.append(.{ .slot = entry.key_ptr.*, .value = entry.value_ptr.* });
+                }
+
+                // Sort for consistent display
+                std.sort.insertion(SlotEntry, slots.items, {}, struct {
+                    fn lessThan(_: void, a: SlotEntry, b: SlotEntry) bool {
+                        return a.slot < b.slot;
+                    }
+                }.lessThan);
+
+                // Create DAP variables from the stored values
+                var dap_variables = try self.allocator.alloc(dap.Variable, slots.items.len);
+                defer self.allocator.free(dap_variables);
+
+                for (slots.items, 0..) |entry, i| {
+                    const name = try std.fmt.allocPrint(self.allocator, "slot[{}]", .{entry.slot});
+                    const value_str = try std.fmt.allocPrint(self.allocator, "0x{x:0>64}", .{entry.value});
+
+                    dap_variables[i] = .{
+                        .name = name,
+                        .value = value_str,
+                        .type = "u256",
+                        .variablesReference = 0,
+                    };
+                }
+
+                const response_body = .{ .variables = dap_variables };
+                try protocol.sendResponse(request_seq, "variables", true, response_body);
+                return;
+            }
+
+            // Convert provider variables to DAP variables
+            var dap_variables = std.ArrayList(dap.Variable).init(self.allocator);
+            defer dap_variables.deinit();
+
+            // Add provider variables
+            for (variables) |variable| {
+                try dap_variables.append(.{
                     .name = variable.name,
                     .value = variable.value,
                     .type = variable.type,
                     .variablesReference = variable.variablesReference,
                     .namedVariables = variable.namedVariables,
                     .indexedVariables = variable.indexedVariables,
-                };
+                });
             }
 
-            const response_body = .{ .variables = dap_variables };
+            const response_body = .{ .variables = dap_variables.items };
             try protocol.sendResponse(request_seq, "variables", true, response_body);
         } else {
             // No variable provider, return empty variables
             const response_body = .{ .variables = &[_]dap.Variable{} };
             try protocol.sendResponse(request_seq, "variables", true, response_body);
         }
+    }
+
+    /// Track memory writes for debugging
+    pub fn trackMemoryWrite(self: *DebugContext, slot: usize, new_value: u256) void {
+        if (self.mode == .none or self.mode == .trace) return;
+        self.memory_writes.put(slot, new_value) catch {};
+    }
+
+    /// Get the global memory writes map
+    pub fn getMemoryWrites(self: *DebugContext) *std.AutoHashMap(usize, u256) {
+        return &self.memory_writes;
+    }
+
+    /// Clear all memory writes (called when resuming execution)
+    pub fn clearAllMemoryWrites(self: *DebugContext) void {
+        self.memory_writes.clearRetainingCapacity();
     }
 };
