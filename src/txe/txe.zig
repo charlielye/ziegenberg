@@ -10,6 +10,7 @@ const nargo = @import("../nargo/package.zig");
 const CallState = @import("call_state.zig").CallState;
 const DebugContext = @import("../bvm/debug_context.zig").DebugContext;
 const DebugMode = @import("../bvm/debug_context.zig").DebugMode;
+const TxeDebugContext = @import("debug_context.zig").TxeDebugContext;
 
 pub const ExecuteOptions = struct {
     calldata_path: ?[]const u8 = null,
@@ -23,6 +24,7 @@ pub const Txe = struct {
     allocator: std.mem.Allocator,
     fc_handler: Dispatcher,
     impl: TxeImpl,
+    txe_debug_ctx: ?TxeDebugContext = null,
 
     pub fn init(allocator: std.mem.Allocator, contract_artifacts_path: []const u8) !*Txe {
         const txe = try allocator.create(Txe);
@@ -71,12 +73,13 @@ pub const Txe = struct {
         std.debug.print("Init time: {}us\n", .{t.read() / 1000});
 
         // Create debug context if debug mode is enabled. TODO: cli arg to enum?
-        if (options.debug_dap) {
-            var provider = self.impl.state.getDebugVariableProvider();
-            self.impl.debug_ctx = try DebugContext.initWithVariableProvider(allocator, .dap, &provider);
-        } else if (options.debug_mode) {
-            var provider = self.impl.state.getDebugVariableProvider();
-            self.impl.debug_ctx = try DebugContext.initWithVariableProvider(allocator, .step_by_line, &provider);
+        if (options.debug_dap or options.debug_mode) {
+            // Store the TxeDebugContext in the Txe struct
+            self.txe_debug_ctx = TxeDebugContext.init(&self.impl.state);
+            var provider = self.txe_debug_ctx.?.getDebugVariableProvider();
+            
+            const debug_mode = if (options.debug_dap) DebugMode.dap else DebugMode.step_by_line;
+            self.impl.debug_ctx = try DebugContext.initWithVariableProvider(allocator, debug_mode, &provider);
         }
         // Register the initial VM with its debug info.
         if (self.impl.debug_ctx) |*ctx| {
