@@ -8,7 +8,6 @@ const nargo_toml = @import("../nargo/nargo_toml.zig");
 const nargo_artifact = @import("../nargo/artifact.zig");
 const nargo = @import("../nargo/package.zig");
 const CallState = @import("call_state.zig").CallState;
-const DebugContext = @import("../bvm/debug_context.zig").DebugContext;
 const DebugMode = @import("../bvm/debug_context.zig").DebugMode;
 const TxeDebugContext = @import("debug_context.zig").TxeDebugContext;
 
@@ -74,12 +73,10 @@ pub const Txe = struct {
 
         // Create debug context if debug mode is enabled. TODO: cli arg to enum?
         if (options.debug_dap or options.debug_mode) {
-            // Store the TxeDebugContext in the Txe struct
             self.txe_debug_ctx = TxeDebugContext.init(&self.impl.state);
             var provider = self.txe_debug_ctx.?.getDebugVariableProvider();
-            
             const debug_mode = if (options.debug_dap) DebugMode.dap else DebugMode.step_by_line;
-            self.impl.debug_ctx = try DebugContext.initWithVariableProvider(allocator, debug_mode, &provider);
+            self.impl.debug_ctx = try bvm.DebugContext.initWithVariableProvider(allocator, debug_mode, &provider);
         }
         // Register the initial VM with its debug info.
         if (self.impl.debug_ctx) |*ctx| {
@@ -92,18 +89,24 @@ pub const Txe = struct {
         defer std.debug.print("time taken: {}us\n", .{t.read() / 1000});
 
         circuit_vm.executeVm(0, .{ .debug_ctx = if (self.impl.debug_ctx) |*ctx| ctx else null }) catch |err| {
+            if (circuit_vm.brillig_error_context != null) {
+                // Store error in child state before it gets popped.
+                self.impl.state.getCurrentState().execution_error = circuit_vm.brillig_error_context;
+            }
+
             std.debug.print("Execution failed: {}\n", .{err});
 
             // If this was a Brillig trap, show debug info.
             std.debug.print("\nExecution Stack Trace:\n", .{});
 
             const depth = self.impl.state.vm_state_stack.items.len;
-            
+
             // We have nested vm instances, walk the stack from bottom to top
             for (self.impl.state.vm_state_stack.items, 0..) |state, index| {
                 const level = depth - index;
                 std.debug.print("\n[{}] ", .{level - 1});
 
+                var debug_info: *const nargo.DebugInfo = undefined;
                 if (state.contract_abi) |abi| {
                     std.debug.print("Contract: {s} @ {x}\n", .{
                         abi.name,
@@ -114,46 +117,32 @@ pub const Txe = struct {
                     const f = try abi.getFunctionBySelector(state.function_selector);
                     std.debug.print("    Function name: {s}\n", .{f.name});
 
-                    const error_ctx = state.execution_error orelse return error.NoExecutionError;
-                    std.debug.print("    Source location:\n", .{});
-
-                    // Pass the contract's file_map
-                    const fn_debug_info = try f.getDebugInfo(allocator, abi.file_map);
-
-                    // Print source location for current PC (top of stack).
-                    std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len, error_ctx.pc });
-                    fn_debug_info.printSourceLocation(error_ctx.pc, 2);
-
-                    // Print source locations for callstack entries from top to bottom.
-                    var i: usize = error_ctx.callstack.len;
-                    while (i > 0) : (i -= 1) {
-                        const return_addr = error_ctx.callstack[i - 1];
-                        const pc = return_addr - 1;
-                        std.debug.print("      [{d}] PC: {}\n", .{ i - 1, pc });
-                        fn_debug_info.printSourceLocation(pc, 2);
-                    }
+                    // Return the debug info for this function, passing the contract's file_map
+                    debug_info = try f.getDebugInfo(allocator, abi.file_map);
                 } else {
                     // Top-level execution.
-                    const debug_info = try artifact.getDebugInfo(allocator);
-                    const error_ctx = circuit_vm.brillig_error_context orelse return error.NoExecutionError;
-                    // Print source location for current PC
-                    std.debug.print("Source location:\n", .{});
-                    std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len, error_ctx.pc });
-                    debug_info.printSourceLocation(error_ctx.pc, 2);
+                    debug_info = try artifact.getDebugInfo(allocator);
+                }
+                const error_ctx = state.execution_error orelse return error.NoExecutionError;
 
-                    // Print callstack from top to bottom
-                    var i: usize = error_ctx.callstack.len;
-                    while (i > 0) : (i -= 1) {
-                        const return_addr = error_ctx.callstack[i - 1];
-                        const pc = return_addr - 1;
-                        std.debug.print("      [{d}] PC: {}\n", .{ i - 1, pc });
-                        debug_info.printSourceLocation(pc, 2);
-                    }
+                // const error_ctx = circuit_vm.brillig_error_context orelse return error.NoExecutionError;
+                // Print source location for current PC
+                std.debug.print("Source location:\n", .{});
+                std.debug.print("      [{d}] PC: {}\n", .{ error_ctx.callstack.len, error_ctx.pc });
+                debug_info.printSourceLocation(error_ctx.pc, 2);
 
-                    std.debug.print("Revert data: \n", .{});
-                    for (error_ctx.return_data, 0..) |data, j| {
-                        std.debug.print("  [{d:0>2}]: 0x{x:0>64}\n", .{ j, data });
-                    }
+                // Print callstack from top to bottom
+                var i: usize = error_ctx.callstack.len;
+                while (i > 0) : (i -= 1) {
+                    const return_addr = error_ctx.callstack[i - 1];
+                    const pc = return_addr - 1;
+                    std.debug.print("      [{d}] PC: {}\n", .{ i - 1, pc });
+                    debug_info.printSourceLocation(pc, 2);
+                }
+
+                std.debug.print("Revert data: \n", .{});
+                for (error_ctx.return_data, 0..) |data, j| {
+                    std.debug.print("  [{d:0>2}]: 0x{x:0>64}\n", .{ j, data });
                 }
             }
 

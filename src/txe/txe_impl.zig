@@ -668,19 +668,17 @@ pub const TxeImpl = struct {
 
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
 
-        // Execute private function in nested circuit vm.
+        // Create nested circuit vm.
         var circuit_vm = try cvm.CircuitVm(Dispatcher).init(allocator, &program, calldata.items, self.fc_handler);
 
-        // Set artifact path and function name on CircuitVm for nested BrilligCalls
-        circuit_vm.artifact_path = contract_instance.abi.artifact_path;
-        circuit_vm.function_name = function.name;
-
+        // Push vm details onto the debug context if available.
         if (self.debug_ctx) |*ctx| {
             const display_name = try std.fmt.allocPrint(allocator, "{s}:{s}", .{
                 contract_instance.abi.name,
                 function.name,
             });
-            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map), display_name[0..16]);
+            const debug_info = try function.getDebugInfo(allocator, contract_instance.abi.file_map);
+            ctx.onVmEnter(debug_info, display_name);
         }
 
         std.debug.print("callPrivateFunction: Entering nested cvm (function: {s})\n", .{function.name});
@@ -689,9 +687,8 @@ pub const TxeImpl = struct {
             .{ .debug_ctx = if (self.debug_ctx) |*ctx| ctx else null },
         ) catch |err| {
             if (circuit_vm.brillig_error_context != null) {
-                // Store error in child state before it gets popped
-                const child_state_for_error = self.state.getCurrentState();
-                child_state_for_error.execution_error = circuit_vm.brillig_error_context;
+                // Store error in child state before it gets popped.
+                self.state.getCurrentState().execution_error = circuit_vm.brillig_error_context;
             }
             return err;
         };

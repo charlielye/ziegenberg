@@ -30,8 +30,6 @@ pub fn CircuitVm(Dispatcher: type) type {
         memory_solvers: std.AutoHashMap(u32, MemoryOpSolver),
         fc_handler: *Dispatcher,
         brillig_error_context: ?bvm.brillig_vm.ErrorContext = null,
-        artifact_path: ?[]const u8 = null,
-        function_name: ?[]const u8 = null,
 
         pub fn init(
             allocator: std.mem.Allocator,
