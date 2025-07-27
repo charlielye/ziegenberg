@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Test that memory write tracking works in DAP variables."""
+"""Test memory write tracking in CVM (Circuit VM) context.
+
+This test verifies that memory writes are tracked and exposed through the
+DAP interface in the Circuit VM context. It checks that a "Memory Writes"
+scope appears and contains tracked memory modifications.
+"""
 
 import sys
 import os
@@ -8,7 +13,7 @@ sys.path.append(os.path.dirname(__file__))
 from dap_client import DapClient
 
 def test_memory_tracking():
-    """Test that memory write tracking works in DAP variables."""
+    """Test that memory write tracking works in CVM DAP variables."""
     print("\n=== Test: Memory Write Tracking ===")
 
     # Use a simple test that we know writes to memory

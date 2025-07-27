@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test step operations (step in, step over, step out)."""
+"""Test step in operation."""
 
 import sys
 import os
@@ -7,9 +7,9 @@ sys.path.append(os.path.dirname(__file__))
 
 from dap_client import DapClient
 
-def test_stepping():
-    """Test step operations (step in, step over, step out)."""
-    print("\n=== Test: Stepping ===")
+def test_step_in():
+    """Test step in operation."""
+    print("\n=== Test: Step In ===")
 
     client = DapClient([
         './zig-out/bin/zb', 'cvm', 'run',
@@ -45,23 +45,6 @@ def test_stepping():
         assert stopped['body']['reason'] == 'breakpoint', "Should stop at breakpoint"
         print("✓ Hit breakpoint at line 6")
 
-        # Test step over
-        print("\nTesting step over...")
-        seq = client.send_request("next", {"threadId": 1})
-        response = client.wait_for_response(seq)
-        assert response is not None, "No next response"
-
-        stopped = client.wait_for_event("stopped")
-        assert stopped is not None, "No stopped event after step"
-        assert stopped['body']['reason'] == 'step', "Wrong stop reason"
-
-        # Verify we're on the next line
-        seq = client.send_request("stackTrace", {"threadId": 1})
-        response = client.wait_for_response(seq)
-        if response and response.get('body', {}).get('stackFrames'):
-            line = response['body']['stackFrames'][0].get('line')
-            print(f"✓ Step over moved to line {line}")
-
         # Test step in
         print("\nTesting step in...")
         seq = client.send_request("stepIn", {"threadId": 1})
@@ -70,6 +53,7 @@ def test_stepping():
 
         stopped = client.wait_for_event("stopped")
         assert stopped is not None, "No stopped event after step in"
+        assert stopped['body']['reason'] == 'step', "Wrong stop reason"
         print("✓ Step in successful")
 
         return True
@@ -78,5 +62,5 @@ def test_stepping():
         client.shutdown()
 
 if __name__ == "__main__":
-    success = test_stepping()
+    success = test_step_in()
     sys.exit(0 if success else 1)

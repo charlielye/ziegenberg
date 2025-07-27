@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Test that DAP variables work for TXE state inspection."""
+"""Test DAP variables for TXE (Transaction Execution Environment) state inspection.
+
+This test verifies that TXE-specific state is exposed through the DAP interface,
+including TXE Global State, Call State, and VM State scopes. It also tests the
+nested structure of memory_writes within the Current Call State.
+"""
 
 import sys
 import os

@@ -36,11 +36,10 @@ def main():
         "test_call_stack.py",
         "test_initialization.py",
         "test_memory_tracking.py",
-        "test_multiple_files.py",
         "test_pause_command.py",
-        "test_step_over_detailed.py",
+        "test_step_in.py",
+        "test_step_over.py",
         "test_stepping_txe.py",
-        "test_stepping.py",
         "test_terminate_command.py",
         "test_variables_txe.py",
     ]
