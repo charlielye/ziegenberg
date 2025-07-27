@@ -30,11 +30,21 @@ pub const DebugCli = struct {
         self.linenoise.completions_callback = completions;
         self.linenoise.hints_callback = hints;
         
-        // Load history
-        self.linenoise.history.load(".zb_debug_history") catch {
+        // Load history from home directory
+        const history_path = blk: {
+            if (std.process.getEnvVarOwned(self.allocator, "HOME")) |home| {
+                defer self.allocator.free(home);
+                break :blk std.fs.path.join(self.allocator, &.{ home, ".zb_debug_history" }) catch ".zb_debug_history";
+            } else |_| {
+                break :blk ".zb_debug_history";
+            }
+        };
+        defer self.allocator.free(history_path);
+        
+        self.linenoise.history.load(history_path) catch {
             // Ignore error if history file doesn't exist
         };
-        defer self.linenoise.history.save(".zb_debug_history") catch {};
+        defer self.linenoise.history.save(history_path) catch {};
         
         std.debug.print("ZB Debugger - Type 'help' for commands\n", .{});
         if (self.client.stopped) {
