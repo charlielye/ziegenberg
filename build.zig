@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     const yazap = b.dependency("yazap", .{});
     const lmdb = b.dependency("lmdb", .{});
     const toml = b.dependency("toml", .{});
+    const linenoize = b.dependency("linenoize", .{});
 
     // Lib.
     {
@@ -45,6 +46,7 @@ pub fn build(b: *std.Build) void {
         exe.bundle_compiler_rt = true;
         exe.root_module.addImport("yazap", yazap.module("yazap"));
         exe.root_module.addImport("toml", toml.module("zig-toml"));
+        exe.root_module.addImport("linenoize", linenoize.module("linenoise"));
         exe.linkLibC();
 
         // Create install step.

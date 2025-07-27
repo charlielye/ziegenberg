@@ -1,27 +1,23 @@
 const std = @import("std");
 const DapClient = @import("dap_client.zig").DapClient;
+const Linenoise = @import("linenoize").Linenoise;
 
 pub const DebugCli = struct {
     allocator: std.mem.Allocator,
     client: DapClient,
     running: bool = true,
-    
-    // Command history
-    history: std.ArrayList([]const u8),
+    linenoise: Linenoise,
     
     pub fn init(allocator: std.mem.Allocator, reader: std.fs.File.Reader, writer: std.fs.File.Writer) DebugCli {
         return .{
             .allocator = allocator,
             .client = DapClient.init(allocator, reader, writer),
-            .history = std.ArrayList([]const u8).init(allocator),
+            .linenoise = Linenoise.init(allocator),
         };
     }
     
     pub fn deinit(self: *DebugCli) void {
-        for (self.history.items) |cmd| {
-            self.allocator.free(cmd);
-        }
-        self.history.deinit();
+        self.linenoise.deinit();
         self.client.deinit();
     }
     
@@ -29,6 +25,16 @@ pub const DebugCli = struct {
         // Initialize DAP connection
         try self.client.initialize();
         try self.client.launch();
+        
+        // Set up linenoize
+        self.linenoise.completions_callback = completions;
+        self.linenoise.hints_callback = hints;
+        
+        // Load history
+        self.linenoise.history.load(".zb_debug_history") catch {
+            // Ignore error if history file doesn't exist
+        };
+        defer self.linenoise.history.save(".zb_debug_history") catch {};
         
         std.debug.print("ZB Debugger - Type 'help' for commands\n", .{});
         if (self.client.stopped) {
@@ -47,32 +53,29 @@ pub const DebugCli = struct {
             }
             
             // Show prompt based on state
-            if (self.client.stopped) {
-                std.debug.print("(zb-debug) ", .{});
-            } else {
-                std.debug.print("(running) ", .{});
-            }
+            const prompt = if (self.client.stopped) "(zb-debug) " else "(running) ";
             
-            // Read command from stdin
-            const stdin = std.io.getStdIn().reader();
-            var buf: [1024]u8 = undefined;
-            if (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-                const cmd = std.mem.trim(u8, line, " \t\r\n");
+            // Read command using linenoize
+            if (try self.linenoise.linenoise(prompt)) |input| {
+                defer self.allocator.free(input);
+                
+                const cmd = std.mem.trim(u8, input, " \t\r\n");
                 if (cmd.len == 0) continue;
                 
                 // Add to history
-                const cmd_copy = try self.allocator.dupe(u8, cmd);
-                try self.history.append(cmd_copy);
+                try self.linenoise.history.add(cmd);
                 
                 // Process command
                 try self.processCommand(cmd);
             } else {
-                // EOF - exit
+                // EOF (Ctrl+D) - exit
+                std.debug.print("\nEnd of input detected. Exiting debugger.\n", .{});
                 self.running = false;
             }
         }
         
         // Cleanup
+        std.debug.print("Terminating debug session...\n", .{});
         try self.client.terminate();
     }
     
@@ -215,7 +218,19 @@ pub const DebugCli = struct {
         }
         
         std.debug.print("Continuing...\n", .{});
-        try self.client.continue_();
+        self.client.continue_() catch |err| {
+            if (err == error.Terminated) {
+                std.debug.print("Program terminated.\n", .{});
+                self.running = false;
+                return;
+            }
+            return err;
+        };
+        
+        // Show location when we stop (due to breakpoint, exception, etc.)
+        if (self.client.stopped) {
+            self.showCurrentLocation();
+        }
     }
     
     fn handleNext(self: *DebugCli) !void {
@@ -370,3 +385,61 @@ pub const DebugCli = struct {
         }
     }
 };
+
+// Completion function for linenoize
+fn completions(allocator: std.mem.Allocator, buf: []const u8) ![]const []const u8 {
+    var result = std.ArrayList([]const u8).init(allocator);
+    
+    // List of all commands
+    const commands = [_][]const u8{
+        "help", "h",
+        "quit", "q",
+        "break", "b",
+        "delete", "d",
+        "continue", "c",
+        "next", "n",
+        "step", "s",
+        "out", "o",
+        "backtrace", "bt",
+        "pause", "p",
+        "info",
+        "vars",
+    };
+    
+    // Find matching commands
+    for (commands) |cmd| {
+        if (std.mem.startsWith(u8, cmd, buf)) {
+            try result.append(try allocator.dupe(u8, cmd));
+        }
+    }
+    
+    return result.toOwnedSlice();
+}
+
+// Hints function for linenoize
+fn hints(allocator: std.mem.Allocator, buf: []const u8) !?[]const u8 {
+    // Provide hints for incomplete commands
+    const hint_map = .{
+        .{ "b", " <file>:<line>" },
+        .{ "break", " <file>:<line>" },
+        .{ "d", " <file>" },
+        .{ "delete", " <file>" },
+        .{ "info", " breakpoints" },
+        .{ "vars", " [frame_id]" },
+    };
+    
+    // Split the input to get just the command
+    var iter = std.mem.tokenizeAny(u8, buf, " \t");
+    const cmd = iter.next() orelse return null;
+    
+    // Only show hints if there's no additional text after the command
+    if (iter.rest().len > 0) return null;
+    
+    inline for (hint_map) |hint| {
+        if (std.mem.eql(u8, cmd, hint[0])) {
+            return try allocator.dupe(u8, hint[1]);
+        }
+    }
+    
+    return null;
+}

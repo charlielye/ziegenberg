@@ -37,6 +37,10 @@
             .url = "git+https://github.com/sam701/zig-toml#451fc7fb5ad302d3d83aeda234a8d15e792ca585",
             .hash = "toml-0.0.0-bV14BfdxAQDXkZ5wL6eVO9zBz622SAdz_pcWuQmTAsMg",
         },
+        .linenoize = .{
+            .url = "git+https://github.com/joachimschmidt557/linenoize.git?ref=v0.1.1#185f1dbd8b46f37d58cce96509ce8d6c65ec6cd3",
+            .hash = "linenoize-0.1.1-J7HK8IjZAAAEvol7whndbSwd4rG3atbT0e_F61LKXgZ4",
+        },
     },
     .paths = .{
         "build.zig",
