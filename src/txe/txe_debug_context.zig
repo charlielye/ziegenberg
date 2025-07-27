@@ -5,10 +5,45 @@ const F = @import("../bn254/fr.zig").Fr;
 const bvm = @import("../bvm/package.zig");
 const nargo = @import("../nargo/package.zig");
 
+// Scope type constants
+const ScopeType = enum(u32) {
+    // Global scopes
+    txe_global_state = 1,
+    
+    // Call state scopes (2-99)
+    call_state_base = 2,
+    call_state_max = 99,
+    
+    // Sub-reference scopes (100+)
+    account_list = 101,
+    
+    // Call state collection sub-references (200-299)
+    // Formula: (call_depth + 2) * 100 + collection_type
+    call_state_collections_base = 200,
+    call_state_collections_max = 299,
+    
+    _,
+};
+
+// Collection types within a call state
+const CollectionType = enum(u32) {
+    storage_writes = 0,
+    nullifiers = 1,
+    private_logs = 2,
+    notes = 3,
+};
+
 pub const TxeDebugContext = struct {
     allocator: std.mem.Allocator,
     txe_state: *TxeState,
     bvm_debug_ctx: bvm.DebugContext,
+
+    // Calculate variable reference for a collection within a call state
+    // Formula: (call_depth + 2) * 100 + collection_type
+    // This ensures each call state's collections have unique references
+    fn calculateCollectionRef(call_depth: usize, collection: CollectionType) u32 {
+        return @as(u32, @intCast((call_depth + 2) * 100 + @intFromEnum(collection)));
+    }
 
     pub fn brilligVmHooks(self: *TxeDebugContext) bvm.brillig_vm.BrilligVmHooks {
         return .{
@@ -86,13 +121,17 @@ pub const TxeDebugContext = struct {
         try scopes.append(.{
             .name = "TXE Global State",
             .presentationHint = "globals",
-            .variablesReference = var_ref_base + 1,
+            .variablesReference = var_ref_base + @intFromEnum(ScopeType.txe_global_state),
             .expensive = false,
         });
 
         // Add scopes for each CallState in the stack (bottom to top)
-        for (self.txe_state.vm_state_stack.items, 0..) |state, index| {
-            const vm_index: u32 = @intCast(index); // Bottom VM is 0, increases up the stack
+        // Add scopes for each CallState in the stack (top to bottom, i.e., reverse order)
+        const stack_len = self.txe_state.vm_state_stack.items.len;
+        var index: usize = stack_len;
+        while (index > 0) : (index -= 1) {
+            const state = self.txe_state.vm_state_stack.items[index - 1];
+            const vm_index: u32 = @intCast(index - 1); // Bottom VM is 0, increases up the stack
             const scope_name = if (state.contract_abi) |abi|
                 try std.fmt.allocPrint(allocator, "[{}] VM State: {s}", .{ vm_index, abi.name })
             else
@@ -101,7 +140,7 @@ pub const TxeDebugContext = struct {
             try scopes.append(.{
                 .name = scope_name,
                 .presentationHint = if (vm_index == 0) "locals" else "arguments",
-                .variablesReference = var_ref_base + 2 + vm_index,
+                .variablesReference = var_ref_base + @intFromEnum(ScopeType.call_state_base) + vm_index,
                 .expensive = false,
             });
         }
@@ -118,7 +157,7 @@ pub const TxeDebugContext = struct {
         // Determine which scope this is based on variables_reference
         const scope_type = variables_reference % 1000;
 
-        if (scope_type == 1) {
+        if (scope_type == @intFromEnum(ScopeType.txe_global_state)) {
             // TXE Global State
             try variables.append(.{
                 .name = "block_number",
@@ -150,18 +189,18 @@ pub const TxeDebugContext = struct {
                 .name = "accounts",
                 .value = try std.fmt.allocPrint(allocator, "{} accounts", .{accounts_count}),
                 .type = "HashMap",
-                .variablesReference = variables_reference + 100, // Sub-reference for account list
+                .variablesReference = variables_reference - @intFromEnum(ScopeType.txe_global_state) + @intFromEnum(ScopeType.account_list), // Sub-reference for account list
             });
-        } else if (scope_type >= 2 and scope_type < 100) {
+        } else if (scope_type >= @intFromEnum(ScopeType.call_state_base) and scope_type <= @intFromEnum(ScopeType.call_state_max)) {
             // Call State at specific depth (2 = current, 3 = parent, etc.)
-            const call_depth = scope_type - 2;
+            const call_depth = scope_type - @intFromEnum(ScopeType.call_state_base);
 
             // Get the CallState at the requested index from the stack
             if (call_depth < self.txe_state.vm_state_stack.items.len) {
                 const state = self.txe_state.vm_state_stack.items[@intCast(call_depth)];
-                try appendCallStateVariables(&variables, allocator, state, variables_reference);
+                try appendCallStateVariables(&variables, allocator, state, call_depth);
             }
-        } else if (scope_type == 101) {
+        } else if (scope_type == @intFromEnum(ScopeType.account_list)) {
             // Account list sub-reference (from clicking on "accounts")
             var iter = self.txe_state.accounts.iterator();
             var index: usize = 0;
@@ -174,7 +213,7 @@ pub const TxeDebugContext = struct {
                 });
                 index += 1;
             }
-        } else if (scope_type >= 200 and scope_type < 300) {
+        } else if (scope_type >= @intFromEnum(ScopeType.call_state_collections_base) and scope_type <= @intFromEnum(ScopeType.call_state_collections_max)) {
             // Sub-references for CallState collections
             const sub_type = scope_type % 100;
             const call_depth = (scope_type / 100 - 2);
@@ -182,7 +221,7 @@ pub const TxeDebugContext = struct {
             // Get the CallState at the requested index from the stack
             if (call_depth < self.txe_state.vm_state_stack.items.len) {
                 const state = self.txe_state.vm_state_stack.items[@intCast(call_depth)];
-                if (sub_type == 0) {
+                if (sub_type == @intFromEnum(CollectionType.storage_writes)) {
                     // Storage writes
                     var iter = state.storage_writes.iterator();
                     var index: usize = 0;
@@ -199,7 +238,7 @@ pub const TxeDebugContext = struct {
                         });
                         index += 1;
                     }
-                } else if (sub_type == 1) {
+                } else if (sub_type == @intFromEnum(CollectionType.nullifiers)) {
                     // Nullifiers
                     for (state.nullifiers.items, 0..) |nullifier, i| {
                         const name = try std.fmt.allocPrint(allocator, "[{}]", .{i});
@@ -207,6 +246,51 @@ pub const TxeDebugContext = struct {
                             .name = name,
                             .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{nullifier.to_int()}),
                             .type = "Field",
+                        });
+                    }
+                } else if (sub_type == @intFromEnum(CollectionType.private_logs)) {
+                    // Private logs
+                    for (state.private_logs.items, 0..) |log, i| {
+                        const name = try std.fmt.allocPrint(allocator, "[{}]", .{i});
+                        const value_str = if (log.emitted_length > 0)
+                            try std.fmt.allocPrint(allocator, "[{}]F = 0x{x:0>64}...", .{ log.emitted_length, log.fields[0].to_int() })
+                        else
+                            try std.fmt.allocPrint(allocator, "[0]F", .{});
+                        try variables.append(.{
+                            .name = name,
+                            .value = value_str,
+                            .type = "PrivateLog",
+                        });
+                    }
+                } else if (sub_type == @intFromEnum(CollectionType.notes)) {
+                    // Notes - iterate through nested HashMap structure
+                    var outer_iter = state.note_cache.notes.iterator();
+                    var index: usize = 0;
+                    while (outer_iter.next()) |contract_entry| {
+                        var inner_iter = contract_entry.value_ptr.iterator();
+                        while (inner_iter.next()) |slot_entry| {
+                            const note_list = slot_entry.value_ptr;
+                            for (note_list.items) |note| {
+                                const name = try std.fmt.allocPrint(allocator, "[{}]", .{index});
+                                const value_str = try std.fmt.allocPrint(allocator, "contract=0x{x:0>8}... slot={}", .{ 
+                                    note.contract_address.value.to_int() & 0xFFFFFFFF,
+                                    note.storage_slot
+                                });
+                                try variables.append(.{
+                                    .name = name,
+                                    .value = value_str,
+                                    .type = "Note",
+                                });
+                                index += 1;
+                            }
+                        }
+                    }
+                    // If no notes were found, show a message
+                    if (index == 0) {
+                        try variables.append(.{
+                            .name = "(empty)",
+                            .value = "No notes in cache",
+                            .type = "string",
                         });
                     }
                 }
@@ -220,7 +304,7 @@ pub const TxeDebugContext = struct {
         variables: *std.ArrayList(debug_var.DebugVariable),
         allocator: std.mem.Allocator,
         state: *@import("call_state.zig").CallState,
-        base_ref: u32,
+        call_depth: usize,
     ) !void {
         try variables.append(.{
             .name = "contract_address",
@@ -252,52 +336,56 @@ pub const TxeDebugContext = struct {
             .type = "u32",
         });
 
-        // Number of notes in cache
-        const num_notes = state.note_cache.getTotalNoteCount();
-        try variables.append(.{
-            .name = "num_notes",
-            .value = try std.fmt.allocPrint(allocator, "{}", .{num_notes}),
-            .type = "usize",
-        });
+        // Notes list (expandable) - only show if there are actually notes
+        // We need to check if the cache actually has notes, not just rely on getTotalNoteCount
+        // which might return incorrect values for empty caches
+        var actual_note_count: usize = 0;
+        var note_check_iter = state.note_cache.notes.iterator();
+        while (note_check_iter.next()) |contract_entry| {
+            var storage_iter = contract_entry.value_ptr.iterator();
+            while (storage_iter.next()) |storage_entry| {
+                actual_note_count += storage_entry.value_ptr.items.len;
+            }
+        }
+        
+        if (actual_note_count > 0) {
+            try variables.append(.{
+                .name = "notes",
+                .value = try std.fmt.allocPrint(allocator, "{} notes", .{actual_note_count}),
+                .type = "NoteCache",
+                .variablesReference = calculateCollectionRef(call_depth, CollectionType.notes),
+            });
+        }
 
-        // Number of nullifiers
-        try variables.append(.{
-            .name = "num_nullifiers",
-            .value = try std.fmt.allocPrint(allocator, "{}", .{state.nullifiers.items.len}),
-            .type = "usize",
-        });
+        // Nullifiers list (expandable)
+        if (state.nullifiers.items.len > 0) {
+            try variables.append(.{
+                .name = "nullifiers",
+                .value = try std.fmt.allocPrint(allocator, "{} nullifiers", .{state.nullifiers.items.len}),
+                .type = "ArrayList",
+                .variablesReference = calculateCollectionRef(call_depth, CollectionType.nullifiers),
+            });
+        }
 
-        // Number of storage writes
-        try variables.append(.{
-            .name = "num_storage_writes",
-            .value = try std.fmt.allocPrint(allocator, "{}", .{state.storage_writes.count()}),
-            .type = "usize",
-        });
-
-        // Number of private logs
-        try variables.append(.{
-            .name = "num_private_logs",
-            .value = try std.fmt.allocPrint(allocator, "{}", .{state.private_logs.items.len}),
-            .type = "usize",
-        });
-
-        // Add expandable references for collections if they have items
+        // Storage writes (expandable)
         if (state.storage_writes.count() > 0) {
             try variables.append(.{
                 .name = "storage_writes",
                 .value = try std.fmt.allocPrint(allocator, "{} writes", .{state.storage_writes.count()}),
                 .type = "StringHashMap",
-                .variablesReference = base_ref + 200, // Sub-reference for storage writes
+                .variablesReference = calculateCollectionRef(call_depth, CollectionType.storage_writes),
             });
         }
 
-        if (state.nullifiers.items.len > 0) {
+        // Private logs list (expandable)
+        if (state.private_logs.items.len > 0) {
             try variables.append(.{
-                .name = "nullifiers_list",
-                .value = try std.fmt.allocPrint(allocator, "{} nullifiers", .{state.nullifiers.items.len}),
+                .name = "private_logs",
+                .value = try std.fmt.allocPrint(allocator, "{} logs", .{state.private_logs.items.len}),
                 .type = "ArrayList",
-                .variablesReference = base_ref + 201, // Sub-reference for nullifiers
+                .variablesReference = calculateCollectionRef(call_depth, CollectionType.private_logs),
             });
         }
+
     }
 };

@@ -68,7 +68,7 @@ pub const CallState = struct {
     // Contract ABI reference for debug info (contains artifact path)
     contract_abi: ?*const nargo.ContractAbi = null,
 
-    // Error context if execution failed (for nested error reporting)
+    // or context if execution failed (for nested error reporting)
     execution_error: ?bvm.brillig_vm.ErrorContext = null,
 
     pub fn init(allocator: std.mem.Allocator) CallState {

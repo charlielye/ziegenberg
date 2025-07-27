@@ -133,21 +133,19 @@ def test_variables_txe():
                         assert var_type == "usize", f"num_storage_writes should be usize, got {var_type}"
                     elif var_name == "num_private_logs":
                         assert var_type == "usize", f"num_private_logs should be usize, got {var_type}"
-                    elif var_name == "memory_writes" and var.get('variablesReference', 0) > 0:
-                        # Test expanding memory writes
-                        print(f"\n  Testing memory_writes expansion ({var_value}):")
+                    elif var_name in ["notes", "nullifiers", "private_logs"] and var.get('variablesReference', 0) > 0:
+                        # Test expanding lists
+                        print(f"\n  Testing {var_name} expansion ({var_value}):")
                         seq2 = client.send_request("variables", {
                             "variablesReference": var['variablesReference']
                         })
                         response2 = client.wait_for_response(seq2)
                         if response2 and response2.get('success'):
-                            mem_vars = response2['body']['variables']
-                            print(f"    Found {len(mem_vars)} memory slots")
-                            # Show first few
-                            for mem_var in mem_vars[:5]:
-                                print(f"    - {mem_var['name']}: {mem_var['value']}")
-                            if len(mem_vars) > 5:
-                                print(f"    ... and {len(mem_vars) - 5} more")
+                            items = response2['body']['variables']
+                            print(f"    Found {len(items)} items")
+                            # Show all items (they should be limited)
+                            for item in items:
+                                print(f"    - {item['name']}: {item['value']} ({item.get('type', 'unknown')})")
 
         print("\n✓ Variables inspection verified")
         return True
