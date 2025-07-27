@@ -2,7 +2,7 @@ const std = @import("std");
 const nargo = @import("../nargo/package.zig");
 const BrilligVm = @import("brillig_vm.zig").BrilligVm;
 const BrilligVmHooks = @import("brillig_vm.zig").BrilligVmHooks;
-const dap = @import("../debugger/dap.zig");
+const dap = @import("../debug/dap.zig");
 const debug_var = @import("debug_variable_provider.zig");
 const BrilligOpcode = @import("io.zig").BrilligOpcode;
 
@@ -71,6 +71,9 @@ pub const DebugContext = struct {
 
     // Global memory writes tracking (slot index -> value)
     memory_writes: std.AutoHashMap(usize, u256),
+    
+    // Launch configuration
+    stop_on_entry: bool = false,
 
     pub fn brilligVmHooks(self: *DebugContext) BrilligVmHooks {
         return .{
@@ -271,6 +274,12 @@ pub const DebugContext = struct {
             const cmd = msg_obj.get("command").?.string;
 
             if (std.mem.eql(u8, cmd, "launch") or std.mem.eql(u8, cmd, "attach")) {
+                // Check for stopOnEntry in launch arguments
+                if (msg_obj.get("arguments")) |args| {
+                    if (args.object.get("stopOnEntry")) |stop| {
+                        self.stop_on_entry = stop.bool;
+                    }
+                }
                 // Send response
                 try self.dap_protocol.sendResponse(cmd_seq, cmd, true, .{});
             } else if (std.mem.eql(u8, cmd, "setBreakpoints")) {
@@ -310,8 +319,16 @@ pub const DebugContext = struct {
                 try self.dap_protocol.sendResponse(cmd_seq, cmd, true, threads);
             } else if (std.mem.eql(u8, cmd, "configurationDone")) {
                 try self.dap_protocol.sendResponse(cmd_seq, cmd, true, .{});
-                // Don't stop at entry - let it run until a breakpoint
-                self.execution_state = .running;
+                
+                if (self.stop_on_entry) {
+                    // Stop at entry so user can set breakpoints
+                    self.execution_state = .paused;
+                    // Send stopped event to indicate we're paused at entry
+                    try self.sendStoppedEvent("entry");
+                } else {
+                    // Start running (VSCode behavior)
+                    self.execution_state = .running;
+                }
                 break;
             } else if (std.mem.eql(u8, cmd, "disconnect")) {
                 self.execution_state = .terminated;

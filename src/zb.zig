@@ -12,6 +12,7 @@ const App = @import("yazap").App;
 const Arg = @import("yazap").Arg;
 const ArgMatches = @import("yazap").ArgMatches;
 const Txe = @import("./txe/package.zig").Txe;
+const debug = @import("./debug/package.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -44,11 +45,17 @@ pub fn main() !void {
         try txe_cmd.addArg(Arg.singleValueOption("calldata_path", 'c', "Path to toml containing calldata (default: Prover.toml)."));
         try txe_cmd.addArg(Arg.booleanOption("stats", 's', "Display execution stats after run."));
         try txe_cmd.addArg(Arg.booleanOption("trace", 't', "Display execution trace during run."));
-        try txe_cmd.addArg(Arg.booleanOption("debug", 'd', "Step through execution by source line."));
+        try txe_cmd.addArg(Arg.booleanOption("debug", 'd', "Launch interactive debugger."));
         try txe_cmd.addArg(Arg.booleanOption("debug-dap", null, "Enable DAP debugging mode for VSCode."));
         txe_cmd.setProperty(.help_on_empty_args);
 
         try root.addSubcommand(txe_cmd);
+    }
+    
+    {
+        var debug_cmd = app.createCommand("debug", "Debug client for connecting to a DAP server.");
+        debug_cmd.setProperty(.help_on_empty_args);
+        try root.addSubcommand(debug_cmd);
     }
 
     {
@@ -101,6 +108,11 @@ pub fn main() !void {
             return;
         }
         try handleTxe(txe_matches);
+        return;
+    }
+    
+    if (matches.subcommandMatches("debug")) |_| {
+        try handleDebug();
         return;
     }
 
@@ -159,6 +171,76 @@ fn handleTxe(cmd_matches: ArgMatches) !void {
     const allocator = arena.allocator();
     defer arena.deinit();
 
+    // Check if debug mode is requested
+    if (cmd_matches.containsArg("debug")) {
+        // Create pipes for bidirectional communication
+        const to_child = try std.posix.pipe();
+        const from_child = try std.posix.pipe();
+        
+        const pid = try std.posix.fork();
+        if (pid == 0) {
+            // Child process: Run the program with DAP server
+            // Redirect stdin/stdout to pipes
+            try std.posix.dup2(to_child[0], std.posix.STDIN_FILENO);
+            try std.posix.dup2(from_child[1], std.posix.STDOUT_FILENO);
+            
+            // Redirect stderr to /dev/null to avoid polluting the terminal
+            const dev_null = try std.posix.open("/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+            try std.posix.dup2(dev_null, std.posix.STDERR_FILENO);
+            std.posix.close(dev_null);
+            
+            // Close unused pipe ends
+            std.posix.close(to_child[1]);
+            std.posix.close(from_child[0]);
+            
+            // Run TXE with DAP mode enabled
+            const txe = try Txe.init(allocator, "data/contracts", true);
+            defer txe.deinit();
+
+            txe.execute(cmd_matches.getSingleValue("artifact_path").?, .{
+                .calldata_path = cmd_matches.getSingleValue("calldata_path"),
+                .show_stats = cmd_matches.containsArg("stats"),
+                .show_trace = cmd_matches.containsArg("trace"),
+            }) catch |err| {
+                std.debug.print("{}\n", .{err});
+                std.posix.exit(switch (err) {
+                    error.Trapped => 2,
+                    else => 1,
+                });
+            };
+            
+            // Exit child process
+            std.posix.exit(0);
+        } else {
+            // Parent process: Become the debug CLI
+            // Close unused pipe ends
+            std.posix.close(to_child[0]);
+            std.posix.close(from_child[1]);
+            
+            // Create readers/writers from the pipes
+            const from_child_file = std.fs.File{ .handle = from_child[0] };
+            const to_child_file = std.fs.File{ .handle = to_child[1] };
+            const reader = from_child_file.reader();
+            const writer = to_child_file.writer();
+            
+            // Run the debug client
+            var cli = debug.DebugCli.init(allocator, reader, writer);
+            defer cli.deinit();
+            
+            try cli.run();
+            
+            // Wait for child to exit
+            _ = std.posix.waitpid(pid, 0);
+            
+            // Close pipes
+            std.posix.close(to_child[1]);
+            std.posix.close(from_child[0]);
+            
+            return;
+        }
+    }
+
+    // Normal execution (no debug mode)
     const txe = try Txe.init(allocator, "data/contracts", cmd_matches.containsArg("debug-dap"));
     defer txe.deinit();
 
@@ -166,7 +248,6 @@ fn handleTxe(cmd_matches: ArgMatches) !void {
         .calldata_path = cmd_matches.getSingleValue("calldata_path"),
         .show_stats = cmd_matches.containsArg("stats"),
         .show_trace = cmd_matches.containsArg("trace"),
-        // .debug_mode = cmd_matches.containsArg("debug"),
     }) catch |err| {
         std.debug.print("{}\n", .{err});
         // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
@@ -207,6 +288,22 @@ fn handleCvm(matches: ArgMatches) !void {
         try cvmDisassemble(bytecode_path);
         return;
     }
+}
+
+fn handleDebug() !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    
+    // Debug client that connects to stdin/stdout (for use with external DAP server)
+    var cli = debug.DebugCli.init(
+        allocator,
+        std.io.getStdIn().reader(),
+        std.io.getStdOut().writer(),
+    );
+    defer cli.deinit();
+    
+    try cli.run();
 }
 
 fn handleMt(matches: ArgMatches) !void {
