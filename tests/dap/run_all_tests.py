@@ -11,7 +11,7 @@ def run_test(test_file):
         result = subprocess.run([
             sys.executable, test_file
         ], capture_output=True, text=True, cwd=os.path.dirname(__file__))
-        
+
         if result.returncode == 0:
             print(f"✓ {os.path.basename(test_file)} PASSED")
             return True
@@ -29,36 +29,37 @@ def run_test(test_file):
 def main():
     """Run all tests."""
     print("=== Running All DAP Tests ===")
-    
+
     # List of test files in order
     tests = [
-        "test_initialization.py",
-        "test_breakpoint_line_adjustment.py", 
-        "test_stepping.py",
-        "test_step_over_detailed.py",
+        "test_breakpoint_line_adjustment.py",
         "test_call_stack.py",
-        "test_multiple_files.py",
-        "test_terminate_command.py",
-        "test_pause_command.py",
+        "test_initialization.py",
         "test_memory_tracking.py",
+        "test_multiple_files.py",
+        "test_pause_command.py",
+        "test_step_over_detailed.py",
+        "test_stepping_txe.py",
+        "test_stepping.py",
+        "test_terminate_command.py",
         "test_variables_txe.py",
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for test in tests:
         if run_test(test):
             passed += 1
         else:
             failed += 1
         print()  # Add blank line between tests
-    
+
     print(f"=== Test Summary ===")
     print(f"Passed: {passed}")
     print(f"Failed: {failed}")
     print(f"Total:  {passed + failed}")
-    
+
     return 0 if failed == 0 else 1
 
 if __name__ == "__main__":
