@@ -3,10 +3,11 @@ const nargo_toml = @import("./nargo_toml.zig");
 const prover_toml = @import("./prover_toml.zig");
 const artifact = @import("./artifact.zig");
 const contract = @import("./contract.zig");
-const debug_info = @import("./debug_info.zig");
+pub const debug_info = @import("./debug_info.zig");
 pub const calldata = @import("./calldata.zig");
 
 // Export types that are used externally
+pub const ArtifactAbi = artifact.ArtifactAbi;
 pub const ContractAbi = contract.ContractAbi;
 pub const Function = contract.Function;
 pub const DebugInfo = debug_info.DebugInfo;

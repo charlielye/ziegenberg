@@ -12,19 +12,13 @@ pub const Memory = struct {
     allocator: std.mem.Allocator,
     memory: []align(4096) u256,
     max_slot_set: u64 = 0,
-    debug_ctx: ?*DebugContext = null,
 
     pub fn init(allocator: std.mem.Allocator, num_slots: usize) !Memory {
         // std.debug.print("{}\n",.{@alignOf(std.c.max_align_t)});
         return .{
             .allocator = allocator,
             .memory = try allocator.alignedAlloc(u256, 4096, num_slots),
-            .debug_ctx = null,
         };
-    }
-
-    pub fn setDebugContext(self: *Memory, ctx: ?*DebugContext) void {
-        self.debug_ctx = ctx;
     }
 
     pub fn deinit(self: *Memory) void {
@@ -74,12 +68,6 @@ pub const Memory = struct {
     pub inline fn setSlotAtIndex(self: *Memory, index: usize, value: u256) void {
         if (self.max_slot_set < index) {
             self.max_slot_set = index;
-        }
-        // Track memory write for debugging
-        if (self.debug_ctx) |ctx| {
-            var f align(32) = value;
-            fieldOps.bn254_fr_normalize(@ptrCast(&f));
-            ctx.trackMemoryWrite(index, f);
         }
         // std.debug.print("slot {}: {x} -> {x}\n", .{ index, self.memory[index], value });
         self.memory[index] = value;

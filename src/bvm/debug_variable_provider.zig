@@ -24,16 +24,16 @@ pub const DebugScope = struct {
 pub const DebugVariableProvider = struct {
     // Context pointer - the actual implementation
     context: *anyopaque,
-    
+
     // Function pointers for the interface
     getScopesFn: *const fn (context: *anyopaque, allocator: std.mem.Allocator, frame_id: u32) anyerror![]DebugScope,
     getVariablesFn: *const fn (context: *anyopaque, allocator: std.mem.Allocator, variables_reference: u32) anyerror![]DebugVariable,
-    
+
     /// Get the scopes available for a given stack frame
     pub fn getScopes(self: *const DebugVariableProvider, allocator: std.mem.Allocator, frame_id: u32) ![]DebugScope {
         return self.getScopesFn(self.context, allocator, frame_id);
     }
-    
+
     /// Get the variables for a given variable reference
     pub fn getVariables(self: *const DebugVariableProvider, allocator: std.mem.Allocator, variables_reference: u32) ![]DebugVariable {
         return self.getVariablesFn(self.context, allocator, variables_reference);

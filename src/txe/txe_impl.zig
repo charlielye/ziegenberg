@@ -8,7 +8,8 @@ const poseidon = @import("../poseidon2/poseidon2.zig");
 const note_cache = @import("note_cache.zig");
 const call_state = @import("call_state.zig");
 const TxeState = @import("txe_state.zig").TxeState;
-const Dispatcher = @import("dispatcher.zig").Dispatcher;
+const TxeDispatcher = @import("dispatcher.zig").TxeDispatcher;
+const TxeDebugContext = @import("txe_debug_context.zig").TxeDebugContext;
 
 const constants = proto.constants;
 
@@ -355,32 +356,36 @@ pub fn BoundedVec(comptime T: type) type {
 
 pub const TxeImpl = struct {
     allocator: std.mem.Allocator,
-    // Foreign call handler.
-    fc_handler: *Dispatcher = undefined,
+    // Foreign call handler. Set by caller to circular reference.
+    fc_handler: *TxeDispatcher = undefined,
     // Random number generator.
     prng: *std.Random.DefaultPrng,
-    state: TxeState,
+    state: *TxeState,
     contract_artifacts_path: []const u8,
-    debug_ctx: ?bvm.DebugContext = null,
+    txe_debug_ctx: ?*TxeDebugContext = null,
 
-    pub fn init(allocator: std.mem.Allocator, contract_artifacts_path: []const u8) !TxeImpl {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        contract_artifacts_path: []const u8,
+        state: *TxeState,
+        txe_debug_ctx: ?*TxeDebugContext,
+    ) !TxeImpl {
         const prng = try allocator.create(std.Random.DefaultPrng);
         prng.* = std.Random.DefaultPrng.init(12345);
-
-        const txe_state = try TxeState.init(allocator);
 
         return TxeImpl{
             .allocator = allocator,
             .prng = prng,
-            .state = txe_state,
+            .state = state,
             .contract_artifacts_path = contract_artifacts_path,
+            .txe_debug_ctx = txe_debug_ctx,
         };
     }
 
     pub fn deinit(self: *TxeImpl) void {
         self.state.deinit();
         self.allocator.destroy(self.prng);
-        if (self.debug_ctx) |*ctx| ctx.deinit();
+        if (self.txe_debug_ctx) |ctx| ctx.deinit();
     }
 
     pub fn reset(self: *TxeImpl, _: std.mem.Allocator) !void {
@@ -669,10 +674,16 @@ pub const TxeImpl = struct {
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
 
         // Create nested circuit vm.
-        var circuit_vm = try cvm.CircuitVm(Dispatcher).init(allocator, &program, calldata.items, self.fc_handler);
+        var circuit_vm = try cvm.CircuitVm.init(
+            allocator,
+            &program,
+            calldata.items,
+            self.fc_handler.fcDispatcher(),
+            if (self.txe_debug_ctx) |ctx| ctx.brilligVmHooks() else null,
+        );
 
         // Push vm details onto the debug context if available.
-        if (self.debug_ctx) |*ctx| {
+        if (self.txe_debug_ctx) |ctx| {
             const display_name = try std.fmt.allocPrint(allocator, "{s}:{s}", .{
                 contract_instance.abi.name,
                 function.name,
@@ -682,20 +693,17 @@ pub const TxeImpl = struct {
         }
 
         std.debug.print("callPrivateFunction: Entering nested cvm (function: {s})\n", .{function.name});
-        circuit_vm.executeVm(
-            0,
-            .{ .debug_ctx = if (self.debug_ctx) |*ctx| ctx else null },
-        ) catch |err| {
+        circuit_vm.executeVm(0) catch |err| {
             if (circuit_vm.brillig_error_context != null) {
-                // Store error in child state before it gets popped.
+                // Store error in current call state before before cvm deinit.
                 self.state.getCurrentState().execution_error = circuit_vm.brillig_error_context;
             }
             return err;
         };
         std.debug.print("callPrivateFunction: Exited nested cvm\n", .{});
 
-        if (self.debug_ctx) |*ctx| {
-            defer ctx.onVmExit();
+        if (self.txe_debug_ctx) |ctx| {
+            ctx.onVmExit();
         }
 
         // Extract public inputs from execution result.
@@ -1060,23 +1068,27 @@ pub const TxeImpl = struct {
         const program = try cvm.deserialize(allocator, try function.getBytecode(allocator));
 
         // Execute utility function in nested circuit vm.
-        var circuit_vm = try cvm.CircuitVm(Dispatcher).init(allocator, &program, calldata, self.fc_handler);
+        var circuit_vm = try cvm.CircuitVm.init(
+            allocator,
+            &program,
+            calldata,
+            self.fc_handler.fcDispatcher(),
+            if (self.txe_debug_ctx) |ctx| ctx.brilligVmHooks() else null,
+        );
 
-        if (self.debug_ctx) |*ctx| {
+        if (self.txe_debug_ctx) |ctx| {
             const display_name = try std.fmt.allocPrint(allocator, "{s}:{s}", .{
                 contract_instance.abi.name,
                 function.name,
             });
-            ctx.onVmEnter(try function.getDebugInfo(allocator, contract_instance.abi.file_map), display_name[0..16]);
+            const debug_info = try function.getDebugInfo(allocator, contract_instance.abi.file_map);
+            ctx.onVmEnter(debug_info, display_name);
         }
 
         std.debug.print("simulateUtilityFunction: Entering nested cvm with contract_address {x}\n", .{
             child_current_state.contract_address,
         });
-        circuit_vm.executeVm(
-            0,
-            .{ .debug_ctx = if (self.debug_ctx) |*ctx| ctx else null },
-        ) catch |err| {
+        circuit_vm.executeVm(0) catch |err| {
             // If this was a trap, capture the error context in the child state
             if (err == error.Trapped and circuit_vm.brillig_error_context != null) {
                 const child_state_for_error = self.state.getCurrentState();
@@ -1085,8 +1097,9 @@ pub const TxeImpl = struct {
             return err;
         };
         std.debug.print("simulateUtilityFunction: Exited nested cvm\n", .{});
-        if (self.debug_ctx) |*ctx| {
-            defer ctx.onVmExit();
+
+        if (self.txe_debug_ctx) |ctx| {
+            ctx.onVmExit();
         }
 
         const return_values = program.functions[0].return_values;

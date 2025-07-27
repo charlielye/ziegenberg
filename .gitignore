@@ -6,3 +6,4 @@ data
 joblog.txt
 scratch
 vscode-noir
+__pycache__

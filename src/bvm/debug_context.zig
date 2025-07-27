@@ -1,8 +1,10 @@
 const std = @import("std");
-const nargo_debug_info = @import("../nargo/debug_info.zig");
+const nargo = @import("../nargo/package.zig");
 const BrilligVm = @import("brillig_vm.zig").BrilligVm;
+const BrilligVmHooks = @import("brillig_vm.zig").BrilligVmHooks;
 const dap = @import("../debugger/dap.zig");
 const debug_var = @import("debug_variable_provider.zig");
+const BrilligOpcode = @import("io.zig").BrilligOpcode;
 
 pub const DebugMode = enum {
     none,
@@ -23,7 +25,7 @@ pub const ExecutionState = enum {
 pub const VmInfo = struct {
     pc: usize,
     callstack: []const usize,
-    debug_info: *const nargo_debug_info.DebugInfo,
+    debug_info: *const nargo.DebugInfo,
     // Track if we're stepping out of this VM
     stepping_out: bool = false,
     // Validated breakpoints for this specific VM
@@ -40,7 +42,6 @@ pub const FileBreakpoints = struct {
 
 pub const DebugContext = struct {
     allocator: std.mem.Allocator,
-    mode: DebugMode,
     last_line: ?u32 = null,
 
     // DAP-specific fields
@@ -67,23 +68,30 @@ pub const DebugContext = struct {
     breakpoint_id_map: std.StringHashMap(u32),
 
     // Debug variable provider for DAP variable inspection
-    variable_provider: ?*const debug_var.DebugVariableProvider = null,
+    variable_provider: ?debug_var.DebugVariableProvider = null,
 
     // Global memory writes tracking (slot index -> value)
     memory_writes: std.AutoHashMap(usize, u256),
 
-    pub fn init(allocator: std.mem.Allocator, mode: DebugMode) !DebugContext {
-        return initWithVariableProvider(allocator, mode, null);
+    pub fn brilligVmHooks(self: *DebugContext) BrilligVmHooks {
+        return .{
+            .context = self,
+            .afterOpcodeFn = &DebugContext.afterOpcode,
+            .onErrorFn = &DebugContext.onError,
+            .trackMemoryWriteFn = &DebugContext.trackMemoryWrite,
+        };
+    }
+
+    pub fn init(allocator: std.mem.Allocator) !DebugContext {
+        return initWithVariableProvider(allocator, null);
     }
 
     pub fn initWithVariableProvider(
         allocator: std.mem.Allocator,
-        mode: DebugMode,
-        variable_provider: ?*const debug_var.DebugVariableProvider,
+        variable_provider: ?debug_var.DebugVariableProvider,
     ) !DebugContext {
         var ctx = DebugContext{
             .allocator = allocator,
-            .mode = mode,
             .vm_info_stack = std.ArrayList(VmInfo).init(allocator),
             .requested_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(allocator),
             .breakpoint_id_map = std.StringHashMap(u32).init(allocator),
@@ -92,9 +100,7 @@ pub const DebugContext = struct {
         };
 
         // Initialize DAP if in DAP mode
-        if (mode == .dap) {
-            try ctx.initDap();
-        }
+        try ctx.initDap();
 
         return ctx;
     }
@@ -133,16 +139,9 @@ pub const DebugContext = struct {
         self.memory_writes.deinit();
     }
 
-    pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo_debug_info.DebugInfo, display_name: []const u8) void {
-        // When entering a new Brillig VM, push it onto the stack
-        // Store the current VM's PC before pushing the new VM
-        const parent_pc: usize = if (self.vm_info_stack.items.len > 0)
-            self.vm_info_stack.items[self.vm_info_stack.items.len - 1].pc
-        else
-            0;
-
+    pub fn onVmEnter(self: *DebugContext, debug_info: *const nargo.DebugInfo, display_name: []const u8) void {
         var vm_info = VmInfo{
-            .pc = parent_pc, // Store where we were in the parent VM
+            .pc = 0,
             .callstack = &.{},
             .debug_info = debug_info,
             .validated_breakpoints = std.StringHashMap(std.ArrayList(u32)).init(self.allocator),
@@ -157,15 +156,6 @@ pub const DebugContext = struct {
         // Send DAP event to update breakpoints if we have a protocol
         if (self.dap_protocol != null) {
             self.sendBreakpointUpdate() catch {};
-        }
-    }
-
-    pub fn onError(self: *DebugContext, pc: usize, vm: anytype) void {
-        // When an error occurs, pause execution and notify VSCode
-        if (self.mode == .dap) {
-            self.execution_state = .paused;
-            self.sendStoppedEvent("exception", pc) catch {};
-            self.waitForDapCommands(pc, vm);
         }
     }
 
@@ -192,41 +182,61 @@ pub const DebugContext = struct {
         }
     }
 
-    pub fn afterOpcode(self: *DebugContext, pc: usize, opcode: anytype, ops_executed: u64, vm: anytype) bool {
+    // --- BRILLIG VM HOOKS --------------------------------------------------------------------------------------------
+
+    pub fn afterOpcode(context: *anyopaque, _: BrilligOpcode, vm: *BrilligVm) bool {
+        const self: *DebugContext = @alignCast(@ptrCast(context));
+
         // Update current VM's PC and callstack
         if (self.vm_info_stack.items.len > 0) {
-            self.vm_info_stack.items[self.vm_info_stack.items.len - 1].pc = pc;
+            self.vm_info_stack.items[self.vm_info_stack.items.len - 1].pc = vm.pc;
             self.vm_info_stack.items[self.vm_info_stack.items.len - 1].callstack = vm.callstack.items;
         }
 
-        const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
+        // const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
 
-        switch (self.mode) {
-            .none => {},
-            .trace => {
-                const stdout = std.io.getStdOut().writer();
-                stdout.print("{:0>4}: {:0>4}: {any}\n", .{ ops_executed, pc, opcode }) catch {};
-            },
-            .step_by_line => {
-                const source_loc = debug_info.getSourceLocation(pc);
-                const current_line = if (source_loc) |loc| loc.line else null;
+        // switch (self.mode) {
+        // .none => {},
+        // .trace => {
+        //     const stdout = std.io.getStdOut().writer();
+        //     stdout.print("{:0>4}: {:0>4}: {any}\n", .{ vm.ops_executed, vm.pc, opcode }) catch {};
+        // },
+        // .step_by_line => {
+        //     const source_loc = debug_info.getSourceLocation(vm.pc);
+        //     const current_line = if (source_loc) |loc| loc.line else null;
 
-                // Check if we've reached a new source line
-                if (current_line != null and (self.last_line == null or current_line.? != self.last_line.?)) {
-                    self.last_line = current_line;
+        //     // Check if we've reached a new source line
+        //     if (current_line != null and (self.last_line == null or current_line.? != self.last_line.?)) {
+        //         self.last_line = current_line;
 
-                    // Show the source line
-                    const stdout = std.io.getStdOut().writer();
-                    stdout.print("\n", .{}) catch {};
-                    debug_info.printSourceLocationWithOptions(pc, 0, false);
-                }
-            },
-            .dap => self.handleDapMode(pc, ops_executed, vm),
-        }
+        //         // Show the source line
+        //         const stdout = std.io.getStdOut().writer();
+        //         stdout.print("\n", .{}) catch {};
+        //         debug_info.printSourceLocationWithOptions(vm.pc, 0, false);
+        //     }
+        // },
+        // .dap => self.handleDapMode(vm),
+        // else => unreachable,
+        // }
+        self.handleDapMode(vm);
 
-        // Return true to continue execution, false to stop
+        // Return true to continue execution, false to stop.
         return self.execution_state != .terminated;
     }
+
+    pub fn onError(context: *anyopaque, vm: *BrilligVm) void {
+        const self: *DebugContext = @alignCast(@ptrCast(context));
+        self.execution_state = .paused;
+        self.sendStoppedEvent("exception") catch {};
+        self.waitForDapCommands(vm);
+    }
+
+    pub fn trackMemoryWrite(context: *anyopaque, slot: usize, new_value: u256) void {
+        const self: *DebugContext = @alignCast(@ptrCast(context));
+        self.memory_writes.put(slot, new_value) catch {};
+    }
+
+    // --- END BRILLIG VM HOOKS ----------------------------------------------------------------------------------------
 
     fn initDap(self: *DebugContext) !void {
         self.dap_protocol = try self.allocator.create(dap.DapProtocol);
@@ -337,16 +347,14 @@ pub const DebugContext = struct {
         }
     }
 
-    fn handleDapMode(self: *DebugContext, pc: usize, ops_executed: u64, vm: anytype) void {
-        _ = ops_executed;
-
+    fn handleDapMode(self: *DebugContext, vm: *BrilligVm) void {
         // Check for DAP commands even when running
         if (self.execution_state == .running) {
-            self.checkForDapCommand(pc, vm);
+            self.checkForDapCommand(vm);
         }
 
         const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
-        const source_loc = debug_info.getSourceLocation(pc);
+        const source_loc = debug_info.getSourceLocation(vm.pc);
         const current_line = if (source_loc) |loc| loc.line else null;
 
         // For step out, check if we've returned to the target depth
@@ -360,8 +368,8 @@ pub const DebugContext = struct {
                     }
                     self.execution_state = .paused;
                     self.step_out_target_depth = null;
-                    self.sendStoppedEvent("step", pc) catch {};
-                    self.waitForDapCommands(pc, vm);
+                    self.sendStoppedEvent("step") catch {};
+                    self.waitForDapCommands(vm);
                 }
             }
             return; // Don't check for new lines during step out
@@ -376,12 +384,12 @@ pub const DebugContext = struct {
                     // Check for breakpoints
                     if (self.checkBreakpoint(source_loc)) {
                         self.execution_state = .paused;
-                        self.sendStoppedEvent("breakpoint", pc) catch {};
-                        self.waitForDapCommands(pc, vm);
+                        self.sendStoppedEvent("breakpoint") catch {};
+                        self.waitForDapCommands(vm);
                     }
                 },
                 .paused => {
-                    self.waitForDapCommands(pc, vm);
+                    self.waitForDapCommands(vm);
                 },
                 .step_over => {
                     // Hybrid step over logic
@@ -392,23 +400,23 @@ pub const DebugContext = struct {
                             self.execution_state = .paused;
                             self.step_over_initial_depth = null;
                             self.step_over_initial_line = null;
-                            self.sendStoppedEvent("step", pc) catch {};
-                            self.waitForDapCommands(pc, vm);
+                            self.sendStoppedEvent("step") catch {};
+                            self.waitForDapCommands(vm);
                         } else if (current_depth == initial_depth and current_line != self.step_over_initial_line) {
                             // Same depth, different line - stop
                             self.execution_state = .paused;
                             self.step_over_initial_depth = null;
                             self.step_over_initial_line = null;
-                            self.sendStoppedEvent("step", pc) catch {};
-                            self.waitForDapCommands(pc, vm);
+                            self.sendStoppedEvent("step") catch {};
+                            self.waitForDapCommands(vm);
                         }
                         // Otherwise (deeper depth or same line), keep running
                     }
                 },
                 .step_into => {
                     self.execution_state = .paused;
-                    self.sendStoppedEvent("step", pc) catch {};
-                    self.waitForDapCommands(pc, vm);
+                    self.sendStoppedEvent("step") catch {};
+                    self.waitForDapCommands(vm);
                 },
                 .step_out => unreachable, // Handled above
                 .terminated => {},
@@ -416,7 +424,7 @@ pub const DebugContext = struct {
         }
     }
 
-    fn waitForDapCommands(self: *DebugContext, current_pc: usize, vm: anytype) void {
+    fn waitForDapCommands(self: *DebugContext, vm: *BrilligVm) void {
         const protocol = self.dap_protocol.?;
 
         while (self.execution_state == .paused) {
@@ -426,13 +434,13 @@ pub const DebugContext = struct {
             };
             defer msg.deinit();
 
-            self.processDapCommand(msg.value, current_pc, vm) catch |err| {
+            self.processDapCommand(msg.value, vm) catch |err| {
                 std.debug.print("DAP command error: {}\n", .{err});
             };
         }
     }
 
-    fn checkForDapCommand(self: *DebugContext, current_pc: usize, vm: anytype) void {
+    fn checkForDapCommand(self: *DebugContext, vm: *BrilligVm) void {
         const protocol = self.dap_protocol.?;
 
         // Try to read a message non-blocking
@@ -444,12 +452,12 @@ pub const DebugContext = struct {
         };
         defer msg.deinit();
 
-        self.processDapCommand(msg.value, current_pc, vm) catch |err| {
+        self.processDapCommand(msg.value, vm) catch |err| {
             std.debug.print("DAP command error: {}\n", .{err});
         };
     }
 
-    fn processDapCommand(self: *DebugContext, msg: std.json.Value, current_pc: usize, vm: anytype) !void {
+    fn processDapCommand(self: *DebugContext, msg: std.json.Value, vm: *BrilligVm) !void {
         const protocol = self.dap_protocol.?;
         const obj = msg.object;
 
@@ -467,7 +475,7 @@ pub const DebugContext = struct {
             // Initialize step over tracking
             self.step_over_initial_depth = vm.callstack.items.len;
             const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
-            const source_loc = debug_info.getSourceLocation(current_pc);
+            const source_loc = debug_info.getSourceLocation(vm.pc);
             self.step_over_initial_line = if (source_loc) |loc| loc.line else null;
 
             self.execution_state = .step_over;
@@ -500,13 +508,13 @@ pub const DebugContext = struct {
             const threads = .{ .threads = &[_]dap.Thread{.{ .id = 1, .name = "main" }} };
             try protocol.sendResponse(seq, command, true, threads);
         } else if (std.mem.eql(u8, command, "stackTrace")) {
-            try self.sendStackTrace(seq, current_pc);
+            try self.sendStackTrace(seq, vm.pc);
         } else if (std.mem.eql(u8, command, "pause")) {
             // Handle pause request - stop execution
             self.execution_state = .paused;
             try protocol.sendResponse(seq, command, true, .{});
             // Send stopped event
-            try self.sendStoppedEvent("pause", current_pc);
+            try self.sendStoppedEvent("pause");
         } else if (std.mem.eql(u8, command, "terminate")) {
             // Handle terminate request (VSCode stop button)
             self.execution_state = .terminated;
@@ -545,8 +553,7 @@ pub const DebugContext = struct {
         }
     }
 
-    fn sendStoppedEvent(self: *DebugContext, reason: []const u8, pc: usize) !void {
-        _ = pc;
+    fn sendStoppedEvent(self: *DebugContext, reason: []const u8) !void {
         const protocol = self.dap_protocol.?;
         const body = dap.StoppedEventBody{
             .reason = reason,
@@ -705,7 +712,7 @@ pub const DebugContext = struct {
         return self.validateBreakpointsForFile(current_vm, file_path, source_breakpoints);
     }
 
-    fn checkBreakpoint(self: *const DebugContext, source_loc: ?nargo_debug_info.SourceLocation) bool {
+    fn checkBreakpoint(self: *const DebugContext, source_loc: ?nargo.debug_info.SourceLocation) bool {
         const loc = source_loc orelse return false;
 
         // Get the current VM's validated breakpoints
@@ -1059,12 +1066,6 @@ pub const DebugContext = struct {
             const response_body = .{ .variables = &[_]dap.Variable{} };
             try protocol.sendResponse(request_seq, "variables", true, response_body);
         }
-    }
-
-    /// Track memory writes for debugging
-    pub fn trackMemoryWrite(self: *DebugContext, slot: usize, new_value: u256) void {
-        if (self.mode == .none or self.mode == .trace) return;
-        self.memory_writes.put(slot, new_value) catch {};
     }
 
     /// Get the global memory writes map

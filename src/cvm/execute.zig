@@ -79,23 +79,23 @@ pub fn execute(options: ExecuteOptions) !void {
     std.debug.assert(program.functions.len == 1);
     std.debug.print("Calldata consists of {} elements.\n", .{calldata.len});
 
+    var debug_ctx = if (options.debug_dap) try DebugContext.init(allocator) else null;
+    defer if (debug_ctx) |*ctx| ctx.deinit();
+
     // Init.
     var t = try std.time.Timer.start();
     std.debug.print("Initing...\n", .{});
     var fc_handler = try bvm.foreign_call.Dispatcher.init(allocator);
     defer fc_handler.deinit();
-    var circuit_vm = try CircuitVm(bvm.foreign_call.Dispatcher).init(allocator, &program, calldata, &fc_handler);
+    var circuit_vm = try CircuitVm.init(
+        allocator,
+        &program,
+        calldata,
+        fc_handler.fcDispatcher(),
+        if (debug_ctx) |*ctx| ctx.brilligVmHooks() else null,
+    );
     defer circuit_vm.deinit();
     std.debug.print("Init time: {}us\n", .{t.read() / 1000});
-
-    // Create debug context if debug mode is enabled
-    var debug_ctx: ?DebugContext = null;
-    if (options.debug_dap) {
-        debug_ctx = try DebugContext.init(allocator, .dap);
-    } else if (options.debug_mode) {
-        debug_ctx = try DebugContext.init(allocator, .step_by_line);
-    }
-    defer if (debug_ctx) |*ctx| ctx.deinit();
 
     // Register the initial VM with its debug info if using artifacts
     if (debug_ctx != null and options.artifact_path != null) {
@@ -107,10 +107,7 @@ pub fn execute(options: ExecuteOptions) !void {
     // Execute.
     std.debug.print("Executing...\n", .{});
     t.reset();
-    const result = circuit_vm.executeVm(0, .{
-        .show_trace = options.show_trace,
-        .debug_ctx = if (debug_ctx) |*ctx| ctx else null,
-    });
+    const result = circuit_vm.executeVm(0);
     std.debug.print("time taken: {}us\n", .{t.read() / 1000});
     result catch |err| {
         std.debug.print("Execution failed: {}\n", .{err});

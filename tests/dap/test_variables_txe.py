@@ -14,7 +14,7 @@ def test_variables_txe():
     # Use TXE test which has TxeState
     client = DapClient([
         './zig-out/bin/zb', 'txe',
-        './aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__extended_incrementing_and_decrementing_pass.json',
+        './aztec-packages/noir-projects/noir-contracts/target/tests/Counter__extended_incrementing_and_decrementing_pass.json',
         '--debug-dap'
     ])
 
@@ -87,7 +87,7 @@ def test_variables_txe():
         # Verify we have TXE scopes
         scope_names = [s['name'] for s in scopes]
         assert "TXE Global State" in scope_names, "Missing TXE Global State scope"
-        
+
         # Should have at least one VM State scope
         vm_state_scopes = [s for s in scope_names if "VM State" in s and s != "Memory Writes"]
         assert len(vm_state_scopes) >= 1, f"Expected at least one VM State scope, got {vm_state_scopes}"

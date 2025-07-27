@@ -155,14 +155,18 @@ fn handleAvm(matches: ArgMatches) !void {
 }
 
 fn handleTxe(cmd_matches: ArgMatches) !void {
-    const txe = try Txe.init(std.heap.page_allocator, "data/contracts");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+
+    const txe = try Txe.init(allocator, "data/contracts", cmd_matches.containsArg("debug-dap"));
     defer txe.deinit();
+
     txe.execute(cmd_matches.getSingleValue("artifact_path").?, .{
         .calldata_path = cmd_matches.getSingleValue("calldata_path"),
         .show_stats = cmd_matches.containsArg("stats"),
         .show_trace = cmd_matches.containsArg("trace"),
-        .debug_mode = cmd_matches.containsArg("debug"),
-        .debug_dap = cmd_matches.containsArg("debug-dap"),
+        // .debug_mode = cmd_matches.containsArg("debug"),
     }) catch |err| {
         std.debug.print("{}\n", .{err});
         // Returning 2 on traps, allows us to distinguish between zb failing and the bytecode execution failing.
@@ -171,7 +175,6 @@ fn handleTxe(cmd_matches: ArgMatches) !void {
             else => 1,
         });
     };
-    return;
 }
 
 fn handleCvm(matches: ArgMatches) !void {

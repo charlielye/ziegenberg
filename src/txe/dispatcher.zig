@@ -3,12 +3,19 @@ const F = @import("../../bn254/fr.zig").Fr;
 const bvm = @import("../bvm/package.zig");
 const TxeImpl = @import("./txe_impl.zig").TxeImpl;
 
-pub const Dispatcher = struct {
+pub const TxeDispatcher = struct {
     allocator: std.mem.Allocator,
     mocker: bvm.foreign_call.Mocker,
     txe_impl: *TxeImpl,
 
-    pub fn init(allocator: std.mem.Allocator, txe_impl: *TxeImpl) !Dispatcher {
+    pub fn fcDispatcher(self: *TxeDispatcher) bvm.foreign_call.ForeignCallDispatcher {
+        return .{
+            .context = self,
+            .handleForeignCallFn = handleForeignCall,
+        };
+    }
+
+    pub fn init(allocator: std.mem.Allocator, txe_impl: *TxeImpl) !TxeDispatcher {
         return .{
             .allocator = allocator,
             .mocker = bvm.foreign_call.Mocker.init(allocator),
@@ -16,11 +23,13 @@ pub const Dispatcher = struct {
         };
     }
 
-    pub fn deinit(self: *Dispatcher) void {
+    pub fn deinit(self: *TxeDispatcher) void {
         self.mocker.deinit();
     }
 
-    pub fn handleForeignCall(self: *Dispatcher, mem: *bvm.memory.Memory, fc: *const bvm.io.ForeignCall) !void {
+    fn handleForeignCall(context: *anyopaque, mem: *bvm.memory.Memory, fc: *const bvm.io.ForeignCall) !void {
+        const self: *TxeDispatcher = @alignCast(@ptrCast(context));
+
         // This arena allocator is for the transient memory needed for processing the call.
         // In the actual call handlers you have access to self.allocator for longer lived data.
         var arena = std.heap.ArenaAllocator.init(self.allocator);

@@ -15,7 +15,7 @@ def test_terminate_command():
     # Use TXE test which runs longer
     client = DapClient([
         './zig-out/bin/zb', 'txe',
-        './aztec-packages/noir-projects/noir-contracts/contracts/test/counter_contract/target/tests/Counter__extended_incrementing_and_decrementing_pass.json',
+        './aztec-packages/noir-projects/noir-contracts/target/tests/Counter__extended_incrementing_and_decrementing_pass.json',
         '--debug-dap'
     ])
 

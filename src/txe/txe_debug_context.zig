@@ -2,21 +2,70 @@ const std = @import("std");
 const debug_var = @import("../bvm/debug_variable_provider.zig");
 const TxeState = @import("txe_state.zig").TxeState;
 const F = @import("../bn254/fr.zig").Fr;
+const bvm = @import("../bvm/package.zig");
+const nargo = @import("../nargo/package.zig");
 
 pub const TxeDebugContext = struct {
+    allocator: std.mem.Allocator,
     txe_state: *TxeState,
+    bvm_debug_ctx: bvm.DebugContext,
 
-    pub fn init(txe_state: *TxeState) TxeDebugContext {
-        return .{ .txe_state = txe_state };
+    pub fn brilligVmHooks(self: *TxeDebugContext) bvm.brillig_vm.BrilligVmHooks {
+        return .{
+            .context = self,
+            .afterOpcodeFn = afterOpcode,
+            .onErrorFn = onError,
+            .trackMemoryWriteFn = trackMemoryWrite,
+        };
     }
 
-    /// Get a debug variable provider for this TxeDebugContext
-    pub fn getDebugVariableProvider(self: *TxeDebugContext) debug_var.DebugVariableProvider {
+    fn debugVariableProvider(self: *TxeDebugContext) debug_var.DebugVariableProvider {
         return .{
             .context = self,
             .getScopesFn = getScopesImpl,
             .getVariablesFn = getVariablesImpl,
         };
+    }
+
+    pub fn init(allocator: std.mem.Allocator, txe_state: *TxeState) !*TxeDebugContext {
+        const txe_debug_ctx = try allocator.create(TxeDebugContext);
+        txe_debug_ctx.allocator = allocator;
+        txe_debug_ctx.txe_state = txe_state;
+        txe_debug_ctx.bvm_debug_ctx = try bvm.DebugContext.initWithVariableProvider(
+            allocator,
+            txe_debug_ctx.debugVariableProvider(),
+        );
+        return txe_debug_ctx;
+    }
+
+    pub fn deinit(self: *TxeDebugContext) void {
+        self.bvm_debug_ctx.deinit();
+        self.allocator.destroy(self);
+    }
+
+    pub fn afterOpcode(context: *anyopaque, opcode: bvm.io.BrilligOpcode, vm: *bvm.BrilligVm) bool {
+        return bvm.DebugContext.afterOpcode(context, opcode, vm);
+    }
+
+    pub fn onError(context: *anyopaque, vm: *bvm.BrilligVm) void {
+        bvm.DebugContext.onError(context, vm);
+    }
+
+    pub fn trackMemoryWrite(context: *anyopaque, slot: usize, new_value: u256) void {
+        bvm.DebugContext.trackMemoryWrite(context, slot, new_value);
+    }
+
+    pub fn onVmEnter(
+        self: *TxeDebugContext,
+        debug_info: *const nargo.DebugInfo,
+        display_name: []const u8,
+    ) void {
+        // TODO: Move vm stack up into this. bvm doesn't know about vm stacks.
+        self.bvm_debug_ctx.onVmEnter(debug_info, display_name);
+    }
+
+    pub fn onVmExit(self: *TxeDebugContext) void {
+        self.bvm_debug_ctx.onVmExit();
     }
 
     fn getScopesImpl(context: *anyopaque, allocator: std.mem.Allocator, frame_id: u32) anyerror![]debug_var.DebugScope {
