@@ -42,6 +42,7 @@ def main():
         "test_stepping_txe.py",
         "test_terminate_command.py",
         "test_variables_txe.py",
+        "test_note_expansion_nested_vm.py",
     ]
 
     passed = 0

@@ -17,10 +17,10 @@ const ScopeType = enum(u32) {
     // Sub-reference scopes (100+)
     account_list = 101,
     
-    // Call state collection sub-references (200-299)
-    // Formula: (call_depth + 2) * 100 + collection_type
+    // Call state collection sub-references (200-999)
+    // Formula: (display_index + 2) * 100 + collection_type
     call_state_collections_base = 200,
-    call_state_collections_max = 299,
+    call_state_collections_max = 999,
     
     _,
 };
@@ -39,10 +39,10 @@ pub const TxeDebugContext = struct {
     bvm_debug_ctx: bvm.DebugContext,
 
     // Calculate variable reference for a collection within a call state
-    // Formula: (call_depth + 2) * 100 + collection_type
+    // Formula: (display_index + 2) * 100 + collection_type
     // This ensures each call state's collections have unique references
-    fn calculateCollectionRef(call_depth: usize, collection: CollectionType) u32 {
-        return @as(u32, @intCast((call_depth + 2) * 100 + @intFromEnum(collection)));
+    fn calculateCollectionRef(display_index: usize, collection: CollectionType) u32 {
+        return @as(u32, @intCast((display_index + 2) * 100 + @intFromEnum(collection)));
     }
 
     pub fn brilligVmHooks(self: *TxeDebugContext) bvm.brillig_vm.BrilligVmHooks {
@@ -125,22 +125,21 @@ pub const TxeDebugContext = struct {
             .expensive = false,
         });
 
-        // Add scopes for each CallState in the stack (bottom to top)
-        // Add scopes for each CallState in the stack (top to bottom, i.e., reverse order)
+        // Add scopes for each CallState in the stack (top to bottom display order)
         const stack_len = self.txe_state.vm_state_stack.items.len;
-        var index: usize = stack_len;
-        while (index > 0) : (index -= 1) {
-            const state = self.txe_state.vm_state_stack.items[index - 1];
-            const vm_index: u32 = @intCast(index - 1); // Bottom VM is 0, increases up the stack
+        var stack_index: usize = stack_len;
+        while (stack_index > 0) : (stack_index -= 1) {
+            const display_index: u32 = @intCast(stack_index - 1);  // bottom = 0, top = stack_len-1
+            const state = self.txe_state.vm_state_stack.items[stack_index - 1];
             const scope_name = if (state.contract_abi) |abi|
-                try std.fmt.allocPrint(allocator, "[{}] VM State: {s}", .{ vm_index, abi.name })
+                try std.fmt.allocPrint(allocator, "[{}] VM State: {s}", .{ display_index, abi.name })
             else
-                try std.fmt.allocPrint(allocator, "[{}] VM State", .{vm_index});
+                try std.fmt.allocPrint(allocator, "[{}] VM State", .{display_index});
 
             try scopes.append(.{
                 .name = scope_name,
-                .presentationHint = if (vm_index == 0) "locals" else "arguments",
-                .variablesReference = var_ref_base + @intFromEnum(ScopeType.call_state_base) + vm_index,
+                .presentationHint = if (display_index == 0) "locals" else "arguments",
+                .variablesReference = var_ref_base + @intFromEnum(ScopeType.call_state_base) + display_index,
                 .expensive = false,
             });
         }
@@ -156,6 +155,8 @@ pub const TxeDebugContext = struct {
 
         // Determine which scope this is based on variables_reference
         const scope_type = variables_reference % 1000;
+        
+        std.debug.print("DEBUG getVariablesImpl: variables_reference={}, scope_type={}\n", .{variables_reference, scope_type});
 
         if (scope_type == @intFromEnum(ScopeType.txe_global_state)) {
             // TXE Global State
@@ -192,13 +193,15 @@ pub const TxeDebugContext = struct {
                 .variablesReference = variables_reference - @intFromEnum(ScopeType.txe_global_state) + @intFromEnum(ScopeType.account_list), // Sub-reference for account list
             });
         } else if (scope_type >= @intFromEnum(ScopeType.call_state_base) and scope_type <= @intFromEnum(ScopeType.call_state_max)) {
-            // Call State at specific depth (2 = current, 3 = parent, etc.)
-            const call_depth = scope_type - @intFromEnum(ScopeType.call_state_base);
-
-            // Get the CallState at the requested index from the stack
-            if (call_depth < self.txe_state.vm_state_stack.items.len) {
-                const state = self.txe_state.vm_state_stack.items[@intCast(call_depth)];
-                try appendCallStateVariables(&variables, allocator, state, call_depth);
+            // Call State at specific display index
+            const display_index = scope_type - @intFromEnum(ScopeType.call_state_base);
+            const stack_len = self.txe_state.vm_state_stack.items.len;
+            
+            // Direct mapping: display_index = stack_index
+            if (display_index < stack_len) {
+                const stack_index = display_index;
+                const state = self.txe_state.vm_state_stack.items[@intCast(stack_index)];
+                try appendCallStateVariables(&variables, allocator, state, display_index);
             }
         } else if (scope_type == @intFromEnum(ScopeType.account_list)) {
             // Account list sub-reference (from clicking on "accounts")
@@ -216,11 +219,18 @@ pub const TxeDebugContext = struct {
         } else if (scope_type >= @intFromEnum(ScopeType.call_state_collections_base) and scope_type <= @intFromEnum(ScopeType.call_state_collections_max)) {
             // Sub-references for CallState collections
             const sub_type = scope_type % 100;
-            const call_depth = (scope_type / 100 - 2);
+            const display_index = (scope_type / 100 - 2);
+            const stack_len = self.txe_state.vm_state_stack.items.len;
+            
+            std.debug.print("DEBUG: Expanding collection - scope_type={}, sub_type={}, display_index={}, stack_len={}\n", 
+                .{scope_type, sub_type, display_index, stack_len});
 
-            // Get the CallState at the requested index from the stack
-            if (call_depth < self.txe_state.vm_state_stack.items.len) {
-                const state = self.txe_state.vm_state_stack.items[@intCast(call_depth)];
+            // Convert display index to stack index and get the CallState
+            if (display_index < stack_len) {
+                const stack_index = display_index;  // direct mapping now
+                std.debug.print("DEBUG: Getting state at stack_index={} (stack_len={}, display_index={})\n", .{stack_index, stack_len, display_index});
+                const state = self.txe_state.vm_state_stack.items[@intCast(stack_index)];
+                std.debug.print("DEBUG: Got state ptr=0x{x}\n", .{@intFromPtr(state)});
                 if (sub_type == @intFromEnum(CollectionType.storage_writes)) {
                     // Storage writes
                     var iter = state.storage_writes.iterator();
@@ -264,12 +274,27 @@ pub const TxeDebugContext = struct {
                     }
                 } else if (sub_type == @intFromEnum(CollectionType.notes)) {
                     // Notes - iterate through nested HashMap structure
+                    std.debug.print("DEBUG: Expanding notes for display_index={}, stack_index={}, state ptr=0x{x}\n", .{display_index, stack_index, @intFromPtr(state)});
+                    
+                    // Re-count notes to see if it matches what we showed before
+                    var recount: usize = 0;
+                    var recount_iter = state.note_cache.notes.iterator();
+                    while (recount_iter.next()) |contract_entry| {
+                        var storage_iter = contract_entry.value_ptr.iterator();
+                        while (storage_iter.next()) |storage_entry| {
+                            recount += storage_entry.value_ptr.items.len;
+                        }
+                    }
+                    std.debug.print("DEBUG: Note cache has {} contracts, recount shows {} notes\n", .{state.note_cache.notes.count(), recount});
+                    
                     var outer_iter = state.note_cache.notes.iterator();
                     var index: usize = 0;
                     while (outer_iter.next()) |contract_entry| {
+                        std.debug.print("DEBUG: Found contract 0x{x} in note cache\n", .{contract_entry.key_ptr.value.to_int()});
                         var inner_iter = contract_entry.value_ptr.iterator();
                         while (inner_iter.next()) |slot_entry| {
                             const note_list = slot_entry.value_ptr;
+                            std.debug.print("DEBUG: Found slot {} with {} notes\n", .{slot_entry.key_ptr.*, note_list.items.len});
                             for (note_list.items) |note| {
                                 const name = try std.fmt.allocPrint(allocator, "[{}]", .{index});
                                 const value_str = try std.fmt.allocPrint(allocator, "contract=0x{x:0>8}... slot={}", .{ 
@@ -304,7 +329,7 @@ pub const TxeDebugContext = struct {
         variables: *std.ArrayList(debug_var.DebugVariable),
         allocator: std.mem.Allocator,
         state: *@import("call_state.zig").CallState,
-        call_depth: usize,
+        display_index: usize,
     ) !void {
         try variables.append(.{
             .name = "contract_address",
@@ -348,12 +373,16 @@ pub const TxeDebugContext = struct {
             }
         }
         
+        std.debug.print("DEBUG appendCallStateVariables: display_index={}, actual_note_count={}, state ptr=0x{x}\n", .{display_index, actual_note_count, @intFromPtr(state)});
+        
         if (actual_note_count > 0) {
+            const notes_ref = calculateCollectionRef(display_index, CollectionType.notes);
+            std.debug.print("DEBUG appendCallStateVariables: notes variablesReference={} for display_index={}\n", .{notes_ref, display_index});
             try variables.append(.{
                 .name = "notes",
                 .value = try std.fmt.allocPrint(allocator, "{} notes", .{actual_note_count}),
                 .type = "NoteCache",
-                .variablesReference = calculateCollectionRef(call_depth, CollectionType.notes),
+                .variablesReference = notes_ref,
             });
         }
 
@@ -363,7 +392,7 @@ pub const TxeDebugContext = struct {
                 .name = "nullifiers",
                 .value = try std.fmt.allocPrint(allocator, "{} nullifiers", .{state.nullifiers.items.len}),
                 .type = "ArrayList",
-                .variablesReference = calculateCollectionRef(call_depth, CollectionType.nullifiers),
+                .variablesReference = calculateCollectionRef(display_index, CollectionType.nullifiers),
             });
         }
 
@@ -373,7 +402,7 @@ pub const TxeDebugContext = struct {
                 .name = "storage_writes",
                 .value = try std.fmt.allocPrint(allocator, "{} writes", .{state.storage_writes.count()}),
                 .type = "StringHashMap",
-                .variablesReference = calculateCollectionRef(call_depth, CollectionType.storage_writes),
+                .variablesReference = calculateCollectionRef(display_index, CollectionType.storage_writes),
             });
         }
 
@@ -383,7 +412,7 @@ pub const TxeDebugContext = struct {
                 .name = "private_logs",
                 .value = try std.fmt.allocPrint(allocator, "{} logs", .{state.private_logs.items.len}),
                 .type = "ArrayList",
-                .variablesReference = calculateCollectionRef(call_depth, CollectionType.private_logs),
+                .variablesReference = calculateCollectionRef(display_index, CollectionType.private_logs),
             });
         }
 
