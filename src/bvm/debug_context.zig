@@ -55,6 +55,7 @@ pub const DebugContext = struct {
     // Step over tracking
     step_over_initial_depth: ?usize = null,
     step_over_initial_line: ?u32 = null,
+    step_over_initial_vm_depth: ?usize = null,
 
     // Stack of Brillig VMs (CVM → BVM → CVM → BVM pattern)
     vm_info_stack: std.ArrayList(VmInfo),
@@ -174,6 +175,8 @@ pub const DebugContext = struct {
             // Mark that we should pause when the parent VM resumes
             self.execution_state = .paused;
             self.step_out_target_depth = null;
+            // Send stopped event to notify VSCode
+            self.sendStoppedEvent("step") catch {};
         }
 
         // Send DAP event to restore parent VM's breakpoints if applicable
@@ -370,9 +373,12 @@ pub const DebugContext = struct {
                     self.step_out_target_depth = null;
                     self.sendStoppedEvent("step") catch {};
                     self.waitForDapCommands(vm);
+                    return;
                 }
             }
-            return; // Don't check for new lines during step out
+            // If we're stepping out of a VM (no target depth), just keep running
+            // The onVmExit will handle the pause
+            return; // Don't check for new lines or breakpoints during step out
         }
 
         // Check if we've reached a new source line
@@ -394,23 +400,34 @@ pub const DebugContext = struct {
                 .step_over => {
                     // Hybrid step over logic
                     const current_depth = vm.callstack.items.len;
+                    const current_vm_depth = self.vm_info_stack.items.len;
                     if (self.step_over_initial_depth) |initial_depth| {
-                        if (current_depth < initial_depth) {
-                            // We've returned from the function - stop
-                            self.execution_state = .paused;
-                            self.step_over_initial_depth = null;
-                            self.step_over_initial_line = null;
-                            self.sendStoppedEvent("step") catch {};
-                            self.waitForDapCommands(vm);
-                        } else if (current_depth == initial_depth and current_line != self.step_over_initial_line) {
-                            // Same depth, different line - stop
-                            self.execution_state = .paused;
-                            self.step_over_initial_depth = null;
-                            self.step_over_initial_line = null;
-                            self.sendStoppedEvent("step") catch {};
-                            self.waitForDapCommands(vm);
+                        if (self.step_over_initial_vm_depth) |initial_vm_depth| {
+                            // Check if we're in a nested VM (deeper in the VM stack)
+                            if (current_vm_depth > initial_vm_depth) {
+                                // We're in a nested VM - don't stop, let it run
+                                return;
+                            }
+                            
+                            if (current_depth < initial_depth) {
+                                // We've returned from the function - stop
+                                self.execution_state = .paused;
+                                self.step_over_initial_depth = null;
+                                self.step_over_initial_line = null;
+                                self.step_over_initial_vm_depth = null;
+                                self.sendStoppedEvent("step") catch {};
+                                self.waitForDapCommands(vm);
+                            } else if (current_depth == initial_depth and current_line != self.step_over_initial_line) {
+                                // Same depth, different line - stop
+                                self.execution_state = .paused;
+                                self.step_over_initial_depth = null;
+                                self.step_over_initial_line = null;
+                                self.step_over_initial_vm_depth = null;
+                                self.sendStoppedEvent("step") catch {};
+                                self.waitForDapCommands(vm);
+                            }
+                            // Otherwise (deeper depth or same line), keep running
                         }
-                        // Otherwise (deeper depth or same line), keep running
                     }
                 },
                 .step_into => {
@@ -474,6 +491,7 @@ pub const DebugContext = struct {
         } else if (std.mem.eql(u8, command, "next")) {
             // Initialize step over tracking
             self.step_over_initial_depth = vm.callstack.items.len;
+            self.step_over_initial_vm_depth = self.vm_info_stack.items.len;
             const debug_info = self.vm_info_stack.items[self.vm_info_stack.items.len - 1].debug_info;
             const source_loc = debug_info.getSourceLocation(vm.pc);
             self.step_over_initial_line = if (source_loc) |loc| loc.line else null;
@@ -497,7 +515,7 @@ pub const DebugContext = struct {
                 // At top level of current VM but there are outer Brillig VMs
                 // Mark the current VM as stepping out
                 self.vm_info_stack.items[self.vm_info_stack.items.len - 1].stepping_out = true;
-                self.execution_state = .running; // Let it run until VM exits
+                self.execution_state = .step_out; // Keep in step_out state to avoid hitting breakpoints
                 self.clearAllMemoryWrites();
             } else {
                 // Already at top level of top VM.
