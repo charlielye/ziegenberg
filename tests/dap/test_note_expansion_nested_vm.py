@@ -9,7 +9,7 @@ notes collection in the DAP variables view.
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), 'tests/dap'))
+sys.path.append(os.path.dirname(__file__))
 
 from dap_client import DapClient
 
@@ -104,7 +104,21 @@ def test_line77_notes():
                     items = response3['body']['variables']
                     print(f"  Result: {len(items)} items")
                     for item in items[:3]:  # Show first 3
-                        print(f"    - {item['name']}: {item['value']}")
+                        print(f"    - {item['name']}: {item['value']} (ref: {item.get('variablesReference', 0)})")
+                        
+                        # Try expanding the first note
+                        if item.get('variablesReference', 0) > 0 and '[0]' in item['name']:
+                            note_ref = item['variablesReference']
+                            print(f"    Expanding note {item['name']} (ref: {note_ref})...")
+                            seq4 = client.send_request("variables", {
+                                "variablesReference": note_ref
+                            })
+                            response4 = client.wait_for_response(seq4)
+                            
+                            note_fields = response4['body']['variables']
+                            print(f"    Note has {len(note_fields)} fields:")
+                            for field in note_fields[:5]:  # Show first 5 fields
+                                print(f"      - {field['name']}: {field['value']}")
         
         return True
 

@@ -129,7 +129,7 @@ pub const TxeDebugContext = struct {
         const stack_len = self.txe_state.vm_state_stack.items.len;
         var stack_index: usize = stack_len;
         while (stack_index > 0) : (stack_index -= 1) {
-            const display_index: u32 = @intCast(stack_index - 1);  // bottom = 0, top = stack_len-1
+            const display_index: u32 = @intCast(stack_index - 1); // bottom = 0, top = stack_len-1
             const state = self.txe_state.vm_state_stack.items[stack_index - 1];
             const scope_name = if (state.contract_abi) |abi|
                 try std.fmt.allocPrint(allocator, "[{}] VM State: {s}", .{ display_index, abi.name })
@@ -155,6 +155,101 @@ pub const TxeDebugContext = struct {
 
         // Determine which scope this is based on variables_reference
         const scope_type = variables_reference % 1000;
+
+        std.debug.print("DEBUG getVariablesImpl: variables_reference={}, scope_type={}\n", .{ variables_reference, scope_type });
+
+        // Check for individual note expansion first (>= 10000)
+        if (variables_reference >= 10000) {
+            // Individual note expansion
+            // We encoded as: collection_ref + 10000 + note_index
+            // For 10303: original collection_ref = 303, note_index = 0
+            // For 10304: original collection_ref = 303, note_index = 1
+            const base_value = variables_reference - 10000; // Remove the 10000 offset
+
+            // Extract collection reference and note index
+            // Since notes collection type = 3, refs end in 3 (203, 303, etc)
+            // We need to find the base collection ref
+            const collection_hundreds = (base_value / 100) * 100;
+            const remainder = base_value % 100;
+
+            // If remainder < 10, it's the collection type + note index
+            // E.g., 303 = 300 + 3 (type) + 0 (index)
+            // E.g., 304 = 300 + 3 (type) + 1 (index)
+            const collection_ref = collection_hundreds + 3; // 3 is notes type
+            const actual_note_index = remainder - 3;
+
+            // Extract display index from collection ref
+            const display_index = (collection_ref / 100) - 2;
+
+            if (display_index < self.txe_state.vm_state_stack.items.len) {
+                const state = self.txe_state.vm_state_stack.items[@intCast(display_index)];
+
+                // Find the note by index
+                var outer_iter = state.note_cache.notes.iterator();
+                var current_index: usize = 0;
+                while (outer_iter.next()) |contract_entry| {
+                    var inner_iter = contract_entry.value_ptr.iterator();
+                    while (inner_iter.next()) |slot_entry| {
+                        const note_list = slot_entry.value_ptr;
+                        for (note_list.items) |note| {
+                            if (current_index == actual_note_index) {
+                                // Found the note - show its fields
+                                try variables.append(.{
+                                    .name = "contract_address",
+                                    .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.contract_address.value.to_int()}),
+                                    .type = "AztecAddress",
+                                });
+
+                                try variables.append(.{
+                                    .name = "storage_slot",
+                                    .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.storage_slot.to_int()}),
+                                    .type = "Field",
+                                });
+
+                                try variables.append(.{
+                                    .name = "note_nonce",
+                                    .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.note_nonce.to_int()}),
+                                    .type = "Field",
+                                });
+
+                                try variables.append(.{
+                                    .name = "note_hash",
+                                    .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.note_hash.to_int()}),
+                                    .type = "Field",
+                                });
+
+                                try variables.append(.{
+                                    .name = "siloed_nullifier",
+                                    .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.siloed_nullifier.to_int()}),
+                                    .type = "Field",
+                                });
+
+                                // Show note fields
+                                try variables.append(.{
+                                    .name = "num_fields",
+                                    .value = try std.fmt.allocPrint(allocator, "{}", .{note.note.items.len}),
+                                    .type = "usize",
+                                });
+
+                                // Show individual fields
+                                for (note.note.items, 0..) |field, i| {
+                                    const field_name = try std.fmt.allocPrint(allocator, "field[{}]", .{i});
+                                    try variables.append(.{
+                                        .name = field_name,
+                                        .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{field.to_int()}),
+                                        .type = "Field",
+                                    });
+                                }
+
+                                return variables.toOwnedSlice();
+                            }
+                            current_index += 1;
+                        }
+                    }
+                }
+            }
+            return variables.toOwnedSlice();
+        }
 
         if (scope_type == @intFromEnum(ScopeType.txe_global_state)) {
             // TXE Global State
@@ -222,7 +317,7 @@ pub const TxeDebugContext = struct {
 
             // Convert display index to stack index and get the CallState
             if (display_index < stack_len) {
-                const stack_index = display_index;  // direct mapping now
+                const stack_index = display_index; // direct mapping now
                 const state = self.txe_state.vm_state_stack.items[@intCast(stack_index)];
                 if (sub_type == @intFromEnum(CollectionType.storage_writes)) {
                     // Storage writes
@@ -273,15 +368,18 @@ pub const TxeDebugContext = struct {
                         while (inner_iter.next()) |slot_entry| {
                             const note_list = slot_entry.value_ptr;
                             for (note_list.items) |note| {
+                                // Create expandable note with sub-reference
                                 const name = try std.fmt.allocPrint(allocator, "[{}]", .{index});
-                                const value_str = try std.fmt.allocPrint(allocator, "contract=0x{x:0>8}... slot={}", .{
-                                    note.contract_address.value.to_int() & 0xFFFFFFFF,
-                                    note.storage_slot
-                                });
+                                const value_str = try std.fmt.allocPrint(allocator, "Note at slot {}", .{note.storage_slot});
+                                // Simple encoding: just add 10000 to make it unique
+                                // We'll store the collection ref and index separately
+                                const note_ref: u32 = @intCast(variables_reference + 10000 + index);
+
                                 try variables.append(.{
                                     .name = name,
                                     .value = value_str,
                                     .type = "Note",
+                                    .variablesReference = note_ref,
                                 });
                                 index += 1;
                             }
@@ -389,6 +487,5 @@ pub const TxeDebugContext = struct {
                 .variablesReference = calculateCollectionRef(display_index, CollectionType.private_logs),
             });
         }
-
     }
 };
