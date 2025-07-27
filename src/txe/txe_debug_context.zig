@@ -9,19 +9,19 @@ const nargo = @import("../nargo/package.zig");
 const ScopeType = enum(u32) {
     // Global scopes
     txe_global_state = 1,
-    
+
     // Call state scopes (2-99)
     call_state_base = 2,
     call_state_max = 99,
-    
+
     // Sub-reference scopes (100+)
     account_list = 101,
-    
+
     // Call state collection sub-references (200-999)
     // Formula: (display_index + 2) * 100 + collection_type
     call_state_collections_base = 200,
     call_state_collections_max = 999,
-    
+
     _,
 };
 
@@ -155,8 +155,6 @@ pub const TxeDebugContext = struct {
 
         // Determine which scope this is based on variables_reference
         const scope_type = variables_reference % 1000;
-        
-        std.debug.print("DEBUG getVariablesImpl: variables_reference={}, scope_type={}\n", .{variables_reference, scope_type});
 
         if (scope_type == @intFromEnum(ScopeType.txe_global_state)) {
             // TXE Global State
@@ -196,7 +194,7 @@ pub const TxeDebugContext = struct {
             // Call State at specific display index
             const display_index = scope_type - @intFromEnum(ScopeType.call_state_base);
             const stack_len = self.txe_state.vm_state_stack.items.len;
-            
+
             // Direct mapping: display_index = stack_index
             if (display_index < stack_len) {
                 const stack_index = display_index;
@@ -221,16 +219,11 @@ pub const TxeDebugContext = struct {
             const sub_type = scope_type % 100;
             const display_index = (scope_type / 100 - 2);
             const stack_len = self.txe_state.vm_state_stack.items.len;
-            
-            std.debug.print("DEBUG: Expanding collection - scope_type={}, sub_type={}, display_index={}, stack_len={}\n", 
-                .{scope_type, sub_type, display_index, stack_len});
 
             // Convert display index to stack index and get the CallState
             if (display_index < stack_len) {
                 const stack_index = display_index;  // direct mapping now
-                std.debug.print("DEBUG: Getting state at stack_index={} (stack_len={}, display_index={})\n", .{stack_index, stack_len, display_index});
                 const state = self.txe_state.vm_state_stack.items[@intCast(stack_index)];
-                std.debug.print("DEBUG: Got state ptr=0x{x}\n", .{@intFromPtr(state)});
                 if (sub_type == @intFromEnum(CollectionType.storage_writes)) {
                     // Storage writes
                     var iter = state.storage_writes.iterator();
@@ -273,31 +266,15 @@ pub const TxeDebugContext = struct {
                         });
                     }
                 } else if (sub_type == @intFromEnum(CollectionType.notes)) {
-                    // Notes - iterate through nested HashMap structure
-                    std.debug.print("DEBUG: Expanding notes for display_index={}, stack_index={}, state ptr=0x{x}\n", .{display_index, stack_index, @intFromPtr(state)});
-                    
-                    // Re-count notes to see if it matches what we showed before
-                    var recount: usize = 0;
-                    var recount_iter = state.note_cache.notes.iterator();
-                    while (recount_iter.next()) |contract_entry| {
-                        var storage_iter = contract_entry.value_ptr.iterator();
-                        while (storage_iter.next()) |storage_entry| {
-                            recount += storage_entry.value_ptr.items.len;
-                        }
-                    }
-                    std.debug.print("DEBUG: Note cache has {} contracts, recount shows {} notes\n", .{state.note_cache.notes.count(), recount});
-                    
                     var outer_iter = state.note_cache.notes.iterator();
                     var index: usize = 0;
                     while (outer_iter.next()) |contract_entry| {
-                        std.debug.print("DEBUG: Found contract 0x{x} in note cache\n", .{contract_entry.key_ptr.value.to_int()});
                         var inner_iter = contract_entry.value_ptr.iterator();
                         while (inner_iter.next()) |slot_entry| {
                             const note_list = slot_entry.value_ptr;
-                            std.debug.print("DEBUG: Found slot {} with {} notes\n", .{slot_entry.key_ptr.*, note_list.items.len});
                             for (note_list.items) |note| {
                                 const name = try std.fmt.allocPrint(allocator, "[{}]", .{index});
-                                const value_str = try std.fmt.allocPrint(allocator, "contract=0x{x:0>8}... slot={}", .{ 
+                                const value_str = try std.fmt.allocPrint(allocator, "contract=0x{x:0>8}... slot={}", .{
                                     note.contract_address.value.to_int() & 0xFFFFFFFF,
                                     note.storage_slot
                                 });
@@ -372,12 +349,9 @@ pub const TxeDebugContext = struct {
                 actual_note_count += storage_entry.value_ptr.items.len;
             }
         }
-        
-        std.debug.print("DEBUG appendCallStateVariables: display_index={}, actual_note_count={}, state ptr=0x{x}\n", .{display_index, actual_note_count, @intFromPtr(state)});
-        
+
         if (actual_note_count > 0) {
             const notes_ref = calculateCollectionRef(display_index, CollectionType.notes);
-            std.debug.print("DEBUG appendCallStateVariables: notes variablesReference={} for display_index={}\n", .{notes_ref, display_index});
             try variables.append(.{
                 .name = "notes",
                 .value = try std.fmt.allocPrint(allocator, "{} notes", .{actual_note_count}),
