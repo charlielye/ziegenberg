@@ -44,15 +44,18 @@ pub const TxeDebugContext = struct {
     }
 
     pub fn afterOpcode(context: *anyopaque, opcode: bvm.io.BrilligOpcode, vm: *bvm.BrilligVm) bool {
-        return bvm.DebugContext.afterOpcode(context, opcode, vm);
+        const self: *TxeDebugContext = @alignCast(@ptrCast(context));
+        return bvm.DebugContext.afterOpcode(&self.bvm_debug_ctx, opcode, vm);
     }
 
     pub fn onError(context: *anyopaque, vm: *bvm.BrilligVm) void {
-        bvm.DebugContext.onError(context, vm);
+        const self: *TxeDebugContext = @alignCast(@ptrCast(context));
+        bvm.DebugContext.onError(&self.bvm_debug_ctx, vm);
     }
 
     pub fn trackMemoryWrite(context: *anyopaque, slot: usize, new_value: u256) void {
-        bvm.DebugContext.trackMemoryWrite(context, slot, new_value);
+        const self: *TxeDebugContext = @alignCast(@ptrCast(context));
+        bvm.DebugContext.trackMemoryWrite(&self.bvm_debug_ctx, slot, new_value);
     }
 
     pub fn onVmEnter(
