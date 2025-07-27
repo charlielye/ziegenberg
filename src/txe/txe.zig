@@ -50,8 +50,9 @@ pub const Txe = struct {
     pub fn deinit(self: *Txe) void {
         self.txe_dispatcher.deinit();
         self.txe_impl.deinit();
-        self.allocator.destroy(self);
         if (self.txe_debug_ctx) |ctx| ctx.deinit();
+        self.txe_state.deinit();
+        self.allocator.destroy(self);
     }
 
     pub fn execute(self: *Txe, artifact_path: []const u8, options: ExecuteOptions) !void {

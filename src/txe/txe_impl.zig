@@ -383,9 +383,7 @@ pub const TxeImpl = struct {
     }
 
     pub fn deinit(self: *TxeImpl) void {
-        self.state.deinit();
         self.allocator.destroy(self.prng);
-        if (self.txe_debug_ctx) |ctx| ctx.deinit();
     }
 
     pub fn reset(self: *TxeImpl, _: std.mem.Allocator) !void {
