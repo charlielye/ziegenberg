@@ -250,24 +250,25 @@ pub const TxeDebugContext = struct {
 
                     switch (collection_type) {
                         .storage_writes => {
-                            var iter = state.storage_writes.iterator();
-                            var index: usize = 0;
-                            while (iter.next()) |entry| {
-                                const name = try std.fmt.allocPrint(allocator, "[{}] {s}", .{ index, entry.key_ptr.* });
-                                const value_str = if (entry.value_ptr.*.len > 0)
-                                    try std.fmt.allocPrint(allocator, "[{}]F = 0x{x:0>64}...", .{ entry.value_ptr.*.len, entry.value_ptr.*[0].to_int() })
-                                else
-                                    try std.fmt.allocPrint(allocator, "[0]F", .{});
-                                try variables.append(.{
-                                    .name = name,
-                                    .value = value_str,
-                                    .type = "[]F",
-                                });
-                                index += 1;
-                            }
+                            // Storage writes not implemented yet
+                            // var iter = state.storage_writes.iterator();
+                            // var index: usize = 0;
+                            // while (iter.next()) |entry| {
+                            //     const name = try std.fmt.allocPrint(allocator, "[{}] {s}", .{ index, entry.key_ptr.* });
+                            //     const value_str = if (entry.value_ptr.*.len > 0)
+                            //         try std.fmt.allocPrint(allocator, "[{}]F = 0x{x:0>64}...", .{ entry.value_ptr.*.len, entry.value_ptr.*[0].to_int() })
+                            //     else
+                            //         try std.fmt.allocPrint(allocator, "[0]F", .{});
+                            //     try variables.append(.{
+                            //         .name = name,
+                            //         .value = value_str,
+                            //         .type = "[]F",
+                            //     });
+                            //     index += 1;
+                            // }
                         },
                         .nullifiers => {
-                            for (state.nullifiers.items, 0..) |nullifier, i| {
+                            for (state.public_nullifiers.items, 0..) |nullifier, i| {
                                 const name = try std.fmt.allocPrint(allocator, "[{}]", .{i});
                                 try variables.append(.{
                                     .name = name,
@@ -291,35 +292,26 @@ pub const TxeDebugContext = struct {
                             }
                         },
                         .notes => {
-                            var outer_iter = state.note_cache.notes.iterator();
-                            var index: usize = 0;
-                            while (outer_iter.next()) |contract_entry| {
-                                var inner_iter = contract_entry.value_ptr.iterator();
-                                while (inner_iter.next()) |slot_entry| {
-                                    const note_list = slot_entry.value_ptr;
-                                    for (note_list.items) |note| {
-                                        const name = try std.fmt.allocPrint(allocator, "[{}]", .{index});
-                                        const value_str = try std.fmt.allocPrint(allocator, "Note at slot {}", .{note.storage_slot});
+                            for (state.note_cache.notes.items, 0..) |note, index| {
+                                const name = try std.fmt.allocPrint(allocator, "[{}]", .{index});
+                                const value_str = try std.fmt.allocPrint(allocator, "Note at slot {}", .{note.storage_slot});
 
-                                        // Allocate a reference for this specific note
-                                        const note_ref = try self.allocateRef(.{
-                                            .kind = .note_detail,
-                                            .vm_index = display_index,
-                                            .item_index = index,
-                                        });
+                                // Allocate a reference for this specific note
+                                const note_ref = try self.allocateRef(.{
+                                    .kind = .note_detail,
+                                    .vm_index = display_index,
+                                    .item_index = index,
+                                });
 
-                                        try variables.append(.{
-                                            .name = name,
-                                            .value = value_str,
-                                            .type = "Note",
-                                            .variablesReference = note_ref,
-                                        });
-                                        index += 1;
-                                    }
-                                }
+                                try variables.append(.{
+                                    .name = name,
+                                    .value = value_str,
+                                    .type = "Note",
+                                    .variablesReference = note_ref,
+                                });
                             }
                             // If no notes were found, show a message
-                            if (index == 0) {
+                            if (state.note_cache.notes.items.len == 0) {
                                 try variables.append(.{
                                     .name = "(empty)",
                                     .value = "No notes in cache",
@@ -338,66 +330,54 @@ pub const TxeDebugContext = struct {
                     const state = self.txe_state.vm_state_stack.items[@intCast(display_index)];
 
                     // Find the note by index
-                    var outer_iter = state.note_cache.notes.iterator();
-                    var current_index: usize = 0;
-                    while (outer_iter.next()) |contract_entry| {
-                        var inner_iter = contract_entry.value_ptr.iterator();
-                        while (inner_iter.next()) |slot_entry| {
-                            const note_list = slot_entry.value_ptr;
-                            for (note_list.items) |note| {
-                                if (current_index == note_index) {
-                                    // Found the note - show its fields
-                                    try variables.append(.{
-                                        .name = "contract_address",
-                                        .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.contract_address.value.to_int()}),
-                                        .type = "AztecAddress",
-                                    });
+                    if (note_index < state.note_cache.notes.items.len) {
+                        const note = state.note_cache.notes.items[note_index];
+                        // Found the note - show its fields
+                        try variables.append(.{
+                            .name = "contract_address",
+                            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.contract_address.value.to_int()}),
+                            .type = "AztecAddress",
+                        });
 
-                                    try variables.append(.{
-                                        .name = "storage_slot",
-                                        .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.storage_slot.to_int()}),
-                                        .type = "Field",
-                                    });
+                        try variables.append(.{
+                            .name = "storage_slot",
+                            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.storage_slot.to_int()}),
+                            .type = "Field",
+                        });
 
-                                    try variables.append(.{
-                                        .name = "note_nonce",
-                                        .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.note_nonce.to_int()}),
-                                        .type = "Field",
-                                    });
+                        try variables.append(.{
+                            .name = "note_nonce",
+                            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.note_nonce.to_int()}),
+                            .type = "Field",
+                        });
 
-                                    try variables.append(.{
-                                        .name = "note_hash",
-                                        .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.note_hash.to_int()}),
-                                        .type = "Field",
-                                    });
+                        try variables.append(.{
+                            .name = "note_hash",
+                            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.note_hash.to_int()}),
+                            .type = "Field",
+                        });
 
-                                    try variables.append(.{
-                                        .name = "siloed_nullifier",
-                                        .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.siloed_nullifier.to_int()}),
-                                        .type = "Field",
-                                    });
+                        try variables.append(.{
+                            .name = "siloed_nullifier",
+                            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{note.siloed_nullifier.to_int()}),
+                            .type = "Field",
+                        });
 
-                                    // Show note fields
-                                    try variables.append(.{
-                                        .name = "num_fields",
-                                        .value = try std.fmt.allocPrint(allocator, "{}", .{note.note.items.len}),
-                                        .type = "usize",
-                                    });
+                        // Show note fields
+                        try variables.append(.{
+                            .name = "num_fields",
+                            .value = try std.fmt.allocPrint(allocator, "{}", .{note.note_fields.len}),
+                            .type = "usize",
+                        });
 
-                                    // Show individual fields
-                                    for (note.note.items, 0..) |field, i| {
-                                        const field_name = try std.fmt.allocPrint(allocator, "field[{}]", .{i});
-                                        try variables.append(.{
-                                            .name = field_name,
-                                            .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{field.to_int()}),
-                                            .type = "Field",
-                                        });
-                                    }
-
-                                    return variables.toOwnedSlice();
-                                }
-                                current_index += 1;
-                            }
+                        // Show individual fields
+                        for (note.note_fields, 0..) |field, i| {
+                            const field_name = try std.fmt.allocPrint(allocator, "field[{}]", .{i});
+                            try variables.append(.{
+                                .name = field_name,
+                                .value = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{field.to_int()}),
+                                .type = "Field",
+                            });
                         }
                     }
                 }
@@ -448,16 +428,8 @@ pub const TxeDebugContext = struct {
         });
 
         // Notes list (expandable) - only show if there are actually notes
-        // We need to check if the cache actually has notes, not just rely on getTotalNoteCount
-        // which might return incorrect values for empty caches
-        var actual_note_count: usize = 0;
-        var note_check_iter = state.note_cache.notes.iterator();
-        while (note_check_iter.next()) |contract_entry| {
-            var storage_iter = contract_entry.value_ptr.iterator();
-            while (storage_iter.next()) |storage_entry| {
-                actual_note_count += storage_entry.value_ptr.items.len;
-            }
-        }
+        // We need to check if the cache actually has notes
+        const actual_note_count = state.note_cache.notes.items.len;
 
         if (actual_note_count > 0) {
             const notes_ref = try self.allocateRef(.{
@@ -488,20 +460,20 @@ pub const TxeDebugContext = struct {
             });
         }
 
-        // Storage writes (expandable)
-        if (state.storage_writes.count() > 0) {
-            const storage_ref = try self.allocateRef(.{
-                .kind = .collection,
-                .vm_index = display_index,
-                .collection_type = .storage_writes,
-            });
-            try variables.append(.{
-                .name = "storage_writes",
-                .value = try std.fmt.allocPrint(allocator, "{} writes", .{state.storage_writes.count()}),
-                .type = "StringHashMap",
-                .variablesReference = storage_ref,
-            });
-        }
+        // Storage writes (expandable) - commented out as storage_writes is not available
+        // if (state.storage_writes.count() > 0) {
+        //     const storage_ref = try self.allocateRef(.{
+        //         .kind = .collection,
+        //         .vm_index = display_index,
+        //         .collection_type = .storage_writes,
+        //     });
+        //     try variables.append(.{
+        //         .name = "storage_writes",
+        //         .value = try std.fmt.allocPrint(allocator, "{} writes", .{state.storage_writes.count()}),
+        //         .type = "StringHashMap",
+        //         .variablesReference = storage_ref,
+        //     });
+        // }
 
         // Private logs list (expandable)
         if (state.private_logs.items.len > 0) {

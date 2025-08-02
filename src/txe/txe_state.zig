@@ -19,7 +19,7 @@ pub const TxeState = struct {
     contract_instance_cache: *std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
 
     // Contains all the side effect state.
-    note_cache: NoteCache,
+    note_cache: *NoteCache,
 
     // Account data.
     accounts: *std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress),
@@ -43,6 +43,9 @@ pub const TxeState = struct {
         const accounts = try allocator.create(std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress));
         accounts.* = std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress).init(allocator);
 
+        const note_cache = try allocator.create(NoteCache);
+        note_cache.* = NoteCache.init(allocator);
+
         var txe = TxeState{
             .allocator = allocator,
             .version = F.one,
@@ -51,17 +54,39 @@ pub const TxeState = struct {
             .timestamp = TxeState.GENESIS_TIMESTAMP,
             .contract_artifact_cache = contract_artifact_cache,
             .contract_instance_cache = contract_instance_cache,
-            .note_cache = NoteCache.init(allocator),
+            .note_cache = note_cache,
             .accounts = accounts,
             .vm_state_stack = std.ArrayList(*call_state.CallState).init(allocator),
         };
 
         // Create initial state on heap and push to stack
         const initial_state = try allocator.create(call_state.CallState);
-        initial_state.* = call_state.CallState.init(allocator, &txe.note_cache);
+        initial_state.* = call_state.CallState.init(allocator, txe.note_cache);
         try txe.vm_state_stack.append(initial_state);
 
         return txe;
+    }
+
+    pub fn deinit(self: *TxeState) void {
+        // Free all states in the stack
+        for (self.vm_state_stack.items) |state| {
+            state.deinit();
+            self.allocator.destroy(state);
+        }
+        self.vm_state_stack.deinit();
+
+        // Deinit components
+        self.note_cache.deinit();
+        self.allocator.destroy(self.note_cache);
+
+        self.contract_artifact_cache.deinit();
+        self.allocator.destroy(self.contract_artifact_cache);
+
+        self.contract_instance_cache.deinit();
+        self.allocator.destroy(self.contract_instance_cache);
+
+        self.accounts.deinit();
+        self.allocator.destroy(self.accounts);
     }
 
     /// Get the current (top) call state
@@ -78,24 +103,5 @@ pub const TxeState = struct {
     /// Pop the current call state from the stack
     pub fn popState(self: *TxeState) *call_state.CallState {
         return self.vm_state_stack.pop() orelse unreachable;
-    }
-
-    pub fn deinit(self: *TxeState) void {
-        // Free all states in the stack
-        for (self.vm_state_stack.items) |state| {
-            state.deinit();
-            self.allocator.destroy(state);
-        }
-        self.vm_state_stack.deinit();
-
-        // Deinit components
-        self.contract_artifact_cache.deinit();
-        self.allocator.destroy(self.contract_artifact_cache);
-
-        self.contract_instance_cache.deinit();
-        self.allocator.destroy(self.contract_instance_cache);
-
-        self.accounts.deinit();
-        self.allocator.destroy(self.accounts);
     }
 };

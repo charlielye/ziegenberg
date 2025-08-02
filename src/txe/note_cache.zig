@@ -97,25 +97,25 @@ pub const NoteCache = struct {
         // Compute siloed note hash.
         note_to_add.siloed_note_hash = poseidon.hash_array_with_generator(
             [_]F{ note_data.contract_address.value, note_data.note_hash },
-            @intFromEnum(proto.constants.GeneratorIndex.siloed_note_hash),
+            proto.constants.GeneratorIndex.siloed_note_hash,
         );
-        self.notes.append(note_to_add);
+        self.notes.append(note_to_add) catch unreachable;
         self.side_effect_counter += 1;
     }
 
     pub fn nullifyNote(self: *NoteCache, contract_address: proto.AztecAddress, nullifier: F, note_hash: F) void {
         const siloed_nullifier = poseidon.hash_array_with_generator(
-            F{ contract_address.value, nullifier },
+            [_]F{ contract_address.value, nullifier },
             proto.constants.GeneratorIndex.outer_nullifier,
         );
 
         // No note hash given, just emit the siloed nullifier.
         if (note_hash.is_zero()) {
-            self.nullifiers.append(siloed_nullifier);
+            self.nullifiers.append(siloed_nullifier) catch unreachable;
             return;
         }
 
-        for (self.notes) |*note| {
+        for (self.notes.items) |*note| {
             // Skip notes not in this contract.
             if (!note.contract_address.eql(contract_address)) continue;
 
@@ -125,8 +125,8 @@ pub const NoteCache = struct {
 
                 // If we're in the revertible phase, but nullifying a non-revertible note, we emit the nullifier.
                 if (self.min_revertible_side_effect_counter) |min_revertible_side_effect_counter| {
-                    if (note.counter < min_revertible_side_effect_counter) {
-                        self.nullifiers.append(note.siloed_nullifier);
+                    if (note.side_effect_counter < min_revertible_side_effect_counter) {
+                        self.nullifiers.append(note.siloed_nullifier) catch unreachable;
                     }
                 }
                 break;

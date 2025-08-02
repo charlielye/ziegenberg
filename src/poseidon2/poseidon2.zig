@@ -7,12 +7,16 @@ pub fn hash(input: []const Fr) Fr {
     return Poseidon2Sponge.hash_fixed_length(1, input)[0];
 }
 
-pub fn hash_array_with_generator(input: anytype, generator: comptime_int) Fr {
+pub fn hash_array_with_generator(input: anytype, generator: anytype) Fr {
     const T = @TypeOf(input);
-    const N = @typeInfo(T).Array.len;
+    const info = @typeInfo(T);
+    const N = switch (info) {
+        .array => |arr| arr.len,
+        else => @compileError("Expected array type"),
+    };
     var to_hash: [N + 1]Fr = undefined;
     to_hash[0] = Fr.from_int(@intFromEnum(generator));
-    std.mem.copyForwards(Fr, to_hash[1..], input);
+    std.mem.copyForwards(Fr, to_hash[1..], &input);
     return hash(&to_hash);
 }
 

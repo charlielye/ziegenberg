@@ -1237,7 +1237,7 @@ pub const TxeImpl = struct {
             .note_hash = note_hash,
         };
 
-        try current_state.note_cache.addNote(note_data);
+        current_state.note_cache.addNote(note_data);
         std.debug.print("notifyCreatedNote: note_cache.addNote completed\n", .{});
 
         std.debug.print("notifyCreatedNote: Added note with hash {x} at slot {x}, counter {}, contract_address {x}, value = {}\n", .{
