@@ -100,7 +100,7 @@ pub const NoteCache = struct {
             proto.constants.GeneratorIndex.siloed_note_hash,
         );
         self.notes.append(note_to_add) catch unreachable;
-        self.side_effect_counter += 1;
+        // self.side_effect_counter += 1;
     }
 
     pub fn nullifyNote(self: *NoteCache, contract_address: proto.AztecAddress, nullifier: F, note_hash: F) void {
@@ -133,11 +133,12 @@ pub const NoteCache = struct {
             }
         }
 
-        self.side_effect_counter += 1;
+        // self.side_effect_counter = counter;
     }
 
-    pub fn enterRevertiblePhase(self: *NoteCache) void {
-        self.min_revertible_side_effect_counter = self.side_effect_counter;
+    pub fn enterRevertiblePhase(self: *NoteCache, min_revertible_side_effect_counter: u32) void {
+        // self.min_revertible_side_effect_counter = self.side_effect_counter;
+        self.min_revertible_side_effect_counter = min_revertible_side_effect_counter;
     }
 
     /// Compute all the note nonces and resulting unique hashes.
@@ -253,8 +254,8 @@ fn selectNotes(
     var result = std.ArrayList(NoteData).init(allocator);
 
     for (notes) |note_data| {
-        // Skip notes not for the given contract and storage slot.
-        if (!(note_data.contract_address.eql(contract_address) and note_data.storage_slot.eql(storage_slot))) continue;
+        // We're only interested in non-nullified notes for the given contract and storage slot.
+        if (!(note_data.contract_address.eql(contract_address) and note_data.storage_slot.eql(storage_slot) and note_data.nullifier.is_zero())) continue;
 
         var matches = true;
         for (selects) |select| {

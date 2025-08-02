@@ -87,7 +87,7 @@ pub const CallState = struct {
     }
 
     pub fn deinit(self: *CallState) void {
-        self.note_cache.deinit();
+        // Note: note_cache is shared, so we don't deinit it here
         self.public_nullifiers.deinit();
 
         // Free storage writes

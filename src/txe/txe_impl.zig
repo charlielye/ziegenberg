@@ -386,23 +386,37 @@ pub const TxeImpl = struct {
         self.allocator.destroy(self.prng);
     }
 
-    pub fn reset(_: *TxeImpl, _: std.mem.Allocator) !void {
+    pub fn reset(self: *TxeImpl, _: std.mem.Allocator) !void {
         std.debug.print("reset called!\n", .{});
 
-        // Reset to a single initial state
-        // First clear all existing states
-        // for (self.state.vm_state_stack.items) |state| {
-        //     state.deinit();
-        //     self.allocator.destroy(state);
-        // }
-        // self.state.vm_state_stack.clearRetainingCapacity();
+        // Clear the note cache
+        self.state.note_cache.notes.clearRetainingCapacity();
+        self.state.note_cache.nullifiers.clearRetainingCapacity();
+        self.state.note_cache.side_effect_counter = 0;
+        self.state.note_cache.min_revertible_side_effect_counter = null;
 
-        // // Create new initial state
-        // const initial_state = try self.allocator.create(call_state.CallState);
-        // initial_state.* = call_state.CallState.init(self.allocator);
-        // try self.state.vm_state_stack.append(initial_state);
+        // Clear the VM state stack (except the first one)
+        while (self.state.vm_state_stack.items.len > 1) {
+            const state = self.state.vm_state_stack.pop();
+            if (state) |s| {
+                s.deinit();
+                self.allocator.destroy(s);
+            }
+        }
 
-        // std.debug.print("reset: cleared capsule storage and reset state\n", .{});
+        // Reset the initial state
+        const initial_state = self.state.vm_state_stack.items[0];
+        initial_state.contract_address = proto.AztecAddress.zero;
+        initial_state.msg_sender = proto.AztecAddress.init(F.max);
+        initial_state.function_selector = 0;
+        initial_state.is_static_call = false;
+        initial_state.side_effect_counter = 0;
+        initial_state.public_nullifiers.clearRetainingCapacity();
+        initial_state.private_logs.clearRetainingCapacity();
+        initial_state.capsule_storage.clearRetainingCapacity();
+        initial_state.execution_cache.clearRetainingCapacity();
+
+        std.debug.print("reset: cleared note cache and reset state\n", .{});
     }
 
     pub fn createAccount(self: *TxeImpl, _: std.mem.Allocator, secret: F) !struct {
@@ -1231,7 +1245,7 @@ pub const TxeImpl = struct {
 
         const note_data = note_cache.NoteData{
             .note_fields = note_items,
-            .side_effect_counter = current_state.note_cache.side_effect_counter,
+            .side_effect_counter = counter,
             .contract_address = current_state.contract_address,
             .storage_slot = storage_slot,
             .note_hash = note_hash,
@@ -1254,11 +1268,12 @@ pub const TxeImpl = struct {
         _: std.mem.Allocator,
         inner_nullifier: F,
         note_hash: F,
-        side_effect_counter: u32,
+        _: u32,
     ) !void {
         const current_state = self.state.getCurrentState();
         current_state.note_cache.nullifyNote(current_state.contract_address, inner_nullifier, note_hash);
-        std.debug.assert(side_effect_counter == current_state.note_cache.side_effect_counter);
+        // std.debug.print("{d} {d}\n", .{ side_effect_counter, current_state.note_cache.side_effect_counter });
+        // std.debug.assert(side_effect_counter == current_state.note_cache.side_effect_counter);
     }
 
     pub fn notifyCreatedNullifier(
@@ -1464,5 +1479,13 @@ pub const TxeImpl = struct {
 
     fn getTxRequestHash(self: *TxeImpl) F {
         return F.from_int(self.block_number + 6969);
+    }
+
+    pub fn notifySetMinRevertibleSideEffectCounter(
+        self: *TxeImpl,
+        _: std.mem.Allocator,
+        min_revertible_side_effect_counter: u32,
+    ) !void {
+        self.state.note_cache.enterRevertiblePhase(min_revertible_side_effect_counter);
     }
 };
