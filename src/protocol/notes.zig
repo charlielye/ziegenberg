@@ -1,37 +1,39 @@
 const F = @import("../bn254/fr.zig").Fr;
 const AztecAddress = @import("aztec_address.zig").AztecAddress;
 
-pub const Note = struct {
-    items: []const F,
+// pub const Note = struct {
+//     items: []const F,
 
-    pub fn init(items: []const F) Note {
-        return .{ .items = items };
-    }
-};
+//     pub fn init(items: []const F) Note {
+//         return .{ .items = items };
+//     }
+// };
 
-pub const NoteData = struct {
-    note: Note,
-    contract_address: AztecAddress,
-    storage_slot: F,
-    note_nonce: F,
-    note_hash: F,
-    siloed_nullifier: F,
+pub const Note = []F;
 
-    // pub fn toForeignCallParam(self: NoteData, allocator: std.mem.Allocator) !ForeignCallParam {
-    //     var fields = std.ArrayList(ForeignCallParam).init(allocator);
+// pub const NoteData = struct {
+//     note: Note,
+//     contract_address: AztecAddress,
+//     storage_slot: F,
+//     note_nonce: F,
+//     note_hash: F,
+//     siloed_nullifier: F,
 
-    //     // Add note items
-    //     for (self.note.items) |item| {
-    //         try fields.append(.{ .Single = item.to_int() });
-    //     }
+//     // pub fn toForeignCallParam(self: NoteData, allocator: std.mem.Allocator) !ForeignCallParam {
+//     //     var fields = std.ArrayList(ForeignCallParam).init(allocator);
 
-    //     // Add other fields
-    //     try fields.append(.{ .Single = self.contract_address.value.to_int() });
-    //     try fields.append(.{ .Single = self.storage_slot.to_int() });
-    //     try fields.append(.{ .Single = self.note_nonce.to_int() });
-    //     try fields.append(.{ .Single = self.note_hash.to_int() });
-    //     try fields.append(.{ .Single = self.siloed_nullifier.to_int() });
+//     //     // Add note items
+//     //     for (self.note.items) |item| {
+//     //         try fields.append(.{ .Single = item.to_int() });
+//     //     }
 
-    //     return .{ .Array = try fields.toOwnedSlice() };
-    // }
-};
+//     //     // Add other fields
+//     //     try fields.append(.{ .Single = self.contract_address.value.to_int() });
+//     //     try fields.append(.{ .Single = self.storage_slot.to_int() });
+//     //     try fields.append(.{ .Single = self.note_nonce.to_int() });
+//     //     try fields.append(.{ .Single = self.note_hash.to_int() });
+//     //     try fields.append(.{ .Single = self.siloed_nullifier.to_int() });
+
+//     //     return .{ .Array = try fields.toOwnedSlice() };
+//     // }
+// };

@@ -386,23 +386,23 @@ pub const TxeImpl = struct {
         self.allocator.destroy(self.prng);
     }
 
-    pub fn reset(self: *TxeImpl, _: std.mem.Allocator) !void {
+    pub fn reset(_: *TxeImpl, _: std.mem.Allocator) !void {
         std.debug.print("reset called!\n", .{});
 
         // Reset to a single initial state
         // First clear all existing states
-        for (self.state.vm_state_stack.items) |state| {
-            state.deinit();
-            self.allocator.destroy(state);
-        }
-        self.state.vm_state_stack.clearRetainingCapacity();
+        // for (self.state.vm_state_stack.items) |state| {
+        //     state.deinit();
+        //     self.allocator.destroy(state);
+        // }
+        // self.state.vm_state_stack.clearRetainingCapacity();
 
-        // Create new initial state
-        const initial_state = try self.allocator.create(call_state.CallState);
-        initial_state.* = call_state.CallState.init(self.allocator);
-        try self.state.vm_state_stack.append(initial_state);
+        // // Create new initial state
+        // const initial_state = try self.allocator.create(call_state.CallState);
+        // initial_state.* = call_state.CallState.init(self.allocator);
+        // try self.state.vm_state_stack.append(initial_state);
 
-        std.debug.print("reset: cleared capsule storage and reset state\n", .{});
+        // std.debug.print("reset: cleared capsule storage and reset state\n", .{});
     }
 
     pub fn createAccount(self: *TxeImpl, _: std.mem.Allocator, secret: F) !struct {
@@ -733,7 +733,7 @@ pub const TxeImpl = struct {
         // Add nullifiers from public inputs to child state
         for (private_circuit_public_inputs.nullifiers.items()) |nullifier| {
             if (!nullifier.value.eql(F.zero)) {
-                try child_state_for_effects.nullifiers.append(nullifier.value);
+                try child_state_for_effects.public_nullifiers.append(nullifier.value);
             }
         }
 
@@ -796,7 +796,6 @@ pub const TxeImpl = struct {
             return error.UnauthorizedContractAccess;
         }
 
-        // Store using the new CallState method
         try current_state.storeCapsuleAtSlot(allocator, slot, capsule);
     }
 
@@ -1141,7 +1140,7 @@ pub const TxeImpl = struct {
         contract_address: proto.AztecAddress,
         note_nonce: F,
         nonzero_note_hash_counter: u256,
-        note: proto.Note,
+        note_fields: []F,
     };
 
     pub fn getNotes(
@@ -1168,68 +1167,40 @@ pub const TxeImpl = struct {
 
         const current_state = self.state.getCurrentState();
 
-        // Get pending notes from cache (already filtered for nullifiers)
-        const pending_notes = try current_state.getNotes(
+        const notes = try current_state.note_cache.getNotes(
             allocator,
             current_state.contract_address,
             storage_slot,
+            num_selects,
+            select_by_indexes,
+            select_by_offsets,
+            select_by_lengths,
+            select_values,
+            select_comparators,
+            sort_by_indexes,
+            sort_by_offsets,
+            sort_by_lengths,
+            sort_order,
         );
-        defer allocator.free(pending_notes);
+        defer allocator.free(notes);
         std.debug.print("getNotes: Found {} notes for contract {x} at slot {x}\n", .{
-            pending_notes.len,
+            notes.len,
             current_state.contract_address,
             storage_slot,
         });
 
-        // Build select criteria
-        const actual_num_selects = @min(num_selects, select_by_indexes.len);
-        var selects = try allocator.alloc(note_cache.SelectCriteria, actual_num_selects);
+        // Compute indices from offset and limit.
+        const start_idx = @min(offset, notes.len);
+        const end_idx = if (limit > 0) @min(start_idx + limit, notes.len) else notes.len;
 
-        for (0..actual_num_selects) |i| {
-            selects[i] = .{
-                .selector = .{
-                    .index = select_by_indexes[i],
-                    .offset = select_by_offsets[i],
-                    .length = select_by_lengths[i],
-                },
-                .value = select_values[i],
-                .comparator = @enumFromInt(select_comparators[i]),
-            };
-        }
-
-        // Apply selection filters
-        var selected_notes = try note_cache.selectNotes(allocator, pending_notes, selects);
-        defer selected_notes.deinit();
-
-        // Build sort criteria
-        var sorts = try allocator.alloc(note_cache.SortCriteria, sort_by_indexes.len);
-
-        for (0..sorts.len) |i| {
-            sorts[i] = .{
-                .selector = .{
-                    .index = sort_by_indexes[i],
-                    .offset = sort_by_offsets[i],
-                    .length = sort_by_lengths[i],
-                },
-                .order = @enumFromInt(sort_order[i]),
-            };
-        }
-
-        // Apply sorting
-        note_cache.sortNotes(selected_notes.items, sorts);
-
-        // Apply offset and limit
-        const start_idx = @min(offset, selected_notes.items.len);
-        const end_idx = if (limit > 0) @min(start_idx + limit, selected_notes.items.len) else selected_notes.items.len;
-
-        // Convert NoteData to RetrievedNoteWithMetadata
+        // Convert NoteData to RetrievedNoteWithMetadata.
         const result = try allocator.alloc(RetrievedNoteWithMetadata, end_idx - start_idx);
-        for (selected_notes.items[start_idx..end_idx], 0..) |note_data, i| {
+        for (notes[start_idx..end_idx], 0..) |note_data, i| {
             result[i] = .{
                 .contract_address = note_data.contract_address,
                 .note_nonce = note_data.note_nonce,
                 .nonzero_note_hash_counter = 1, // All notes from getNotes are transient
-                .note = note_data.note,
+                .note_fields = note_data.note_fields,
             };
         }
 
@@ -1251,33 +1222,43 @@ pub const TxeImpl = struct {
         self: *TxeImpl,
         _: std.mem.Allocator,
         storage_slot: F,
-        note_type_id: u32,
-        note_items: []const F,
+        _: u32, // note_type_id
+        note_items: []F,
         note_hash: F,
         counter: u32,
     ) !void {
-        _ = note_type_id; // Not used in this implementation
-
         const current_state = self.state.getCurrentState();
 
-        const note_data = proto.NoteData{
-            .note = proto.Note.init(note_items),
+        const note_data = note_cache.NoteData{
+            .note_fields = note_items,
+            .side_effect_counter = current_state.note_cache.side_effect_counter,
             .contract_address = current_state.contract_address,
             .storage_slot = storage_slot,
-            .note_nonce = F.from_int(counter), // Using counter as nonce for simplicity
             .note_hash = note_hash,
-            .siloed_nullifier = F.zero, // Will be computed when note is nullified
         };
 
         try current_state.note_cache.addNote(note_data);
         std.debug.print("notifyCreatedNote: note_cache.addNote completed\n", .{});
 
-        std.debug.print("notifyCreatedNote: Added note with hash {x} at slot {x}, counter {}, contract_address {x}\n", .{
+        std.debug.print("notifyCreatedNote: Added note with hash {x} at slot {x}, counter {}, contract_address {x}, value = {}\n", .{
             note_hash,
             storage_slot,
             counter,
             current_state.contract_address,
+            if (note_items.len > 0) note_items[0].to_int() else 0,
         });
+    }
+
+    pub fn notifyNullifiedNote(
+        self: *TxeImpl,
+        _: std.mem.Allocator,
+        inner_nullifier: F,
+        note_hash: F,
+        side_effect_counter: u32,
+    ) !void {
+        const current_state = self.state.getCurrentState();
+        current_state.note_cache.nullifyNote(current_state.contract_address, inner_nullifier, note_hash);
+        std.debug.assert(side_effect_counter == current_state.note_cache.side_effect_counter);
     }
 
     pub fn notifyCreatedNullifier(
@@ -1294,7 +1275,7 @@ pub const TxeImpl = struct {
         });
 
         // Add the nullifier to the current state
-        try current_state.nullifiers.append(siloed_nullifier);
+        try current_state.public_nullifiers.append(siloed_nullifier);
 
         std.debug.print("notifyCreatedNullifier: Added nullifier {x} (siloed: {x}) for contract {x}\n", .{
             inner_nullifier,
@@ -1479,5 +1460,9 @@ pub const TxeImpl = struct {
         // - Advance timestamp by AZTEC_SLOT_DURATION
 
         return [3]F{ end_side_effect_counter, returns_hash, tx_hash };
+    }
+
+    fn getTxRequestHash(self: *TxeImpl) F {
+        return F.from_int(self.block_number + 6969);
     }
 };

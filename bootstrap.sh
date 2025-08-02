@@ -252,6 +252,10 @@ function build {
   zig build ${2:-} -Doptimize=${1:-ReleaseFast}
 }
 
+function build_watch {
+  unbuffer zig build build-exe -freference-trace -fincremental --watch --prominent-compile-errors 2>&1 | ./scripts/screen_clearer.sh
+}
+
 ########################################################################################################################
 # TEST COMMANDS
 # -------------
@@ -336,7 +340,7 @@ export -f check_witness_parity check_witness_parity_brillig proto_test run_progr
 ########################################################################################################################
 # TEST ENTRYPOINT
 # ---------------
-# Runs tests with debug build.
+# Runs tests (with optional build).
 #   BUILD=Debug ./bootstrap.sh test
 #   BUILD=ReleaseFast ./bootstrap.sh test
 #   ./bootstrap.sh test

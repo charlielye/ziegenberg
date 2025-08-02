@@ -52,7 +52,7 @@ pub const TxeDebugContext = struct {
     allocator: std.mem.Allocator,
     txe_state: *TxeState,
     bvm_debug_ctx: bvm.DebugContext,
-    
+
     // Reference management - no more magic numbers!
     ref_map: std.AutoHashMap(u32, VariableRef),
     next_ref: u32 = 1,
@@ -63,7 +63,7 @@ pub const TxeDebugContext = struct {
         try self.ref_map.put(ref, ref_data);
         return ref;
     }
-    
+
     fn clearRefs(self: *TxeDebugContext) void {
         self.ref_map.clearRetainingCapacity();
         self.next_ref = 1;
@@ -162,7 +162,7 @@ pub const TxeDebugContext = struct {
             else
                 try std.fmt.allocPrint(allocator, "[{}] VM State", .{display_index});
 
-            const call_ref = try self.allocateRef(.{ 
+            const call_ref = try self.allocateRef(.{
                 .kind = .call_state,
                 .vm_index = display_index,
             });
@@ -247,7 +247,7 @@ pub const TxeDebugContext = struct {
 
                 if (display_index < self.txe_state.vm_state_stack.items.len) {
                     const state = self.txe_state.vm_state_stack.items[@intCast(display_index)];
-                    
+
                     switch (collection_type) {
                         .storage_writes => {
                             var iter = state.storage_writes.iterator();
@@ -300,7 +300,7 @@ pub const TxeDebugContext = struct {
                                     for (note_list.items) |note| {
                                         const name = try std.fmt.allocPrint(allocator, "[{}]", .{index});
                                         const value_str = try std.fmt.allocPrint(allocator, "Note at slot {}", .{note.storage_slot});
-                                        
+
                                         // Allocate a reference for this specific note
                                         const note_ref = try self.allocateRef(.{
                                             .kind = .note_detail,
@@ -474,7 +474,7 @@ pub const TxeDebugContext = struct {
         }
 
         // Nullifiers list (expandable)
-        if (state.nullifiers.items.len > 0) {
+        if (state.public_nullifiers.items.len > 0) {
             const nullifiers_ref = try self.allocateRef(.{
                 .kind = .collection,
                 .vm_index = display_index,
@@ -482,7 +482,7 @@ pub const TxeDebugContext = struct {
             });
             try variables.append(.{
                 .name = "nullifiers",
-                .value = try std.fmt.allocPrint(allocator, "{} nullifiers", .{state.nullifiers.items.len}),
+                .value = try std.fmt.allocPrint(allocator, "{} nullifiers", .{state.public_nullifiers.items.len}),
                 .type = "ArrayList",
                 .variablesReference = nullifiers_ref,
             });

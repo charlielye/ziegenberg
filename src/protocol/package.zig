@@ -18,7 +18,6 @@ pub const CompleteAddress = complete_address.CompleteAddress;
 pub const PartialAddress = partial_address.PartialAddress;
 pub const deriveKeys = key_derivation.deriveKeys;
 pub const Note = notes.Note;
-pub const NoteData = notes.NoteData;
 
 test {
     std.testing.refAllDecls(@This());

@@ -1,6 +1,7 @@
 const std = @import("std");
 const F = @import("../bn254/fr.zig").Fr;
 const proto = @import("../protocol/package.zig");
+const poseidon = @import("../poseidon2/poseidon2.zig");
 
 const PropertySelector = struct {
     index: u32,
@@ -23,83 +24,191 @@ const SortOrder = enum(u8) {
     ASC = 2,
 };
 
-// Simple in-memory note cache
+pub const NoteData = struct {
+    // The contract address scope of this note.
+    contract_address: proto.AztecAddress,
+    // The storage slot of this note.
+    // Storage slots may have more than one note that sum to a value.
+    storage_slot: F,
+    // The side effect counter when the note was created.
+    side_effect_counter: u32,
+    // The fields that make up the note_hash.
+    // Determined by the app smart contract.
+    note_fields: []F,
+    // The note hash, as defined in noir code.
+    // aztec.nr provides opinionated implementations (e.g. poseidon hash the note_fields).
+    note_hash: F,
+    // Will be either the tx hash, or the first nullifier.
+    // Non-revertible notes can compute this on enterRevertiblePhase().
+    // Revertible notes can compute this on finalize().
+    // The nonce is used to ensure that two notes with the same values are unique.
+    note_nonce: F = F.zero,
+    // Hash of [note hash, contract_address].
+    // Notes must be scoped to their contract address.
+    // Computed when the note is added.
+    siloed_note_hash: F = F.zero,
+    // Hash of [nonce, siloed_note_hash].
+    // Hashing the siloed hash with the nonce ensures uniqueness even with same values.
+    // TODO: I think it's more intuitive to nonce-then-silo, than silo-then-nonce?
+    unique_note_hash: F = F.zero,
+    // The note nullifier, as defined in noir code.
+    // aztec.nr provides opinionated nullifer computation implementations.
+    // Not known until the contract nullifies the note_hash.
+    // May not actually be emitted in the nullifier list, if it's nullifying something we can squash away.
+    nullifier: F = F.zero,
+    // Hash of [nullifier, contract address].
+    // Nullifiers must be scoped to their contract address.
+    siloed_nullifier: F = F.zero,
+};
+
+/// Notes and nullifiers that exist within a tx scope.
+/// Presents a set of notes that have not been nullified within this tx scope.
+/// TODO: Move private logs here? Rename this StorageCache? Or SideEffectCache?
 pub const NoteCache = struct {
-    // Maps contract_address -> storage_slot -> notes
-    notes: std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, std.ArrayList(proto.NoteData))),
-    // Maps contract_address -> nullifiers
-    nullifiers: std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, void)),
     allocator: std.mem.Allocator,
+    // Notes that have not been nullified during this scope.
+    notes: std.ArrayList(NoteData),
+    // All nullifiers emitted during this scope.
+    nullifiers: std.ArrayList(F),
+    // The side effect counter increments for every note added/nullified.
+    // Each note tracks the counter it was created at.
+    side_effect_counter: u32 = 0,
+    // Once we switch to the revertible phase, we track the side effect counter.
+    min_revertible_side_effect_counter: ?u32 = null,
 
     pub fn init(allocator: std.mem.Allocator) NoteCache {
         return .{
-            .notes = std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, std.ArrayList(proto.NoteData))).init(allocator),
-            .nullifiers = std.AutoHashMap(proto.AztecAddress, std.AutoHashMap(F, void)).init(allocator),
             .allocator = allocator,
+            .notes = std.ArrayList(NoteData).init(allocator),
+            .nullifiers = std.ArrayList(F).init(allocator),
         };
     }
 
     pub fn deinit(self: *NoteCache) void {
-        var it = self.notes.iterator();
-        while (it.next()) |entry| {
-            var storage_it = entry.value_ptr.iterator();
-            while (storage_it.next()) |storage_entry| {
-                storage_entry.value_ptr.deinit();
-            }
-            entry.value_ptr.deinit();
-        }
         self.notes.deinit();
-
-        var null_it = self.nullifiers.iterator();
-        while (null_it.next()) |entry| {
-            entry.value_ptr.deinit();
-        }
         self.nullifiers.deinit();
     }
 
-    pub fn addNote(self: *NoteCache, note_data: proto.NoteData) !void {
-        const contract_entry = try self.notes.getOrPut(note_data.contract_address);
-        if (!contract_entry.found_existing) {
-            contract_entry.value_ptr.* = std.AutoHashMap(F, std.ArrayList(proto.NoteData)).init(self.allocator);
+    /// Takes a copy of the note data and stores it.
+    pub fn addNote(self: *NoteCache, note_data: NoteData) void {
+        var note_to_add = note_data;
+        // Duplicate fields into our own allocator.
+        note_to_add.note_fields = self.allocator.dupe(F, note_to_add.note_fields) catch unreachable;
+        // Compute siloed note hash.
+        note_to_add.siloed_note_hash = poseidon.hash_array_with_generator(
+            [_]F{ note_data.contract_address.value, note_data.note_hash },
+            @intFromEnum(proto.constants.GeneratorIndex.siloed_note_hash),
+        );
+        self.notes.append(note_to_add);
+        self.side_effect_counter += 1;
+    }
+
+    pub fn nullifyNote(self: *NoteCache, contract_address: proto.AztecAddress, nullifier: F, note_hash: F) void {
+        const siloed_nullifier = poseidon.hash_array_with_generator(
+            F{ contract_address.value, nullifier },
+            proto.constants.GeneratorIndex.outer_nullifier,
+        );
+
+        // No note hash given, just emit the siloed nullifier.
+        if (note_hash.is_zero()) {
+            self.nullifiers.append(siloed_nullifier);
+            return;
         }
 
-        const storage_entry = try contract_entry.value_ptr.getOrPut(note_data.storage_slot);
-        if (!storage_entry.found_existing) {
-            storage_entry.value_ptr.* = std.ArrayList(proto.NoteData).init(self.allocator);
-        }
+        for (self.notes) |*note| {
+            // Skip notes not in this contract.
+            if (!note.contract_address.eql(contract_address)) continue;
 
-        try storage_entry.value_ptr.append(note_data);
-    }
+            if (note.note_hash.eql(note_hash)) {
+                // Assign the nullifier to it to mark it as nullified.
+                note.nullifier = nullifier;
 
-    pub fn getNotes(self: *const NoteCache, contract_address: proto.AztecAddress, storage_slot: F) []const proto.NoteData {
-        const contract_map = self.notes.get(contract_address) orelse return &[_]proto.NoteData{};
-        const note_list = contract_map.get(storage_slot) orelse return &[_]proto.NoteData{};
-        return note_list.items;
-    }
-
-    pub fn addNullifier(self: *NoteCache, contract_address: proto.AztecAddress, nullifier: F) !void {
-        const entry = try self.nullifiers.getOrPut(contract_address);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = std.AutoHashMap(F, void).init(self.allocator);
-        }
-        try entry.value_ptr.put(nullifier, {});
-    }
-
-    pub fn hasNullifier(self: *const NoteCache, contract_address: proto.AztecAddress, nullifier: F) bool {
-        const nullifier_map = self.nullifiers.get(contract_address) orelse return false;
-        return nullifier_map.contains(nullifier);
-    }
-
-    pub fn getTotalNoteCount(self: *const NoteCache) usize {
-        var count: usize = 0;
-        var it = self.notes.iterator();
-        while (it.next()) |contract_entry| {
-            var storage_it = contract_entry.value_ptr.iterator();
-            while (storage_it.next()) |storage_entry| {
-                count += storage_entry.value_ptr.items.len;
+                // If we're in the revertible phase, but nullifying a non-revertible note, we emit the nullifier.
+                if (self.min_revertible_side_effect_counter) |min_revertible_side_effect_counter| {
+                    if (note.counter < min_revertible_side_effect_counter) {
+                        self.nullifiers.append(note.siloed_nullifier);
+                    }
+                }
+                break;
             }
         }
-        return count;
+
+        self.side_effect_counter += 1;
+    }
+
+    pub fn enterRevertiblePhase(self: *NoteCache) void {
+        self.min_revertible_side_effect_counter = self.side_effect_counter;
+    }
+
+    /// Compute all the note nonces and resulting unique hashes.
+    pub fn finalize(self: *NoteCache, tx_hash: F) void {
+        const nonce_generator = if (self.nullifiers.items.len > 0) self.nullifiers[0] else tx_hash;
+        for (self.notes.items, 0..) |*note, i| {
+            note.note_nonce = poseidon.hash_array_with_generator(
+                F{ nonce_generator, F.from_int(i) },
+                proto.constants.GeneratorIndex.note_hash_nonce,
+            );
+            note.unique_note_hash = poseidon.hash_array_with_generator(
+                F{ note.note_nonce, note.siloed_note_hash },
+                proto.constants.GeneratorIndex.unique_note_hash,
+            );
+        }
+    }
+
+    pub fn getNotes(
+        self: *const NoteCache,
+        allocator: std.mem.Allocator,
+        contract_address: proto.AztecAddress,
+        storage_slot: F,
+        num_selects: u32,
+        select_by_indexes: []const u32,
+        select_by_offsets: []const u32,
+        select_by_lengths: []const u32,
+        select_values: []const F,
+        select_comparators: []const u8,
+        sort_by_indexes: []const u32,
+        sort_by_offsets: []const u32,
+        sort_by_lengths: []const u32,
+        sort_order: []const u8,
+    ) ![]NoteData {
+        // Build select criteria
+        const actual_num_selects = @min(num_selects, select_by_indexes.len);
+        var selects = try allocator.alloc(SelectCriteria, actual_num_selects);
+
+        for (0..actual_num_selects) |i| {
+            selects[i] = .{
+                .selector = .{
+                    .index = select_by_indexes[i],
+                    .offset = select_by_offsets[i],
+                    .length = select_by_lengths[i],
+                },
+                .value = select_values[i],
+                .comparator = @enumFromInt(select_comparators[i]),
+            };
+        }
+
+        // Apply selection filters
+        var selected_notes = try selectNotes(allocator, contract_address, storage_slot, self.notes.items, selects);
+        defer selected_notes.deinit();
+
+        // Build sort criteria
+        var sorts = try allocator.alloc(SortCriteria, sort_by_indexes.len);
+
+        for (0..sorts.len) |i| {
+            sorts[i] = .{
+                .selector = .{
+                    .index = sort_by_indexes[i],
+                    .offset = sort_by_offsets[i],
+                    .length = sort_by_lengths[i],
+                },
+                .order = @enumFromInt(sort_order[i]),
+            };
+        }
+
+        // Apply sorting
+        sortNotes(selected_notes.items, sorts);
+
+        return selected_notes.toOwnedSlice();
     }
 };
 
@@ -134,13 +243,22 @@ pub const SortCriteria = struct {
     order: SortOrder,
 };
 
-pub fn selectNotes(allocator: std.mem.Allocator, notes: []const proto.NoteData, selects: []const SelectCriteria) !std.ArrayList(proto.NoteData) {
-    var result = std.ArrayList(proto.NoteData).init(allocator);
+fn selectNotes(
+    allocator: std.mem.Allocator,
+    contract_address: proto.AztecAddress,
+    storage_slot: F,
+    notes: []const NoteData,
+    selects: []const SelectCriteria,
+) !std.ArrayList(NoteData) {
+    var result = std.ArrayList(NoteData).init(allocator);
 
     for (notes) |note_data| {
+        // Skip notes not for the given contract and storage slot.
+        if (!(note_data.contract_address.eql(contract_address) and note_data.storage_slot.eql(storage_slot))) continue;
+
         var matches = true;
         for (selects) |select| {
-            const note_value = selectPropertyFromPackedNoteContent(note_data.note.items, select.selector) catch {
+            const note_value = selectPropertyFromPackedNoteContent(note_data.note_fields, select.selector) catch {
                 matches = false;
                 break;
             };
@@ -178,10 +296,10 @@ fn sortNotesRecursive(a: []const F, b: []const F, sorts: []const SortCriteria, l
     };
 }
 
-pub fn sortNotes(notes: []proto.NoteData, sorts: []const SortCriteria) void {
-    std.mem.sort(proto.NoteData, notes, sorts, struct {
-        fn lessThan(context: []const SortCriteria, a: proto.NoteData, b: proto.NoteData) bool {
-            const order = sortNotesRecursive(a.note.items, b.note.items, context, 0);
+fn sortNotes(notes: []NoteData, sorts: []const SortCriteria) void {
+    std.mem.sort(NoteData, notes, sorts, struct {
+        fn lessThan(context: []const SortCriteria, a: NoteData, b: NoteData) bool {
+            const order = sortNotesRecursive(a.note_fields, b.note_fields, context, 0);
             return order == .lt;
         }
     }.lessThan);

@@ -3,6 +3,7 @@ const F = @import("../bn254/fr.zig").Fr;
 const proto = @import("../protocol/package.zig");
 const ContractAbi = @import("../nargo/contract.zig").ContractAbi;
 const call_state = @import("call_state.zig");
+const NoteCache = @import("note_cache.zig").NoteCache;
 
 pub const TxeState = struct {
     allocator: std.mem.Allocator,
@@ -16,6 +17,9 @@ pub const TxeState = struct {
     // Contract data.
     contract_artifact_cache: *std.AutoHashMap(F, ContractAbi),
     contract_instance_cache: *std.AutoHashMap(proto.AztecAddress, proto.ContractInstance),
+
+    // Contains all the side effect state.
+    note_cache: NoteCache,
 
     // Account data.
     accounts: *std.AutoHashMap(proto.AztecAddress, proto.CompleteAddress),
@@ -47,13 +51,14 @@ pub const TxeState = struct {
             .timestamp = TxeState.GENESIS_TIMESTAMP,
             .contract_artifact_cache = contract_artifact_cache,
             .contract_instance_cache = contract_instance_cache,
+            .note_cache = NoteCache.init(allocator),
             .accounts = accounts,
             .vm_state_stack = std.ArrayList(*call_state.CallState).init(allocator),
         };
 
         // Create initial state on heap and push to stack
         const initial_state = try allocator.create(call_state.CallState);
-        initial_state.* = call_state.CallState.init(allocator);
+        initial_state.* = call_state.CallState.init(allocator, &txe.note_cache);
         try txe.vm_state_stack.append(initial_state);
 
         return txe;
@@ -93,5 +98,4 @@ pub const TxeState = struct {
         self.accounts.deinit();
         self.allocator.destroy(self.accounts);
     }
-
 };
