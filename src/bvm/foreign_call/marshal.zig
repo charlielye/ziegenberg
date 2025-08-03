@@ -389,7 +389,7 @@ pub fn marshalOutput(
                         marshalOutput(&temp_value, mem, &temp_destinations, destination_value_types);
                     }
                 } else if (destinations[0] == .MemoryAddress) {
-                    mem.setSlot(destinations[0].MemoryAddress, 0);
+                    mem.setSlot(destinations[0].MemoryAddress, 1);
                     marshalOutput(&output.*.?, mem, destinations[1..], destination_value_types[1..]);
 
                     // // For simple optionals like Option<Field>, marshal directly to memory

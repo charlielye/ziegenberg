@@ -21,6 +21,13 @@ pub const ErrorContext = struct {
     callstack: []const usize,
     ops_executed: u64,
     return_data: []const u256,
+
+    pub fn clone(self: *ErrorContext, allocator: std.mem.Allocator) !ErrorContext {
+        var result = self.*;
+        result.callstack = try allocator.dupe(usize, self.callstack);
+        result.return_data = try allocator.dupe(u256, self.return_data);
+        return result;
+    }
 };
 
 pub const BrilligVmHooks = struct {

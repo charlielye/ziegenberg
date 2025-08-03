@@ -143,8 +143,6 @@ pub const CallState = struct {
         // - Side effect counter (take max)
         self.side_effect_counter = @max(self.side_effect_counter, child.side_effect_counter);
 
-        try self.note_cache.notes.appendSlice(child.note_cache.notes.items);
-
         // - Nullifiers
         try self.public_nullifiers.appendSlice(child.public_nullifiers.items);
 

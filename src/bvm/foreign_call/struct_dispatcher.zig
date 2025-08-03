@@ -91,17 +91,17 @@ pub fn structDispatcher(
                             params[param_idx + 1], // value
                         };
                         const opt_param = ForeignCallParam{ .Array = &opt_array };
-                        std.debug.print("Marshal into {s} arg {} (optional): {any}\n", .{ decl.name, i, opt_param });
+                        // std.debug.print("Marshal into {s} arg {} (optional): {any}\n", .{ decl.name, i, opt_param });
                         marshal.marshalInput(&args[i], allocator, opt_param) catch |err| {
-                            std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, opt_param });
+                            // std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, opt_param });
                             return err;
                         };
                         param_idx += 2;
                     } else {
-                        std.debug.print("Marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
+                        // std.debug.print("Marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
                         // Marshal the ForeignCallParam into the argument type.
                         marshal.marshalInput(&args[i], allocator, params[param_idx]) catch |err| {
-                            std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
+                            // std.debug.print("Failed to marshal into {s} arg {}: {any}\n", .{ decl.name, i, params[param_idx] });
                             return err;
                         };
                         param_idx += 1;
@@ -109,7 +109,7 @@ pub fn structDispatcher(
                 }
                 // Make the function call.
                 const r = try @call(.auto, field, args);
-                std.debug.print("Function {s} returned: {any}\n", .{ decl.name, r });
+                // std.debug.print("Function {s} returned: {any}\n", .{ decl.name, r });
                 marshal.marshalOutput(&r, mem, fc.destinations, fc.destination_value_types);
                 return true;
             }

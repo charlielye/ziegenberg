@@ -96,7 +96,7 @@ pub const Txe = struct {
         defer std.debug.print("time taken: {}us\n", .{t.read() / 1000});
         circuit_vm.executeVm(0) catch |err| {
             if (circuit_vm.brillig_error_context != null) {
-                self.txe_state.getCurrentState().execution_error = circuit_vm.brillig_error_context;
+                self.txe_state.vm_state_stack.items[0].execution_error = circuit_vm.brillig_error_context;
             }
             std.debug.print("Execution failed: {}\n", .{err});
             try self.dumpStackTrace(&artifact);
@@ -154,10 +154,16 @@ pub const Txe = struct {
                 std.debug.print("      [{d}] PC: {}\n", .{ i - 1, pc });
                 debug_info.printSourceLocation(pc, 2);
             }
+        }
 
-            std.debug.print("Revert data: \n", .{});
-            for (error_ctx.return_data, 0..) |data, j| {
-                std.debug.print("  [{d:0>2}]: 0x{x:0>64}\n", .{ j, data });
+        if (self.txe_state.getCurrentState().execution_error) |err| {
+            std.debug.print("\nRevert data: \n", .{});
+            for (err.return_data, 0..) |data, j| {
+                if (j < 5 or j > err.return_data.len - 5) {
+                    std.debug.print("  [{d:0>2}]: 0x{x:0>64}\n", .{ j, data });
+                } else if (j == 5) {
+                    std.debug.print("  ...\n", .{});
+                }
             }
         }
     }

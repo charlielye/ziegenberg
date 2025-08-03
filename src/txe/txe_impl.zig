@@ -687,6 +687,7 @@ pub const TxeImpl = struct {
             self.fc_handler.fcDispatcher(),
             if (self.txe_debug_ctx) |ctx| ctx.brilligVmHooks() else null,
         );
+        defer circuit_vm.deinit();
 
         // Push vm details onto the debug context if available.
         if (self.txe_debug_ctx) |ctx| {
@@ -700,9 +701,10 @@ pub const TxeImpl = struct {
 
         std.debug.print("callPrivateFunction: Entering nested cvm (function: {s})\n", .{function.name});
         circuit_vm.executeVm(0) catch |err| {
-            if (circuit_vm.brillig_error_context != null) {
+            if (circuit_vm.brillig_error_context) |*err_ctx| {
                 // Store error in current call state before before cvm deinit.
-                self.state.getCurrentState().execution_error = circuit_vm.brillig_error_context;
+                // Clone into long lived allocator.
+                current_state.execution_error = try err_ctx.clone(self.allocator);
             }
             return err;
         };
@@ -1190,7 +1192,7 @@ pub const TxeImpl = struct {
             sort_by_lengths,
             sort_order,
         );
-        defer allocator.free(notes);
+        // defer allocator.free(notes);
         std.debug.print("getNotes: Found {} notes for contract {x} at slot {x}\n", .{
             notes.len,
             current_state.contract_address,

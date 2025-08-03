@@ -16,7 +16,18 @@
       "label": "build-exe",
       "type": "shell",
       "command": "zig",
-      "args": ["build", "build-exe"],
+      "args": ["build", "build-exe", "-Doptimize=Debug"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "build-exe-release-fast",
+      "type": "shell",
+      "command": "zig",
+      "args": ["build", "build-exe", "-Doptimize=ReleaseFast"],
       "group": {
         "kind": "build",
         "isDefault": true
