@@ -8,11 +8,11 @@ pub const DapClient = struct {
     seq_counter: u32 = 1,
     initialized: bool = false,
     capabilities: ?Capabilities = null,
-    
+
     // Track current state
     stopped: bool = false,
     current_thread: ?u32 = null,
-    
+
     pub const Capabilities = struct {
         supportsConfigurationDoneRequest: bool = false,
         supportsFunctionBreakpoints: bool = false,
@@ -53,7 +53,7 @@ pub const DapClient = struct {
             .command = command,
             .arguments = arguments,
         };
-        
+
         // Serialize to JSON
         var json_buf = std.ArrayList(u8).init(self.allocator);
         defer json_buf.deinit();
@@ -64,7 +64,7 @@ pub const DapClient = struct {
         try writer.print("Content-Length: {}\r\n\r\n", .{json_buf.items.len});
         try writer.writeAll(json_buf.items);
         try self.writer.flush();
-        
+
         return seq;
     }
 
@@ -72,7 +72,7 @@ pub const DapClient = struct {
         // Read Content-Length header
         var buf: [256]u8 = undefined;
         const header_line = try self.reader.reader().readUntilDelimiterOrEof(&buf, '\n') orelse return error.EndOfStream;
-        
+
         // Parse Content-Length
         if (!std.mem.startsWith(u8, header_line, "Content-Length: ")) {
             return error.InvalidHeader;
@@ -107,12 +107,12 @@ pub const DapClient = struct {
             .supportsProgressReporting = false,
             .supportsInvalidatedEvent = false,
         });
-        
+
         // Wait for initialize response
         while (true) {
             const response = try self.readResponse();
             defer response.deinit();
-            
+
             const msg_type = response.value.object.get("type").?.string;
             if (std.mem.eql(u8, msg_type, "response")) {
                 const command = response.value.object.get("command").?.string;
@@ -131,12 +131,12 @@ pub const DapClient = struct {
                 }
             }
         }
-        
+
         // Wait for initialized event
         while (true) {
             const response = try self.readResponse();
             defer response.deinit();
-            
+
             const msg_type = response.value.object.get("type").?.string;
             if (std.mem.eql(u8, msg_type, "event")) {
                 const event = response.value.object.get("event").?.string;
@@ -153,25 +153,25 @@ pub const DapClient = struct {
             self.current_thread = @intCast(thread.integer);
         }
     }
-    
+
     pub fn getCurrentLocation(self: *DapClient) !?struct { file: []const u8, line: u32, name: []const u8 } {
         if (!self.stopped or self.current_thread == null) return null;
-        
+
         // Get stack trace to find current location
         const response = try self.getStackTrace();
         defer response.deinit();
-        
+
         const body = response.value.object.get("body").?;
         const frames = body.object.get("stackFrames").?.array;
-        
+
         if (frames.items.len == 0) return null;
-        
+
         // Get the top frame
         const frame = frames.items[0];
         const name = frame.object.get("name").?.string;
         const source = frame.object.get("source");
         const line = frame.object.get("line");
-        
+
         if (source) |src| {
             if (src == .object) {
                 if (src.object.get("path")) |path| {
@@ -185,7 +185,7 @@ pub const DapClient = struct {
                 }
             }
         }
-        
+
         return null;
     }
 
@@ -194,12 +194,12 @@ pub const DapClient = struct {
             .noDebug = false,
             .stopOnEntry = true,
         });
-        
+
         // Wait for launch response
         while (true) {
             const response = try self.readResponse();
             defer response.deinit();
-            
+
             const msg_type = response.value.object.get("type").?.string;
             if (std.mem.eql(u8, msg_type, "response")) {
                 const command = response.value.object.get("command").?.string;
@@ -212,16 +212,16 @@ pub const DapClient = struct {
                 }
             }
         }
-        
+
         // Send configurationDone
         _ = try self.sendRequest("configurationDone", .{});
-        
+
         // Wait for configurationDone response and stopped event
         var got_response = false;
         while (true) {
             const response = try self.readResponse();
             defer response.deinit();
-            
+
             const msg_type = response.value.object.get("type").?.string;
             if (std.mem.eql(u8, msg_type, "response")) {
                 const command = response.value.object.get("command").?.string;
@@ -235,7 +235,7 @@ pub const DapClient = struct {
                     if (got_response) break;
                 }
             }
-            
+
             // If we got the response and a stopped event, we're done
             if (got_response and self.stopped) break;
         }
@@ -250,11 +250,11 @@ pub const DapClient = struct {
                 .{ .line = line },
             },
         });
-        
+
         // Wait for response
         const response = try self.readResponse();
         defer response.deinit();
-        
+
         // TODO: Return breakpoint info
     }
 
@@ -265,7 +265,7 @@ pub const DapClient = struct {
             },
             .breakpoints = &[_]struct { line: u32 }{},
         });
-        
+
         // Wait for response
         const response = try self.readResponse();
         defer response.deinit();
@@ -273,76 +273,85 @@ pub const DapClient = struct {
 
     pub fn getStackTrace(self: *DapClient) !std.json.Parsed(std.json.Value) {
         const thread_id = self.current_thread orelse return error.NoActiveThread;
-        
+
         _ = try self.sendRequest("stackTrace", .{
             .threadId = thread_id,
             .startFrame = 0,
             .levels = 20,
         });
-        
+
         // Wait for response
         return try self.readResponse();
     }
 
     pub fn stepOver(self: *DapClient) !void {
         const thread_id = self.current_thread orelse return error.NoActiveThread;
-        
+
         _ = try self.sendRequest("next", .{
             .threadId = thread_id,
         });
-        
+
         self.stopped = false;
         try self.waitForStop();
     }
 
     pub fn stepInto(self: *DapClient) !void {
         const thread_id = self.current_thread orelse return error.NoActiveThread;
-        
+
         _ = try self.sendRequest("stepIn", .{
             .threadId = thread_id,
         });
-        
+
         self.stopped = false;
         try self.waitForStop();
     }
 
     pub fn stepOut(self: *DapClient) !void {
         const thread_id = self.current_thread orelse return error.NoActiveThread;
-        
+
         _ = try self.sendRequest("stepOut", .{
             .threadId = thread_id,
         });
-        
+
         self.stopped = false;
         try self.waitForStop();
     }
 
     pub fn continue_(self: *DapClient) !void {
         const thread_id = self.current_thread orelse return error.NoActiveThread;
-        
+
         _ = try self.sendRequest("continue", .{
             .threadId = thread_id,
         });
-        
+
         self.stopped = false;
         try self.waitForStop();
     }
 
     pub fn pause(self: *DapClient) !void {
         const thread_id = self.current_thread orelse 1;
-        
+
         _ = try self.sendRequest("pause", .{
             .threadId = thread_id,
         });
-        
+
         try self.waitForStop();
     }
 
     pub fn terminate(self: *DapClient) !void {
-        _ = try self.sendRequest("terminate", .{});
-        
-        // Wait for response
-        const response = try self.readResponse();
+        _ = self.sendRequest("terminate", .{}) catch |err| {
+            // If we can't send terminate, the server is probably already gone
+            if (err == error.BrokenPipe) return;
+            return err;
+        };
+
+        // Try to read response with a short timeout
+        // If the server has already exited, this will fail but that's OK
+        const response = self.readResponse() catch |err| {
+            // Expected errors when server has already terminated
+            if (err == error.EndOfStream or err == error.BrokenPipe) return;
+            return err;
+        };
         defer response.deinit();
     }
 
@@ -350,7 +359,7 @@ pub const DapClient = struct {
         while (!self.stopped) {
             const msg = try self.readResponse();
             defer msg.deinit();
-            
+
             const msg_type = msg.value.object.get("type").?.string;
             if (std.mem.eql(u8, msg_type, "event")) {
                 const event = msg.value.object.get("event").?.string;
@@ -369,7 +378,7 @@ pub const DapClient = struct {
         _ = try self.sendRequest("scopes", .{
             .frameId = frame_id,
         });
-        
+
         return try self.readResponse();
     }
 
@@ -377,7 +386,7 @@ pub const DapClient = struct {
         _ = try self.sendRequest("variables", .{
             .variablesReference = variables_reference,
         });
-        
+
         return try self.readResponse();
     }
 };

@@ -94,7 +94,12 @@ pub const DebugCli = struct {
 
         // Cleanup
         std.debug.print("Terminating debug session...\n", .{});
-        try self.client.terminate();
+        self.client.terminate() catch |err| {
+            // Ignore errors during termination - the server might already be gone
+            if (err != error.BrokenPipe and err != error.EndOfStream) {
+                std.debug.print("Warning: Failed to terminate cleanly: {}\n", .{err});
+            }
+        };
     }
 
     fn processCommand(self: *DebugCli, cmd: []const u8) !void {
@@ -148,9 +153,10 @@ pub const DebugCli = struct {
             std.debug.print("Stopped at {s}:{} in {s}\n", .{ filename, loc.line, loc.name });
 
             // Read and display the actual source line
-            const file = std.fs.openFileAbsolute(loc.file, .{}) catch {
-                return;
-            };
+            const file = (if (std.fs.path.isAbsolute(loc.file))
+                std.fs.openFileAbsolute(loc.file, .{})
+            else
+                std.fs.cwd().openFile(loc.file, .{})) catch return;
             defer file.close();
 
             // Read the file line by line to get to the target line

@@ -229,8 +229,16 @@ fn handleTxe(cmd_matches: ArgMatches) !void {
             
             try cli.run();
             
-            // Wait for child to exit
-            _ = std.posix.waitpid(pid, 0);
+            // Kill the child process if it's still running
+            _ = std.posix.kill(pid, std.posix.SIG.TERM) catch {};
+            
+            // Wait for child to exit with a timeout
+            const wait_result = std.posix.waitpid(pid, std.posix.W.NOHANG);
+            if (wait_result.pid == 0) {
+                // Child hasn't exited yet, force kill
+                _ = std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+                _ = std.posix.waitpid(pid, 0);
+            }
             
             // Close pipes
             std.posix.close(to_child[1]);
