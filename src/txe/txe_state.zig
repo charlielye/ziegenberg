@@ -6,6 +6,11 @@ const call_state = @import("call_state.zig");
 const NoteCache = @import("note_cache.zig").NoteCache;
 
 pub const TxeState = struct {
+    pub const CHAIN_ID = 1;
+    pub const ROLLUP_VERSION = 1;
+    pub const GENESIS_TIMESTAMP = 1767225600;
+    pub const AZTEC_SLOT_DURATION = 36;
+
     allocator: std.mem.Allocator,
 
     // Block and chain data.
@@ -27,10 +32,7 @@ pub const TxeState = struct {
     // Call state stack (bottom VM is at index 0, increases up the stack)
     vm_state_stack: std.ArrayList(*call_state.CallState),
 
-    pub const CHAIN_ID = 1;
-    pub const ROLLUP_VERSION = 1;
-    pub const GENESIS_TIMESTAMP = 1767225600;
-    pub const AZTEC_SLOT_DURATION = 36;
+    sender_for_tags: ?proto.AztecAddress,
 
     pub fn init(allocator: std.mem.Allocator) !TxeState {
         // Create global state components
@@ -57,6 +59,7 @@ pub const TxeState = struct {
             .note_cache = note_cache,
             .accounts = accounts,
             .vm_state_stack = std.ArrayList(*call_state.CallState).init(allocator),
+            .sender_for_tags = null,
         };
 
         // Create initial state on heap and push to stack

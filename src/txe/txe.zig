@@ -114,8 +114,10 @@ pub const Txe = struct {
 
         const depth = self.txe_state.vm_state_stack.items.len;
 
-        // We have nested vm instances, walk the stack from bottom to top
-        for (self.txe_state.vm_state_stack.items, 0..) |state, index| {
+        // We have nested vm instances, walk the stack from top to bottom.
+        for (self.txe_state.vm_state_stack.items, 0..) |_, index| {
+            const idx = self.txe_state.vm_state_stack.items.len - 1 - index;
+            const state = self.txe_state.vm_state_stack.items[idx];
             const level = depth - index;
             std.debug.print("\n[{}] ", .{level - 1});
 

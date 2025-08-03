@@ -50,13 +50,10 @@ export test_protocol_dir="aztec-packages/noir-projects/noir-protocol-circuits/ta
 export test_contracts_dir="$contracts_target_dir/tests"
 
 ########################################################################################################################
-# BUILD COMMANDS
+# BUILD UTILITY COMMANDS
 # -------------
+# These are used by first class build commands to actually do parts of the build.
 ###
-function build_nargo {
-  cd aztec-packages/noir/noir-repo
-  cargo build --release --bin nargo
-}
 
 # Compiles and executes a given noir test program to generate witness data.
 # Creates both ACIR and pure Brillig artifacts.
@@ -72,10 +69,21 @@ function compile_and_execute {
   ../../../target/release/nargo execute
 }
 
+# Uses custom noir dump command to dump all workspace tests as programs.
 function nargo_dump {
   export RAYON_NUM_THREADS=1
   cd $1
   ../../../target/release/nargo dump
+}
+
+########################################################################################################################
+# SECONDARY BUILD COMMANDS
+# -------------
+# These can be run individually, but can all be run in parallel from primary command build_fixtures.
+###
+function build_nargo {
+  cd aztec-packages/noir/noir-repo
+  cargo build --release --bin nargo
 }
 
 function build_protocol_circuits {
@@ -222,7 +230,13 @@ EOF
   echo "Generated $zig_file successfully!"
 }
 
+# Export so we can run in parallel.
 export -f compile_and_execute nargo_dump build_protocol_circuits build_contracts build_constants build_data
+
+########################################################################################################################
+# PRIMARY BUILD COMMANDS
+# -------------
+###
 
 # Compiles and executes all noir execution_success test programs to generate witness data.
 # Uses nargo to dump out all noir_test_success test bytecode.
@@ -232,6 +246,8 @@ function build_fixtures {
   (cd $test_programs_dir && git clean -fdx)
   (cd $test_tests_dir && git clean -fdx)
   (cd aztec-packages/noir-projects && git clean -fdx)
+
+  (build_nargo)
 
   {
     echo build_protocol_circuits
@@ -391,7 +407,6 @@ function bench {
 ###
 case "$cmd" in
   "")
-    (build_nargo)
     (build_fixtures)
     build ${1:-}
     ;;

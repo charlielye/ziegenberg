@@ -457,15 +457,13 @@ pub const TxeImpl = struct {
     pub fn deploy(
         self: *TxeImpl,
         tmp_allocator: std.mem.Allocator,
-        path: []u8,
         contract_name: []u8,
         initializer: []u8,
         args_len: u32,
         args: []F,
         secret: F,
     ) ![16]F {
-        std.debug.print("deploy: {s} {s} {s} {} {short} {short}\n", .{
-            path,
+        std.debug.print("deploy: {s} {s} {} {short} {short}\n", .{
             contract_name,
             initializer,
             args_len,
@@ -476,10 +474,6 @@ pub const TxeImpl = struct {
         const public_keys = if (secret.is_zero()) proto.PublicKeys.default() else proto.deriveKeys(secret).public_keys;
         const public_keys_hash = public_keys.hash();
         _ = public_keys_hash;
-
-        if (!std.mem.eql(u8, path, "")) {
-            return error.Unimplemented;
-        }
 
         const contract_path = try std.fmt.allocPrint(tmp_allocator, "{s}/{s}.json", .{
             self.contract_artifacts_path,
@@ -1344,7 +1338,7 @@ pub const TxeImpl = struct {
         args_hash: F,
         is_static_call: bool,
     ) ![3]F {
-        _ = from; // The msg_sender is managed by the TXE context
+        // _ = from; // The msg_sender is managed by the TXE context
         _ = args_len; // We have the actual args slice
 
         // TODO: Step 1 - Get function artifact
@@ -1393,6 +1387,8 @@ pub const TxeImpl = struct {
         // - Create PrivateExecutionResult with all the data
 
         const current_state = self.state.getCurrentState();
+
+        self.state.sender_for_tags = from;
 
         // Use existing callPrivateFunction implementation (temporary)
         const result = try self.callPrivateFunction(
@@ -1487,5 +1483,20 @@ pub const TxeImpl = struct {
         min_revertible_side_effect_counter: u32,
     ) !void {
         self.state.note_cache.enterRevertiblePhase(min_revertible_side_effect_counter);
+    }
+
+    pub fn getSenderForTags(
+        self: *TxeImpl,
+        _: std.mem.Allocator,
+    ) !?proto.AztecAddress {
+        return self.state.sender_for_tags;
+    }
+
+    pub fn setSenderForTags(
+        self: *TxeImpl,
+        _: std.mem.Allocator,
+        sender_for_tags: proto.AztecAddress,
+    ) !void {
+        self.state.sender_for_tags = sender_for_tags;
     }
 };

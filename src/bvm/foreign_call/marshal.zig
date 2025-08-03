@@ -380,27 +380,35 @@ pub fn marshalOutput(
                     } else {
                         // For other types, use existing marshaling
                         var temp_value = value;
-                        var temp_destinations = [_]io.ValueOrArray{io.ValueOrArray{ .MemoryAddress = destinations[0].HeapArray.pointer + 1 }};
+                        var temp_destinations = [_]io.ValueOrArray{
+                            io.ValueOrArray{ .MemoryAddress = .{
+                                .relative = 0,
+                                .value = dst_idx + 1,
+                            } },
+                        };
                         marshalOutput(&temp_value, mem, &temp_destinations, destination_value_types);
                     }
                 } else if (destinations[0] == .MemoryAddress) {
-                    // For simple optionals like Option<Field>, marshal directly to memory
-                    if (opt.child == []F) {
-                        // Handle []F with single element as Option<Field>
-                        const slice = value;
-                        if (slice.len == 1) {
-                            // Single element slice - treat as Option<Field>
-                            mem.setSlot(destinations[0].MemoryAddress, slice[0].to_int());
-                        } else {
-                            unreachable;
-                        }
-                    } else if (opt.child == F) {
-                        // Option<Field> - write the field value directly
-                        const field_value = value;
-                        mem.setSlot(destinations[0].MemoryAddress, field_value.to_int());
-                    } else {
-                        unreachable;
-                    }
+                    mem.setSlot(destinations[0].MemoryAddress, 0);
+                    marshalOutput(&output.*.?, mem, destinations[1..], destination_value_types[1..]);
+
+                    // // For simple optionals like Option<Field>, marshal directly to memory
+                    // if (opt.child == []F) {
+                    //     // Handle []F with single element as Option<Field>
+                    //     const slice = value;
+                    //     if (slice.len == 1) {
+                    //         // Single element slice - treat as Option<Field>
+                    //         mem.setSlot(destinations[0].MemoryAddress, slice[0].to_int());
+                    //     } else {
+                    //         unreachable;
+                    //     }
+                    // } else if (opt.child == F) {
+                    //     // Option<Field> - write the field value directly
+                    //     const field_value = value;
+                    //     mem.setSlot(destinations[0].MemoryAddress, field_value.to_int());
+                    // } else {
+                    //     unreachable;
+                    // }
                 } else {
                     unreachable;
                 }
